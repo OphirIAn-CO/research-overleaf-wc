@@ -11,7 +11,7 @@ Config lives in ~/.config/overleaf-skill/ (see common.py), never in git:
 Leave allowed_chat_ids empty on first run: the bot replies with your chat id so you can paste it in.
 Without a whitelist it refuses to add anything. Telegram: /paper switches the active paper.
 """
-import json, re, subprocess, sys, unicodedata, urllib.parse, urllib.request
+import json, re, subprocess, sys, time, unicodedata, urllib.parse, urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -21,9 +21,9 @@ UA = {"User-Agent": "doi-bib-bot/1.0 (mailto:%s)" % (common.load("telegram.json"
 DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"<>]+", re.I)
 
 
-def http(url, accept=None, data=None):
+def http(url, accept=None, data=None, timeout=30):
     h = dict(UA, **({"Accept": accept} if accept else {}))
-    with urllib.request.urlopen(urllib.request.Request(url, data, h), timeout=30) as r:
+    with urllib.request.urlopen(urllib.request.Request(url, data, h), timeout=timeout) as r:
         return r.read().decode("utf-8")
 
 
@@ -122,9 +122,9 @@ def run():
     print("bot running, Ctrl-C to stop")
     while True:
         try:
-            ups = json.loads(http(api + "getUpdates?timeout=50&offset=%d" % offset))["result"]
+            ups = json.loads(http(api + "getUpdates?timeout=50&offset=%d" % offset, timeout=70))["result"]
         except Exception as e:
-            print("poll error:", e); continue
+            print("poll error:", e); time.sleep(5); continue
         for u in ups:
             offset = u["update_id"] + 1
             send = lambda chat, text, btn=False: http(api + "sendMessage", data=urllib.parse.urlencode(
