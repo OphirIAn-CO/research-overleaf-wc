@@ -1,0 +1,10 @@
+{
+  "default": "my_paper",
+  "projects": {
+    "my_paper": {
+      "path": "/absolute/path/to/overleaf/clone",
+      "bib": "references.bib",
+      "mendeley_group": {"id": null, "name": "My Mendeley Group"}
+    }
+  }
+}

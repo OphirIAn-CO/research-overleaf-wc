@@ -1,0 +1,6 @@
+{
+  "token": "123456:ABC-from-BotFather",
+  "allowed_chat_ids": [],
+  "push": true,
+  "contact": "you@example.com"
+}

@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.DS_Store
+# state never lives here (it is in ~/.config/overleaf-skill), but belt and braces:
+*credentials*.json
+*tokens*.json
+telegram.json
+telegram_state.json
+projects.json
+.overleaf-skill/
