@@ -63,9 +63,19 @@ which are already loaded and cheaper per call than a custom MCP round-trip.
 Every tool takes an optional `repo_path`: a **registered project name** or an
 absolute path (an unknown path is auto-registered, bib file auto-detected).
 Omitted, it falls back to the current directory if that is an Overleaf clone,
-else the registry default. Still resolve it explicitly per step 0 below and
+else **the paper last worked on**, else the registry default. Still resolve it explicitly per step 0 below and
 pass it, so a call never lands on the wrong paper. Never narrate the
 server's internal fallbacks to the user.
+
+**Active paper.** Every tool call that resolves a paper records it as the
+"active paper" (`state.json`), and so does starting a session inside an
+Overleaf clone. The Telegram bot follows it, so DOIs land in the paper Claude
+is working on without any manual switch. **Safety checks:** before acting, the
+registered folder is verified (exists, is a git repo, `origin` still equals the
+remote stored at registration, bib file present); a mismatch is refused with
+the fix command. `python3 scripts/common.py doctor` audits every paper.
+`overleaf_sync` never stages untracked LaTeX build files (`.aux`, `.log`,
+`.pdf`, ...) and reports how many it skipped.
 
 **All state is in `~/.config/overleaf-skill/` (override with
 `OVERLEAF_SKILL_HOME`), never in git or in an Overleaf repo:** `projects.json`
@@ -370,9 +380,13 @@ Config: `~/.config/overleaf-skill/telegram.json`
 Token comes from @BotFather; the user creates the file themselves, never via
 chat. With `allowed_chat_ids` empty the bot refuses and replies with the
 sender's chat id. Papers come from the shared registry (re-read on every
-message, so a newly registered paper appears without restarting). `/paper`
-shows buttons to switch the active paper; every reply is prefixed
-`[project -> group]`, and a "Pull & push" button appears when a push fails.
+message, so a newly registered paper appears without restarting). The target
+paper is the shared **active paper** (see above), so it follows Claude's work.
+If nothing touched it for `stale_hours` (telegram.json, default 6) the bot
+asks which paper first, with one button per paper. `/paper` switches, `/status`
+shows the target and what set it. Every reply is prefixed
+`[project @overleaf-id -> Mendeley group]`; the folder is verified first and
+a mismatch is refused. A "Pull & push" button appears when a push fails.
 Always-on: `./install.sh bot-service` (launchd, macOS).
 
 ## Peer review a draft

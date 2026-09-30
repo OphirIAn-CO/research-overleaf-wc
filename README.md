@@ -25,7 +25,7 @@ Everything is keyed by `~/.config/overleaf-skill/projects.json` (see
 see it. Unknown clone paths passed to any MCP tool are auto-registered.
 
 ```bash
-scripts/common.py list | add <path> [--name N] [--group G] | rm <name> | default <name>
+scripts/common.py list | add <path> [--name N] [--group G] [--relink] | rm <name> | default <name> | doctor
 ```
 
 Secrets (Mendeley credentials/tokens, Telegram token) live only in that data
@@ -48,7 +48,10 @@ Create an app at dev.mendeley.com (redirect `https://localhost/callback`), put
 
 Send a DOI or doi.org link: the entry is added to the active paper's bib with
 a `Author2022Word` key (deduped by DOI), pushed to Overleaf, and created in
-that paper's Mendeley group. `/paper` switches the active paper.
+that paper's Mendeley group. The target is the paper you last worked on in
+Claude Code (shared `state.json`); if it is stale the bot asks first.
+`/paper` switches, `/status` shows the target. Folders are verified against
+their stored Overleaf remote before anything is written.
 
 ## Self-check
 

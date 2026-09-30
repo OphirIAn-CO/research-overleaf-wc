@@ -22,11 +22,14 @@ def resolve_repo(args):
     or omitted (cwd if it is an Overleaf clone, else the registry default)."""
     ref = args.get("repo_path") or args.get("project")
     try:
-        _, proj = common.resolve(ref)
+        name, proj = common.resolve(ref)
     except KeyError as e:
         if ref or not DEFAULT_REPO:
             return None, str(e)
-        _, proj = common.resolve(DEFAULT_REPO)
+        name, proj = common.resolve(DEFAULT_REPO)
+    except RuntimeError as e:
+        return None, f"refusing to act: {e}"
+    common.set_active(name, "claude")  # the Telegram bot follows the paper Claude is working on
     repo = proj["path"]
     if not os.path.isdir(os.path.join(repo, ".git")):
         return None, f"not a git repo: {repo}"
@@ -71,6 +74,10 @@ def tool_status(args):
     return out or "clean, nothing pending"
 
 
+JUNK = (".aux", ".log", ".out", ".toc", ".fls", ".fdb_latexmk", ".bbl", ".bcf", ".blg", ".run.xml",
+        ".synctex.gz", ".lof", ".lot", ".nav", ".snm", ".vrb", ".pdf")
+
+
 def tool_sync(args):
     repo, err = resolve_repo(args)
     if err:
@@ -80,11 +87,19 @@ def tool_sync(args):
     code, out, err = run_git(repo, "status", "--short")
     if not out:
         return "nothing to sync"
+    # never push LaTeX build output that is not already tracked (Overleaf compiles its own)
+    _, new, _ = run_git(repo, "ls-files", "--others", "--exclude-standard")  # before staging
+    junk = [f for f in new.splitlines() if f.endswith(JUNK)]
     run_git(repo, "add", "-A")
+    for f in junk:
+        run_git(repo, "reset", "-q", "--", f)
+    skipped = f"\n(skipped {len(junk)} untracked build files)" if junk else ""
+    if run_git(repo, "diff", "--cached", "--quiet")[0] == 0:
+        return "nothing to sync" + skipped
     code, out, err = run_git(repo, "commit", "-m", message)
     if code != 0:
         return f"commit failed: {out or err}"
-    result = f"committed: {out}"
+    result = f"committed: {out}{skipped}"
     if push:
         code, out2, err2 = run_git(repo, "push")
         result += f"\npush: {'ok' if code == 0 else (err2 or out2)}"
@@ -299,6 +314,12 @@ def send(msg):
 
 
 def main():
+    try:  # a session opened inside an Overleaf clone makes that paper the bot's target right away
+        name, _ = common.resolve(None)
+        if common.git_root(os.getcwd()) and common.is_overleaf(common.git_root(os.getcwd())):
+            common.set_active(name, "claude")
+    except (KeyError, RuntimeError):
+        pass
     for line in sys.stdin:
         line = line.strip()
         if not line:

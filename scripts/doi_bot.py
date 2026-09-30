@@ -113,12 +113,38 @@ def run():
     cfg = common.load("telegram.json")
     api = f"https://api.telegram.org/bot{cfg['token']}/"
     allowed, offset = cfg.get("allowed_chat_ids", []), 0
-    def active():  # registry is re-read every message: new papers appear without a restart
-        reg = common.registry()
-        name = (common.load("telegram_state.json", {}) or {}).get("active")
-        name = name if name in reg["projects"] else reg["default"]
-        p = reg["projects"][name]
-        return name, {"bib_path": common.bib_path(p), "mendeley_group": (p.get("mendeley_group") or {}).get("name")}
+    stale = cfg.get("stale_hours", 6) * 3600  # older "active paper" => ask before adding
+    pending = {}  # short key -> DOIs waiting for a paper choice / confirmation
+
+    def tg(method, **kw):
+        return http(api + method, data=urllib.parse.urlencode(kw).encode())
+
+    def say(chat, text, buttons=None):
+        kb = {"reply_markup": json.dumps({"inline_keyboard": [[b] for b in buttons]})} if buttons else {}
+        tg("sendMessage", chat_id=chat, text=text, **kb)
+
+    def paper_buttons(prefix):
+        return [{"text": n, "callback_data": prefix + n} for n in common.registry()["projects"]]
+
+    def target(name):  # -> (proj, group, header) or raises RuntimeError with a user-facing message
+        _, proj = common.resolve(name)
+        g = (proj.get("mendeley_group") or {}).get("name")
+        return proj, g, f"[{name} @{common.remote_id(proj)} -> {g or 'no Mendeley'}]"
+
+    def process(chat, name, dois):
+        try:
+            proj, g, head = target(name)
+        except (KeyError, RuntimeError) as e:
+            return say(chat, f"Refusing: {e}")
+        common.set_active(name, "telegram")
+        out = "\n\n".join(add(d, common.bib_path(proj), False, g) for d in dois)
+        btn = None
+        if cfg.get("push", True):  # one push per message, not per DOI
+            ok, t = git_sync(common.bib_path(proj), "Add references (doi bot)")
+            out += "\n\n" + t
+            btn = None if ok else [{"text": "Pull & push", "callback_data": "sync:" + name}]
+        say(chat, head + "\n" + out, btn)
+
     print("bot running, Ctrl-C to stop")
     while True:
         try:
@@ -127,45 +153,56 @@ def run():
             print("poll error:", e); time.sleep(5); continue
         for u in ups:
             offset = u["update_id"] + 1
-            send = lambda chat, text, btn=False: http(api + "sendMessage", data=urllib.parse.urlencode(
-                {"chat_id": chat, "text": text, **({"reply_markup": json.dumps({"inline_keyboard": [[
-                    {"text": "Pull & push", "callback_data": "sync"}]]})} if btn else {})}).encode())
             cb = u.get("callback_query")
-            if cb:  # button pressed
-                chat = cb["message"]["chat"]["id"]
-                http(api + "answerCallbackQuery", data=urllib.parse.urlencode({"callback_query_id": cb["id"]}).encode())
-                if chat in allowed and cb["data"].startswith("paper:"):
-                    common.save("telegram_state.json", {"active": cb["data"][6:]})
-                    send(chat, f"Active paper: {active()[0]} (Mendeley: {active()[1]['mendeley_group'] or 'none'})")
-                elif chat in allowed:
-                    name, proj = active()
-                    ok, t = git_sync(proj["bib_path"], "Add references (doi bot)")
-                    send(chat, f"[{name}] {t}", btn=not ok)
+            if cb:
+                chat, data = cb["message"]["chat"]["id"], cb["data"]
+                tg("answerCallbackQuery", callback_query_id=cb["id"])
+                if chat not in allowed:
+                    continue
+                kind, _, rest = data.partition(":")
+                if kind == "paper":  # /paper switch
+                    common.set_active(rest, "telegram")
+                    say(chat, f"Active paper: {rest}")
+                elif kind == "go":  # confirm/choose for a pending DOI message: go:<key>:<paper>
+                    key, _, name = rest.partition(":")
+                    dois = pending.pop(key, None)
+                    say(chat, "Expired, send the DOI again.") if dois is None else process(chat, name, dois)
+                elif kind == "sync":
+                    try:
+                        proj, _, head = target(rest)
+                        ok, t = git_sync(common.bib_path(proj), "Add references (doi bot)")
+                        say(chat, f"{head}\n{t}", None if ok else [{"text": "Pull & push", "callback_data": "sync:" + rest}])
+                    except (KeyError, RuntimeError) as e:
+                        say(chat, f"Refusing: {e}")
                 continue
             msg = u.get("message") or {}
             chat, text = msg.get("chat", {}).get("id"), msg.get("text", "")
             if chat is None:
                 continue
             if chat not in allowed:
-                send(chat, f"Not authorised. Add {chat} to allowed_chat_ids.")
+                say(chat, f"Not authorised. Add {chat} to allowed_chat_ids.")
                 continue
+            name, source, age = common.get_active()
+            name = name or common.registry()["default"]
+            when = "never set" if source == "?" else f"set by {source}, {int(age // 60)} min ago"
             if text.startswith("/paper"):
-                name = active()[0]
-                http(api + "sendMessage", data=urllib.parse.urlencode({"chat_id": chat, "text": f"Active: {name}. Switch to:",
-                     "reply_markup": json.dumps({"inline_keyboard": [[{"text": n, "callback_data": "paper:" + n}] for n in common.registry()["projects"]]})}).encode())
+                say(chat, f"Active: {name} ({when}). Switch to:", paper_buttons("paper:"))
+                continue
+            if text.startswith("/status"):
+                try: say(chat, target(name)[2] + f"\n{when}")
+                except (KeyError, RuntimeError) as e: say(chat, f"Problem: {e}")
                 continue
             dois = list(dict.fromkeys(DOI_RE.findall(text)))
             if not dois:
-                send(chat, "Send a DOI or doi.org link.")
+                say(chat, "Send a DOI or doi.org link. /paper switches paper, /status shows the target.")
                 continue
-            name, proj = active()
-            reply = f"[{name} -> {proj['mendeley_group'] or 'no Mendeley'}]\n" + "\n\n".join(
-                add(d, proj["bib_path"], False, proj["mendeley_group"]) for d in dois)
-            ok = True
-            if cfg.get("push", True):  # one push per message, not per DOI
-                ok, t = git_sync(proj["bib_path"], "Add references (doi bot)")
-                reply += "\n\n" + t
-            send(chat, reply, btn=not ok)
+            if age > stale or source == "?":  # nobody touched this paper recently: confirm the target
+                key = str(u["update_id"])
+                pending[key] = dois
+                say(chat, f"Active paper is {name} ({when}). Add {len(dois)} DOI(s) to:",
+                    [{"text": ("✔ " if n == name else "") + n, "callback_data": f"go:{key}:{n}"} for n in common.registry()["projects"]])
+            else:
+                process(chat, name, dois)
 
 
 def demo():
