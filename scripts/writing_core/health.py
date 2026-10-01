@@ -1,5 +1,5 @@
 """Checks for `common.py doctor` and the Settings page. Return plain strings; empty list = healthy."""
-from pathlib import Path
+import shutil
 
 from . import config, store
 
@@ -13,6 +13,10 @@ def env_issues():
         out.append(f"ChatGPT pass not configured: {msg}")
     if not config.list_books():
         out.append("no book imported yet (writing.py book-ingest <pdf> --id <slug>)")
+    if not shutil.which("docker"):
+        out.append("Docker not found: the web app (./ui.sh up) needs it; everything else works without")
+    if not shutil.which("pdftotext"):
+        out.append("pdftotext (poppler) not found: needed once to import a book from the command line (brew install poppler); the web app has its own")
     return out
 
 

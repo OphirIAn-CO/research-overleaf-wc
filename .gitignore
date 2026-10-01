@@ -20,3 +20,6 @@ proposals/
 events-*.jsonl
 *.lease
 *.corrupt
+
+# the example templates are meant to be committed
+!examples/*.example.json

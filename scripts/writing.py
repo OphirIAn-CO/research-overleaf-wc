@@ -8,6 +8,9 @@
   writing.py book-query "<request>" [--id ID] [--part P] [--budget N] [--max N] [--no-text] [--json]
   writing.py book-chunk <chunk-id> [--id ID]
   writing.py eval [--id ID] [--file F] [-k 3] [--init]
+  writing.py book-rules [--id ID] [--batch 4] [--send HASH]
+        One-time: distil each book chunk into 3-6 short rules (so later requests carry rules, not raw book text). Sends the book's
+        text to OpenAI, so by default it only prints the plan, cost estimate and a hash; --send <hash> does it. Resumable.
   writing.py index [--paper P] [--force]            refresh one paper's index now (it also refreshes itself on every query/pass)
   writing.py query "<request>" [--paper P] [--part P] [--kind K] [--budget N] [--no-text] [--json]
         Find the relevant chunks of ONE paper (empty request = outline). --paper: registered name or path; default = the
@@ -17,6 +20,7 @@
         (default) this only prints the exact payload and a hash; send it with --send <hash> after you have read it.
   writing.py proposals [--paper P] | proposal <id> [--paper P]
   writing.py settings [--paper P] [--dry-run on|off]
+  writing.py stats [--paper P] [--days 30]       the Monitor page's numbers in a terminal
   writing.py doctor
 
 --id may be omitted when exactly one book is imported. Data lives in ~/.config/overleaf-skill/ (never in git).
@@ -28,7 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common  # noqa: E402
-from writing_core import book_eval, book_index, chunk_book, config, openai_client, paper_index, retrieve, revise  # noqa: E402
+from writing_core import book_eval, book_index, chunk_book, config, openai_client, paper_index, retrieve, revise, rule_cards, stats  # noqa: E402
 
 COMMANDS = {}
 
@@ -101,6 +105,25 @@ def cmd_book_query(args):
 def cmd_book_chunk(args):
     c = book_index.get_chunk(pick_book(args), args.chunk_id)
     print(f"{c['id']}  {c['label']}\nparts: {', '.join(c['parts'])}  prev: {c['prev']}  next: {c['next']}\n\n{c['text']}")
+
+
+@command("book-rules")
+def cmd_book_rules(args):
+    book = pick_book(args)
+    st = rule_cards.status(book)
+    if not st["todo"]:
+        print(f"every chunk of {book} already has a rule card ({st['with_cards']}/{st['chunks']}).")
+        return
+    pl = rule_cards.plan(book, batch=args.batch)
+    if not args.send:
+        print(f"DRY RUN: nothing was sent.\n{pl['chunks']} chunks in {pl['calls']} requests to {pl['model']} at {pl['endpoint']}; about {pl['est_tokens_in']} tokens in, "
+              f"~{pl['est_tokens_out']} out" + (f", about {pl['est_cost']} in your price units" if pl["est_cost"] is not None else "") +
+              f".\nThis sends the book's text to OpenAI once. To go ahead: writing.py book-rules --id {book} --send {pl['payload_hash']}")
+        return
+    def tick(i, n):
+        print(f"  {i}/{n} requests done", flush=True)
+    r = rule_cards.run(book, args.send, batch=args.batch, progress=tick, source="cli")
+    print(f"{r['status']}: {r['with_cards']}/{r['chunks']} chunks now have rule cards" + (f" (stopped: {r['error']})" if r.get("error") else ""))
 
 
 @command("eval")
@@ -182,6 +205,13 @@ def cmd_settings(args):
     print(json.dumps({"paper": name, **config.paper_settings(proj)}, indent=2))
 
 
+@command("stats")
+def cmd_stats(args):
+    if args.paper:
+        resolve_paper(args)
+    print(stats.format_text(stats.monitor(paper=args.paper, days=args.days)))
+
+
 @command("doctor")
 def cmd_doctor(args):
     common.main(["doctor"])
@@ -202,6 +232,9 @@ def build_parser():
     p.add_argument("--outline-only", action="store_true")
     p.add_argument("--rebuild", action="store_true")
     p.add_argument("--force", action="store_true")
+    p = add("book-rules", ID)
+    p.add_argument("--batch", type=int, default=4)
+    p.add_argument("--send", metavar="HASH")
     add("book-list")
     add("book-info", ID)
     p = add("book-query", (["query"], {}), ID)
@@ -241,6 +274,9 @@ def build_parser():
     p = add("settings")
     p.add_argument("--paper")
     p.add_argument("--dry-run", choices=["on", "off"])
+    p = add("stats")
+    p.add_argument("--paper")
+    p.add_argument("--days", type=int, default=30)
     add("doctor")
     return ap
 

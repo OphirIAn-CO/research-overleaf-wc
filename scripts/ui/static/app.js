@@ -50,7 +50,7 @@
   api.get = (p, o) => api('GET', p, null, o);
   api.post = (p, b) => api('POST', p, b);
 
-  async function waitJob(id, onTick) {
+  async function waitJob(id, onTick) {  // onTick(job) is called on every poll; job.progress = [done, total] when the job reports it
     for (;;) {
       const j = await api.get('/api/jobs/' + id, { poll: true });
       if (onTick) onTick(j);
@@ -383,6 +383,7 @@
             h('td', { class: 'num', text: c.score.toFixed(2) }), h('td', { class: 'num', text: String(c.tokens) }), h('td', { text: c.via }))))))));
     });
     q.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryBtn.click(); });
+    box.append(await ruleCardPanel(B.id));
     box.append(h('div', { class: 'row' }, h('label', { class: 'row tight small secondary' }, 'Book', bookSel)),
       h('section', { class: 'card' }, h('div', { class: 'row' }, q, partSel, tryBtn)), results);
     const treeBox = h('div', { class: 'tree' }, busy('Loading...'));
@@ -396,6 +397,32 @@
     });
     box.append(notice('ok', `${t.info.n_chunks} chunks, ${fmtTok(t.info.tokens)} tokens in total; outline found by ${t.info.method}. Use "Review the outline" above if chapters look wrong.`));
   });
+
+  async function ruleCardPanel(id) {
+    const st = await api.get(`/api/book/${encodeURIComponent(id)}/rules`);
+    const out = h('div');
+    const body = h('div', { class: 'stack' });
+    const done = st.todo === 0;
+    body.append(h('p', { class: 'small secondary', text: done ? `Every chunk (${st.chunks}) has a rule card. Later requests carry these short rules instead of raw book text.` : `${st.with_cards} of ${st.chunks} chunks have a rule card. A card is 3 to 6 short rules distilled from a chunk: later requests carry the rules (with the page) instead of the raw book text, which is cheaper, sends less of the book out, and makes the right chunk easier to find.` }));
+    if (!done) {
+      body.append(guarded(h('button', { type: 'button', text: 'Preview the cost' }), async () => {
+        const pl = await api.post(`/api/book/${encodeURIComponent(id)}/rules/preview`, {});
+        const bar = h('progress', { max: '1', value: '0', class: 'grow', hidden: true });
+        const go = guarded(h('button', { type: 'button', class: 'primary', text: 'Send the book to OpenAI once and create the cards' }), async () => {
+          bar.hidden = false;
+          const r = await api.post(`/api/book/${encodeURIComponent(id)}/rules/run`, { confirm: pl.payload_hash });
+          try {
+            const res = await waitJob(r.job, (j) => { if (j.progress) { bar.value = j.progress[0] / j.progress[1]; } });
+            toast(res.status === 'done' ? 'Rule cards created' : 'Stopped: ' + (res.error || res.status));
+          } catch (e) { toast(e.message); }
+          route();
+        });
+        clear(out).append(notice('warn', h('strong', { text: 'This sends the book text to OpenAI. ' }), `${pl.chunks} chunks in ${pl.calls} requests to ${pl.model} (${pl.endpoint}), about ${fmtTok(pl.est_tokens_in)} tokens in and ${fmtTok(pl.est_tokens_out)} out${pl.est_cost != null ? ', about ' + pl.est_cost + ' in your price units' : ''}. It happens once and can resume if interrupted.`),
+          h('div', { class: 'row' }, go, bar));
+      }), out);
+    }
+    return h('section', { class: 'card', 'aria-label': 'Rule cards' }, h('h2', { text: 'Rule cards' }), body);
+  }
 
   async function openChunk(reader, id) {
     const c = await api.get(`/api/book/${encodeURIComponent(B.id)}/chunk?id=${encodeURIComponent(id)}`);

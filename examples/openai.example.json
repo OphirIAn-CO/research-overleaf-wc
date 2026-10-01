@@ -1,0 +1,7 @@
+{
+  "api_key": "sk-...your OpenAI API key...",
+  "model": "the model id you want ChatGPT to use",
+  "api": "responses",
+  "max_output_tokens": 2500,
+  "prices": {"input_per_1m": 0.0, "output_per_1m": 0.0}
+}

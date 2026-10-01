@@ -29,8 +29,8 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (book_index, chunk_book, config, events, health, openai_client, paper_index, retrieve, revise,  # noqa: E402
-                          stats, taxonomy, watermark)
+from writing_core import (book_index, chunk_book, config, events, health, openai_client, paper_index, preferences, retrieve,  # noqa: E402
+                          revise, rule_cards, stats, taxonomy, watermark)
 
 STATIC = Path(__file__).resolve().parent / "static"
 FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
@@ -56,16 +56,20 @@ class Jobs:
         self.lock = threading.Lock()
         self.items = {}
 
-    def submit(self, label, fn):
+    def submit(self, label, fn, with_progress=False):
         jid = secrets.token_hex(6)
         with self.lock:
             self.items[jid] = {"id": jid, "label": label, "status": "running", "started": time.time()}
             for old in sorted(self.items, key=lambda k: self.items[k]["started"])[:-40]:
                 self.items.pop(old, None)
 
+        def progress(done, total):
+            with self.lock:
+                self.items[jid]["progress"] = [done, total]
+
         def run():
             try:
-                res = fn()
+                res = fn(progress) if with_progress else fn()
                 with self.lock:
                     self.items[jid].update(status="done", result=res, finished=time.time())
             except Exception as e:  # noqa: BLE001
@@ -296,6 +300,31 @@ def api_ingest(r):
     return {"job": r.app.jobs.submit(f"book import {bid} ({mode})", job)}
 
 
+def api_rules_status(r):
+    b = book_id(r)
+    return {**rule_cards.status(b), "model": config.openai_status()}
+
+
+def api_rules_preview(r):
+    b = book_id(r)
+    st = rule_cards.status(b)
+    if not st["todo"]:
+        return {**st, "calls": 0}
+    pl = rule_cards.plan(b)
+    pl.pop("sample", None)
+    return {**st, **pl}
+
+
+def api_rules_run(r):
+    b = book_id(r)
+    confirm = r.body.get("confirm")
+
+    def job(progress):
+        res = rule_cards.run(b, confirm, progress=progress, source="web")
+        return {**{k: res[k] for k in ("status", "error", "with_cards", "chunks", "todo") if k in res}, "cost": res.get("cost")}
+    return {"job": r.app.jobs.submit(f"rule cards for {b}", job, with_progress=True)}
+
+
 def api_job(r):
     j = r.app.jobs.get(r.m.group(1))
     if not j:
@@ -495,6 +524,16 @@ def api_decisions(r):
     return {"decisions": rows[::-1]}
 
 
+def api_preferences(r):
+    n, p = paper_ref(r.m.group(1))
+    return {"digest": preferences.digest(p), **preferences.stats(p)}
+
+
+def api_forget(r):
+    n, p = paper_ref(r.m.group(1))
+    return {"forgotten": preferences.forget(p)}
+
+
 def api_index_list(r):
     n, p = paper_ref(r.m.group(1))
     paper_index.refresh(n, p, trigger="view", source="web")
@@ -576,7 +615,8 @@ ROUTES = [
     ("GET", r"^/api/books$", api_books), ("GET", r"^/api/book/([A-Za-z0-9_-]+)/tree$", api_book_tree),
     ("GET", r"^/api/book/([A-Za-z0-9_-]+)/chunk$", api_book_chunk), ("GET", r"^/api/book/([A-Za-z0-9_-]+)/query$", api_book_query),
     ("GET", r"^/api/book/([A-Za-z0-9_-]+)/outline$", api_book_outline_get), ("POST", r"^/api/book/([A-Za-z0-9_-]+)/outline$", api_book_outline_save),
-    ("POST", r"^/api/book/ingest$", api_ingest), ("GET", r"^/api/jobs/([0-9a-f]{12})$", api_job),
+    ("GET", r"^/api/book/([A-Za-z0-9_-]+)/rules$", api_rules_status), ("POST", r"^/api/book/([A-Za-z0-9_-]+)/rules/preview$", api_rules_preview),
+    ("POST", r"^/api/book/([A-Za-z0-9_-]+)/rules/run$", api_rules_run), ("POST", r"^/api/book/ingest$", api_ingest), ("GET", r"^/api/jobs/([0-9a-f]{12})$", api_job),
     ("POST", r"^/api/revise/preview$", api_revise_preview), ("POST", r"^/api/revise/run$", api_revise_run),
     ("GET", r"^/api/proposals$", api_proposals), ("GET", r"^/api/proposal$", api_proposal),
     ("POST", r"^/api/proposal/apply$", api_apply), ("POST", r"^/api/proposal/record$", api_record),
@@ -584,7 +624,8 @@ ROUTES = [
     ("GET", r"^/api/health$", api_health), ("POST", r"^/api/settings$", api_settings),
     ("GET", r"^/api/paper/([^/]+)/card$", api_card_get), ("POST", r"^/api/paper/([^/]+)/card$", api_card_save),
     ("GET", r"^/api/paper/([^/]+)/decisions$", api_decisions), ("GET", r"^/api/paper/([^/]+)/index$", api_index_list),
-    ("GET", r"^/api/paper/([^/]+)/chunk$", api_index_chunk),
+    ("GET", r"^/api/paper/([^/]+)/chunk$", api_index_chunk), ("GET", r"^/api/paper/([^/]+)/preferences$", api_preferences),
+    ("POST", r"^/api/paper/([^/]+)/forget$", api_forget),
     ("POST", r"^/api/refs/preview$", api_refs_preview), ("POST", r"^/api/refs/add$", api_refs_add), ("GET", r"^/api/refs/recent$", api_refs_recent),
     ("POST", r"^/api/refs/mendeley$", api_refs_mendeley), ("POST", r"^/api/proposal/handoff$", api_handoff),
 ]

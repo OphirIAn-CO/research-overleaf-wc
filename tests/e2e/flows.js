@@ -75,6 +75,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) failed+
   await page.waitForSelector('.toast:has-text("Saved")');
   ok(true, 'paper card saved');
   ok(await page.isVisible('text=What you accepted and rejected'), 'decision log is on the page');
+  ok(await page.isVisible('text=What the system has learned from your decisions'), 'learned-preferences panel is on the page');
   await shot('paper-index');
 
   // ---- References
@@ -99,6 +100,10 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) failed+
   await page.click('.tree button.chunk[data-id="B:mini:c02.s03.k01"]');
   await page.waitForSelector('.reader');
   ok((await page.textContent('.reader')).length > 100, 'chunk text shown in the reader');
+  ok(await page.isVisible('section[aria-label="Rule cards"]'), 'rule-card panel is on the Book page');
+  await page.click('button:has-text("Preview the cost")');
+  await page.waitForSelector('text=This sends the book text to OpenAI');
+  ok(await page.isVisible('button:has-text("Send the book to OpenAI once")'), 'rule-card plan shows the cost warning and a confirm button (nothing sent yet)');
   await page.fill('input[type=search]', 'how do I describe the statistical analysis');
   await page.click('button:has-text("Search")');
   await page.waitForSelector('section[aria-label="Query result"]');

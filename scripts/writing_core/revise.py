@@ -16,7 +16,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from . import config, events, latex_mask, openai_client, paper_index, retrieve, store, taxonomy
+from . import config, events, latex_mask, openai_client, paper_index, preferences, retrieve, store, taxonomy
 
 MAX_UNITS = 5
 MAX_UNIT_TOKENS = 1500
@@ -151,10 +151,11 @@ def _attr(text):
     return text.replace(">", "/").replace('"', "'").replace("<", "(")
 
 
-def build_user(instruction, card, rules_text, unit, masked):
+def build_user(instruction, card, rules_text, unit, masked, prefs=""):
     return "\n".join([
         f"<instruction>{instruction.strip()}</instruction>",
         f"<paper_card>\n{card}\n</paper_card>" if card else "",
+        f"<author_preferences>\n{prefs}\n</author_preferences>" if prefs else "",
         f"<book_rules>\n{rules_text}\n</book_rules>" if rules_text else "<book_rules>(none available)</book_rules>",
         f'<passage part="{",".join(unit["parts"]) or "unknown"}" section="{_attr(unit["section_path"])}">\n{masked}\n</passage>',
     ]).strip()
@@ -185,6 +186,7 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
         raise ReviseError(f"that is {len(units)} passages (limit {max_units} per run, to keep cost predictable). "
                           "Name a narrower part or pass chunk ids.")
     card = read_card(proj)
+    prefs = preferences.digest(proj)
 
     warnings, rules, rule_ids = [], None, []
     if use_book:
@@ -204,7 +206,7 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
     prepared = []
     for u in units:
         masked, mapping = latex_mask.mask(u["text"])
-        user = build_user(instruction, card, rules_text, u, masked)
+        user = build_user(instruction, card, rules_text, u, masked, prefs)
         _, body = openai_client.build_request(cfg, SYSTEM_PROMPT, user)
         prepared.append({"unit": u, "masked": masked, "mapping": mapping, "user": user, "body": body})
     payload_hash = store.sha256_text(json.dumps([p["body"] for p in prepared], sort_keys=True))

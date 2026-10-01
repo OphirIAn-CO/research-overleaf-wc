@@ -50,6 +50,17 @@
         h('button', { type: 'button', text: 'Insert the template', onclick: () => { if (!ta.value.trim() || window.confirm('Replace the text with the template?')) ta.value = card.template; } }),
         guarded(h('button', { type: 'button', class: 'primary', text: 'Save the card' }), async () => { await api.post(`/api/paper/${enc(name)}/card`, { text: ta.value }); if (noCard) noCard.remove(); toast('Saved'); }))));
 
+    // ---- what the system learned from the decisions
+    const pref = await api.get(`/api/paper/${enc(name)}/preferences`);
+    box.append(h('section', { class: 'card', 'aria-label': 'Learned preferences' }, h('h2', { text: 'What the system has learned from your decisions' }),
+      h('p', { class: 'small secondary', text: 'This is exactly the note that rides along with the next ChatGPT request for this paper, built only from this paper\'s own accepted and rejected changes. It nudges the model; it never overrides the book or you.' }),
+      pref.digest ? h('pre', { class: 'payload mono', text: pref.digest }) : h('p', { class: 'muted small', text: `Nothing yet (${pref.accepted} accepted, ${pref.rejected} rejected so far). A rule you reject twice more than you accept starts appearing here.` }),
+      pref.accepted + pref.rejected ? guarded(h('button', { type: 'button', class: 'danger', text: 'Forget these decisions' }), async () => {
+        if (!window.confirm('Erase this paper\'s decision history? The manuscript is not touched.')) return;
+        const r = await api.post(`/api/paper/${enc(name)}/forget`, {});
+        toast(`Forgot ${r.forgotten} decisions`); window.OLS.route();
+      }) : null));
+
     // ---- decision log
     const dec = await api.get(`/api/paper/${enc(name)}/decisions`);
     box.append(h('section', { class: 'card', 'aria-label': 'Decisions' }, h('h2', { text: 'What you accepted and rejected' }),

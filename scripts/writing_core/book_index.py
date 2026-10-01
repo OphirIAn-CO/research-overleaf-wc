@@ -188,6 +188,26 @@ def ingest(pdf, book_id, force=False, rebuild=False, outline_only=False, source=
     return {"status": "rebuilt" if (man or rebuild) else "ingested", "manifest": built, "warnings": warnings}
 
 
+def update_rule_cards(book_id, cards):
+    """Store distilled rules ({chunk_id: 'text'}) in chunks.jsonl (canonical) and rebuild the derived search index. No re-chunking."""
+    p = paths(book_id)
+    chunks = read_chunks(book_id)
+    known = {c["id"] for c in chunks}
+    for cid, text in cards.items():
+        if cid not in known:
+            raise BookError(f"unknown chunk {cid!r}")
+    for c in chunks:
+        if c["id"] in cards:
+            c["rule_card"] = cards[c["id"]]
+    _atomic_write(p["chunks"], "".join(json.dumps(c, ensure_ascii=False) + "\n" for c in chunks))
+    build_sqlite(chunks, p["db"], {"book_id": book_id})
+    man = manifest(book_id) or {}
+    man["rule_cards"] = sum(1 for c in chunks if c.get("rule_card"))
+    man["rule_cards_at"] = time.time()
+    _atomic_write(p["manifest"], json.dumps(man, indent=2))
+    return man["rule_cards"]
+
+
 # ------------------------------------------------------------------------------ reading
 
 def info(book_id):
