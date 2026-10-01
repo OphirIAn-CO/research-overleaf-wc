@@ -16,12 +16,23 @@ class FakeOpenAI:
     def __init__(self, api="responses"):
         self.api = api
         self.requests = []   # dicts: path, headers, body
+        self.models_reply = (200, {"id": "fake-model", "object": "model"})   # what GET /models/<id> answers
         self.script = []     # callables(body) -> (status, payload_dict) OR str (the model's text) OR dict (revision JSON)
         outer = self
 
         class H(BaseHTTPRequestHandler):
             def log_message(self, *a):
                 pass
+
+            def do_GET(self):
+                outer.requests.append({"path": self.path, "headers": dict(self.headers), "body": None, "method": "GET"})
+                status, payload = outer.models_reply
+                data = json.dumps(payload).encode()
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
 
             def do_POST(self):
                 n = int(self.headers.get("Content-Length", 0))

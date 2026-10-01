@@ -272,48 +272,6 @@
       })));
   }
 
-  // ------------------------------------------------------------------ Settings
-  registerPage('settings', 'Settings', async (box) => {
-    await loadState();
-    const st = S.st;
-    const health = await api.get('/api/health');
-    box.append(h('div', { class: 'page-head' }, h('h1', { text: 'Settings and health' })));
-    box.append(h('section', { class: 'card', 'aria-label': 'Health' }, h('h2', { text: 'Health' }),
-      health.issues.length ? h('ul', null, health.issues.map((i) => h('li', null, h('strong', { text: i.scope + ': ' }), i.text))) : notice('ok', 'Everything is set up.')));
-    box.append(h('section', { class: 'card', 'aria-label': 'Secrets' }, h('h2', { text: 'Keys and tokens' }),
-      h('p', { class: 'small secondary', text: 'These live in files you create yourself (never pasted in a chat). The app only ever reads them; it never shows them.' }),
-      h('table', null, h('tbody', null,
-        h('tr', null, h('td', { text: 'ChatGPT (OpenAI)' }), h('td', null, h('span', { class: 'badge ' + (st.settings.openai.state === 'ok' ? 'ok' : 'warn'), text: st.settings.openai.state }), ' ', h('span', { class: 'small muted', text: st.settings.openai.detail })),
-          h('td', null, h('code', { class: 'small', text: '~/.config/overleaf-skill/openai.json  {"api_key": "...", "model": "..."}' }))),
-        h('tr', null, h('td', { text: 'Overleaf Git token' }), h('td', null, h('span', { class: 'badge ' + (st.settings.git_token ? 'ok' : 'warn'), text: st.settings.git_token ? 'present' : 'missing' })),
-          h('td', null, h('code', { class: 'small', text: '~/.config/overleaf-skill/overleaf_git.json  {"token": "..."}' })))))));
-
-    const wm = h('input', { type: 'text', class: 'grow', value: st.settings.ui.watermark_url || '', placeholder: 'http://host.docker.internal:PORT', 'aria-label': 'Watermark service URL' });
-    const idle = h('input', { type: 'number', min: '5', max: '1440', value: String(st.settings.ui.idle_minutes), 'aria-label': 'Idle minutes' });
-    const save = guarded(h('button', { type: 'button', class: 'primary', text: 'Save' }), async () => {
-      await api.post('/api/settings', { ui: { watermark_url: wm.value.trim(), idle_minutes: Number(idle.value) } });
-      toast('Saved'); route();
-    });
-    box.append(h('section', { class: 'card', 'aria-label': 'App settings' }, h('h2', { text: 'This app' }),
-      h('div', { class: 'stack' },
-        h('label', { class: 'field' }, h('span', { text: 'Step 6b: watermark-clean service URL (needed before this app can apply text; otherwise use Hand to Claude)' }), h('div', { class: 'row' }, wm)),
-        h('p', { class: 'small secondary' }, 'Status: ', h('span', { class: 'badge ' + (health.watermark.state === 'ok' ? 'ok' : 'warn'), text: health.watermark.state }), ' ', health.watermark.detail),
-        h('label', { class: 'field' }, h('span', { text: 'Close the app after this many idle minutes' }), idle),
-        h('div', { class: 'row' }, save))));
-
-    const texture = h('input', { type: 'checkbox', checked: document.documentElement.dataset.texture === 'on' });
-    texture.addEventListener('change', () => { document.documentElement.dataset.texture = texture.checked ? 'on' : 'off'; store.set('ols-texture', texture.checked ? 'on' : 'off'); });
-    box.append(h('section', { class: 'card', 'aria-label': 'Display' }, h('h2', { text: 'Display' }),
-      h('label', { class: 'check' }, texture, 'Pattern fills on charts (for colour-blind readers and printing)')));
-    box.append(h('section', { class: 'card', 'aria-label': 'Advanced' }, h('h2', { text: 'Advanced' }),
-      h('p', { class: 'small secondary', text: 'You do not need these for daily work. They show what happens behind the scenes.' }),
-      h('ul', null,
-        h('li', null, h('a', { href: '#/panes', text: 'Test the side panes' }), ' (can QuillBot and Overleaf sit beside the chat in your browser?)'),
-        h('li', null, h('a', { href: '#/book', text: 'Writing book library' }), ' (how the book was prepared)'),
-        h('li', null, h('a', { href: '#/paper_index', text: 'What the app remembers about this paper' }), ' (notes and learned preferences)'))));
-    if (st.settings.in_docker) box.append(notice('ok', 'Running in Docker: only the registered paper folders, the data folder and the inbox are visible to this app. A paper registered after it started needs ui.sh down and ui.sh up.'));
-  });
-
   // ------------------------------------------------------------------ chrome
   function applyTheme(t) {
     if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;

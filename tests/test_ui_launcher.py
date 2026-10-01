@@ -27,6 +27,22 @@ class Launcher(IsolatedHome):
                              env={"OVERLEAF_SKILL_HOME": str(common.HOME), "PATH": "/usr/bin:/bin"}).stdout.split()
         self.assertEqual(sorted(out), sorted([str(a.resolve()), str(b.resolve())]))
 
+    def test_folders_command_shares_a_folder_without_needing_docker(self):
+        shared = self.tmp / "clones"
+        shared.mkdir()
+        env = {"OVERLEAF_SKILL_HOME": str(common.HOME), "PATH": "/usr/bin:/bin", "HOME": str(self.tmp)}
+        run = lambda *a: subprocess.run(["bash", str(ROOT / "ui.sh"), "folders", *a], capture_output=True, text=True, env=env)  # noqa: E731
+        r = run("add", str(shared))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Restart the app", r.stdout)
+        self.assertIn(str(shared.resolve()), run("list").stdout)
+        paths = subprocess.run(["python3", str(ROOT / "scripts" / "common.py"), "paths"], capture_output=True, text=True, env=env).stdout.split()
+        self.assertEqual(paths, [str(shared.resolve())])          # mounted read-write at the same path, like registered papers
+        self.assertIn("no folder is shared", (run("rm", str(shared)), run("list"))[1].stdout)
+        self.assertNotEqual(run("add", str(self.tmp / "missing")).returncode, 0)
+        self.assertIn("folders add", UI_SH)
+        self.assertIn('OLS_HOST_DIR="$DIR"', UI_SH)
+
     def test_the_hardening_flags_are_present_and_nothing_is_published_to_the_network(self):
         for flag in ("--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "--user \"$(id -u):$(id -g)\"", "--init",
                      "-p \"127.0.0.1:${1}:${1}\"", 'mount_arg "$DIR/scripts" /app readonly'):

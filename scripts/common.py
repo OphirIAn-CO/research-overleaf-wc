@@ -148,6 +148,20 @@ def resolve(ref=None, check=True):
     return found, registry()["projects"][found]
 
 
+def workspace_roots():
+    """Folders the author chose to share with the web app (ui.json "workspace_roots"): the Overleaf clones in them can be added from the app."""
+    out = []
+    for r in (load("ui.json", {}) or {}).get("workspace_roots") or []:
+        if isinstance(r, str) and r.strip():
+            out.append(str(Path(r).expanduser().resolve()))
+    return out
+
+
+def inside(path, root):
+    path, root = Path(path).resolve(), Path(root).resolve()
+    return path == root or root in path.parents
+
+
 def bib_path(proj):
     return str(Path(proj["path"]) / proj["bib"])
 
@@ -192,9 +206,32 @@ def main(a):
             print(("OK   " if not env else "INFO ") + "writing coach (global)", *env, sep="\n     " if env else "")
         except Exception as e:  # noqa: BLE001
             print(f"INFO writing coach (global)\n     checks failed ({e})")
-    elif a[:1] == ["paths"]:
+    elif a[:1] == ["paths"]:  # what the web app container must be able to see: shared folders first, then papers outside them
+        roots = workspace_roots()
+        for r in roots:
+            print(r)
         for p in reg["projects"].values():
-            print(p["path"])
+            if not any(inside(p["path"], r) for r in roots):
+                print(p["path"])
+    elif a[:1] == ["folders"]:
+        cur = load("ui.json", {}) or {}
+        roots = workspace_roots()
+        if a[1:2] == ["add"] and len(a) > 2:
+            new = str(Path(a[2]).expanduser().resolve())
+            if not Path(new).is_dir():
+                sys.exit(f"not a folder: {new}")
+            if new not in roots:
+                roots.append(new)
+            cur["workspace_roots"] = roots
+            save("ui.json", cur)
+            print("shared with the web app:", new)
+        elif a[1:2] in (["rm"], ["remove"]) and len(a) > 2:
+            gone = str(Path(a[2]).expanduser().resolve())
+            cur["workspace_roots"] = [r for r in roots if r != gone]
+            save("ui.json", cur)
+            print("no longer shared:", gone)
+        else:
+            print("\n".join(roots) if roots else "(no folder is shared; papers registered with `common.py add` are still visible)")
     elif a[:1] == ["rm"] and len(a) > 1:
         reg["projects"].pop(a[1], None)
         reg["default"] = reg["default"] if reg["default"] in reg["projects"] else next(iter(reg["projects"]), None)

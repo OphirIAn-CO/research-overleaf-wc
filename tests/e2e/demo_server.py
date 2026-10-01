@@ -66,7 +66,8 @@ def main():
     oa.script = [edit] * 50
     common.save("openai.json", {"api_key": "sk-demo", "model": "demo-model", "base_url": oa.url, "prices": {"input_per_1m": 2.0, "output_per_1m": 8.0}})
     wm = FakeWatermark()
-    common.save("ui.json", {"watermark_url": wm.url, "idle_minutes": 240})
+    make_paper(papers_dir, "extra-draft", MAIN, bib=BIB, remote="https://git.overleaf.com/" + "5a1b2c3d" * 3)   # a clone in a shared folder that is not added yet
+    common.save("ui.json", {"watermark_url": wm.url, "idle_minutes": 240, "workspace_roots": [str(papers_dir)]})
 
     pdf = ROOT / "tests" / "fixtures" / "mini_book.pdf"
     config.inbox_dir().mkdir(parents=True, exist_ok=True)

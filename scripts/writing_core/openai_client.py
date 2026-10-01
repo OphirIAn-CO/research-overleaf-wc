@@ -164,3 +164,20 @@ def call(cfg, system, user, schema=REVISION_SCHEMA, retries=2):
         if attempt < retries:
             SLEEP(2 * (attempt + 1))
     raise last
+
+
+def check(cfg):
+    """Is the key accepted and does the model exist? A read-only request (no tokens spent). -> {ok, model} or raises OpenAIError."""
+    url = cfg["base_url"].rstrip("/") + "/models/" + urllib.request.quote(cfg["model"], safe="")
+    headers = {"Authorization": "Bearer " + cfg["api_key"], "User-Agent": UA}
+    for k, h in (("organization", "OpenAI-Organization"), ("project", "OpenAI-Project")):
+        if cfg.get(k):
+            headers[h] = cfg[k]
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=min(cfg["timeout"], 20)) as r:
+            json.loads(r.read().decode("utf-8") or "{}")
+        return {"ok": True, "model": cfg["model"]}
+    except urllib.error.HTTPError as e:
+        raise _http_error(cfg, e) from None
+    except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
+        raise OpenAIError("network error talking to OpenAI: " + _scrub(str(getattr(e, "reason", e)), cfg)[:200], "network") from None

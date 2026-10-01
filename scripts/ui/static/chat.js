@@ -42,18 +42,29 @@
     const alive = () => document.body.contains(threadEl) && S.paper === paper && S.chatId === st.cid;
 
     // ---- header
-    const p = window.OLS.paperObj(paper);
-    const idx = p && p.index;
-    sub.textContent = idx ? `${plural(idx.counts.tex || 0, 'section')} of text read · notes refreshed ${ago(idx.indexed_at)}` : 'The first request will read your paper.';
-    const out = h('div', { class: 'stack' });
+    const gitNotice = (r) => (r.friendly ? notice('warn', r.friendly, ' ', h('a', { href: '#/settings', text: 'Open Settings' })) :
+      h('div', null, notice(r.level === 'bad' ? 'bad' : r.level === 'warn' ? 'warn' : 'ok', r.summary || r.output), r.output && r.output !== r.summary ? h('details', null, h('summary', { text: 'Details' }), h('pre', { class: 'small payload', text: r.output })) : null));
+    async function loadOverview() {
+      try {
+        const o = await api.get('/api/overview?paper=' + enc(paper), { poll: true });
+        if (!alive()) return;
+        const parts = [o.sentence];
+        if (o.last_checked) parts.push('asked Overleaf ' + ago(o.last_checked));
+        sub.textContent = parts.join(' · ');
+        sub.title = o.pending_count ? o.pending.map((x) => `${x.file} (${x.what})`).join('\n') : '';
+      } catch (e) { sub.textContent = ''; }
+    }
     const gitBtn = (label, action, body) => guarded(h('button', { type: 'button', text: label }), async () => {
       const r = await api.post('/api/papers/' + action, Object.assign({ name: paper }, body || {}));
-      st.local.push({ node: r.friendly ? notice('warn', r.friendly, ' ', h('a', { href: '#/settings', text: 'Open Settings' })) : h('pre', { class: 'small payload', text: r.output }) });
+      st.local.push({ node: gitNotice(r) });
       renderThread();
+      loadOverview();
+      await window.OLS.loadState();
       if (window.OLS.panes && window.OLS.panes.refreshText) window.OLS.panes.refreshText();
     });
+    loadOverview();
     const head = h('header', { class: 'chat-head' }, h('div', { class: 'grow' }, h('h1', { text: paper }), sub),
-      h('div', { class: 'row' }, window.OLS.panes.bar(), gitBtn('Get latest from Overleaf', 'pull'), gitBtn('Send to Overleaf', 'sync', { message: 'Update via the Overleaf assistant' }),
+      h('div', { class: 'row' }, window.OLS.panes.bar(), gitBtn('Get latest from Overleaf', 'pull'), gitBtn('Send to Overleaf', 'sync', { message: 'Writing assistant: update' }),
         h('button', { type: 'button', class: 'ghost', text: '?', title: 'How this works', 'aria-label': 'How this works', onclick: () => { st.showHelp = !st.showHelp; renderThread(); } })));
 
     // ---- composer
@@ -268,8 +279,8 @@
     }
 
     function showGit(into, r) {
-      if (r.friendly || (r.push && r.push.friendly)) into.append(notice('warn', r.friendly || r.push.friendly, ' ', h('a', { href: '#/settings', text: 'Open Settings' })));
-      else into.append(notice('ok', (r.output || (r.push && r.push.output) || 'Done').split('\n')[0]));
+      into.append(gitNotice(r.push ? Object.assign({}, r.push) : r));
+      loadOverview();
     }
 
     async function doApprove(into, p, body, redraw) {

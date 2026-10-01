@@ -15,6 +15,7 @@ import os
 import re
 import secrets
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -36,6 +37,7 @@ STATIC = Path(__file__).resolve().parent / "static"
 FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
          "/charts.js": ("charts.js", "text/javascript; charset=utf-8"), "/pages.js": ("pages.js", "text/javascript; charset=utf-8"),
          "/panes.js": ("panes.js", "text/javascript; charset=utf-8"), "/chat.js": ("chat.js", "text/javascript; charset=utf-8"),
+         "/settings.js": ("settings.js", "text/javascript; charset=utf-8"),
          "/style.css": ("style.css", "text/css; charset=utf-8")}
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
        "frame-src " + " ".join(panes.FRAME_HOSTS) + "; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -223,7 +225,44 @@ def git_action(name, action, message=None):
             paper_index.refresh(n, p, trigger="after_pull" if action == "pull" else "after_sync", source="web")
         except Exception:  # noqa: BLE001
             pass
-    return {"output": out}
+    return {"output": out, **plain_git(action, out)}
+
+
+_STATUS_WORDS = {"M": "edited", "A": "new", "D": "deleted", "R": "renamed", "?": "new", "U": "in conflict"}
+
+
+def plain_git(action, out):
+    """What git said, as a sentence an author can act on. -> {summary, level: ok|warn|bad, needs: None|'latest'|'claude'}"""
+    low = out.lower()
+    first = next((ln for ln in out.splitlines() if ln.strip()), "")
+    if action == "pull":
+        if low.startswith("pull failed"):
+            if any(k in low for k in ("fast-forward", "diverg", "conflict", "overwritten")):
+                return {"summary": "Overleaf and this computer both have changes, and I did not mix them. Ask Claude to merge them safely; it never overwrites either side.", "level": "warn", "needs": "claude"}
+            return {"summary": "I could not get the latest from Overleaf: " + first.replace("pull failed:", "").strip()[:200], "level": "bad", "needs": None}
+        if "already up to date" in low:
+            return {"summary": "You already have the latest from Overleaf.", "level": "ok", "needs": None}
+        files = re.findall(r"^\s*(\S.*?)\s+\|\s+\d+", out, re.M)
+        more = "…" if len(files) > 6 else ""
+        return {"summary": "Got the latest from Overleaf" + (": " + ", ".join(files[:6]) + more if files else "") + ".", "level": "ok", "needs": None}
+    if action == "status":
+        rows = [m.groups() for m in (re.match(r"^\s*([MADRU?]{1,2})\s+(.+)$", ln) for ln in out.splitlines()) if m]  # run_git strips the first line's leading space
+        if not rows:
+            return {"summary": "Nothing is waiting to be sent to Overleaf.", "level": "ok", "needs": None}
+        items = [f"{f.strip()} ({_STATUS_WORDS.get(code[:1], 'changed')})" for code, f in rows[:8]]
+        return {"summary": f"{len(rows)} file{'s' if len(rows) != 1 else ''} changed here and not sent yet: " + ", ".join(items) + ("…" if len(rows) > 8 else "") + ".", "level": "warn", "needs": None}
+    if action == "sync":
+        if low.startswith("nothing to sync"):
+            return {"summary": "Nothing to send: everything is already in Overleaf.", "level": "ok", "needs": None}
+        if low.startswith("commit failed"):
+            return {"summary": "I could not prepare the changes for Overleaf: " + first[:200], "level": "bad", "needs": None}
+        push = out.split("push:", 1)[1].strip() if "push:" in out else ""
+        if push.startswith("ok"):
+            return {"summary": "Sent to Overleaf.", "level": "ok", "needs": None}
+        if any(k in push.lower() for k in ("rejected", "fetch first", "non-fast-forward", "behind")):
+            return {"summary": "Overleaf has newer changes, so it did not accept this yet. Press \"Get latest from Overleaf\", then send again.", "level": "warn", "needs": "latest"}
+        return {"summary": "Your changes are saved here but could not be sent: " + (push.splitlines() or [""])[0][:200], "level": "bad", "needs": None}
+    return {"summary": first, "level": "ok", "needs": None}
 
 
 def api_git(r, action):
@@ -772,11 +811,122 @@ def api_paper_text(r):
     return {"pieces": out}
 
 
+# ---------------------------------------------------------------------------- overview, connections, tests, adding papers
+
+JUNK_END = overleaf_mcp.JUNK
+
+
+def pending_files(proj):
+    r = subprocess.run(["git", "-C", proj["path"], "status", "--porcelain", "--untracked-files=all"], capture_output=True, text=True, timeout=30)
+    rows = []
+    for ln in r.stdout.splitlines():  # not run_git: it strips the first line's leading space, which is part of the status code
+        if len(ln) > 3 and not ln[3:].endswith(JUNK_END) and not ln[3:].startswith(".overleaf-skill"):
+            rows.append({"file": ln[3:].strip().strip('"'), "what": _STATUS_WORDS.get(ln[:2].strip()[:1], "changed")})
+    return rows
+
+
+def api_overview(r):
+    """Cheap, local facts for the chat header: what is waiting to be sent, and when Overleaf was last asked."""
+    n, p = paper_ref(r.arg("paper", ""))
+    rows = pending_files(p)
+    fh = Path(p["path"]) / ".git" / "FETCH_HEAD"
+    last = fh.stat().st_mtime if fh.exists() else None
+    if rows:
+        sentence = f"{len(rows)} file{'s' if len(rows) != 1 else ''} changed here, not sent yet"
+    else:
+        sentence = "Nothing waiting to be sent to Overleaf"
+    return {"paper": n, "pending": rows[:30], "pending_count": len(rows), "sentence": sentence, "last_checked": last, "index": paper_index.peek(p)}
+
+
+def api_connections(r):
+    d = config.data_dir()
+    tg = common.load("telegram.json", {}) or {}
+    mend_creds, mend_tokens = (d / "mendeley_credentials.json").exists(), (d / "mendeley_tokens.json").exists()
+    here = os.environ.get("OLS_HOST_DIR") or str(SCRIPTS.parent)
+    ostate, omsg = config.openai_status()
+    model = None
+    if ostate == "ok":
+        model = config.openai_cfg()["model"]
+    wstate, wdetail = watermark.check(config.ui_cfg()["watermark_url"]) if config.ui_cfg()["watermark_url"] else ("missing", "no address set")
+    return {"openai": {"state": ostate, "model": model, "detail": omsg if ostate != "ok" else ""},
+            "overleaf": {"token": (d / "overleaf_git.json").exists()},
+            "cleaner": {"state": wstate, "detail": wdetail, "url": config.ui_cfg()["watermark_url"]},
+            "mendeley": {"state": "connected" if mend_creds and mend_tokens else "needs_sign_in" if mend_creds else "not_set_up",
+                         "command": f'python3 "{here}/scripts/mendeley_sync.py" authorize'},
+            "telegram": {"state": "set_up" if tg.get("token") else "not_set_up", "allowed": len(tg.get("allowed_chat_ids") or [])},
+            "limits": {k: config.ui_cfg()[k] for k in ("guard_passages", "max_passages", "idle_minutes")}, "in_docker": os.environ.get("OVERLEAF_UI_IN_DOCKER") == "1"}
+
+
+def api_test_openai(r):
+    try:
+        res = openai_client.check(config.openai_cfg())
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": plain_error(e)}
+    return {"ok": True, "message": f"OpenAI accepted your key and knows the model {res['model']}."}
+
+
+def api_test_git(r):
+    n, p = paper_ref(r.body.get("paper", ""))
+    code, out, err = overleaf_mcp.run_git(p["path"], "ls-remote", "--heads", "origin")
+    text = (err or out or "")
+    if code == 0:
+        return {"ok": True, "message": "Overleaf accepted the sign-in for this paper."}
+    if any(m in text.lower() for m in _AUTH_MARKERS):
+        have = (config.data_dir() / "overleaf_git.json").exists()
+        return {"ok": False, "message": "Overleaf did not accept the sign-in." if have else "No Overleaf token is saved yet."}
+    return {"ok": False, "message": "I could not reach Overleaf: " + (text.strip().splitlines() or ["no answer"])[-1][:200]}
+
+
+def api_test_cleaner(r):
+    url = config.ui_cfg()["watermark_url"]
+    state, detail = watermark.check(url) if url else ("missing", "no address saved yet")
+    return {"ok": state == "ok", "message": "The text-cleaning service answered." if state == "ok" else f"{detail or state}"}
+
+
+def _overleaf_clone(path):
+    return (Path(path) / ".git").exists() and "overleaf.com" in (common.remote_url(path) or "")
+
+
+def api_discover(r):
+    roots = common.workspace_roots()
+    have = {str(Path(p["path"]).resolve()) for p in common.registry()["projects"].values()}
+    found = []
+    for root in roots:
+        base = Path(root)
+        if not base.is_dir():
+            continue
+        level1 = [base] + [d for d in sorted(base.iterdir())[:300] if d.is_dir() and not d.name.startswith(".")]
+        level2 = [g for d in level1[1:] for g in sorted(d.iterdir())[:100] if g.is_dir() and not g.name.startswith(".")] if len(level1) < 300 else []
+        for d in level1 + level2:
+            if _overleaf_clone(d):
+                found.append({"path": str(d), "name": d.name, "remote_id": common.remote_id({"remote": common.remote_url(d)}), "registered": str(d.resolve()) in have})
+    return {"roots": roots, "found": found}
+
+
+def api_add_paper(r):
+    (path,) = need(r.body, "path")
+    target = Path(str(path)).resolve()
+    if not any(common.inside(target, root) for root in common.workspace_roots()):
+        raise ApiError(403, "that folder is not one of the folders shared with the app (ui.sh folders add <folder>)")
+    if not _overleaf_clone(target):
+        raise ApiError(400, "that folder is not an Overleaf project clone (its Git address is not Overleaf's)")
+    reg = common.registry()["projects"]
+    name = re.sub(r"[^A-Za-z0-9_.-]", "_", str(r.body.get("name") or target.name))[:60] or "paper"
+    base, k = name, 2
+    while name in reg and str(Path(reg[name]["path"]).resolve()) != str(target):
+        name, k = f"{base}-{k}", k + 1
+    group = str(r.body.get("group") or "").strip()[:100] or None
+    name = common.register(str(target), name, group)
+    return {"name": name}
+
+
 def api_settings(r):
     body = r.body
-    if body.get("paper") is not None and "dry_run" in body:
+    if body.get("paper") is not None:
         n, p = paper_ref(body["paper"])
-        config.set_paper_setting(p, "dry_run", bool(body["dry_run"]))
+        for key in ("dry_run", "confirm_before_send", "send_refs_to_overleaf", "mirror_to_mendeley"):
+            if key in body:
+                config.set_paper_setting(p, key, bool(body[key]))
     ui = body.get("ui")
     if isinstance(ui, dict):
         cur = common.load("ui.json", {}) or {}
@@ -785,6 +935,12 @@ def api_settings(r):
                 cur["idle_minutes"] = max(5, min(int(ui["idle_minutes"]), 24 * 60))
             except (TypeError, ValueError):
                 raise ApiError(400, "idle_minutes must be a number") from None
+        for key, lo, hi in (("guard_passages", 1, 100), ("max_passages", 1, 100)):
+            if key in ui:
+                try:
+                    cur[key] = max(lo, min(int(ui[key]), hi))
+                except (TypeError, ValueError):
+                    raise ApiError(400, f"{key} must be a number") from None
         if "watermark_url" in ui:
             u = str(ui["watermark_url"] or "").strip()
             if u and not re.match(r"^https?://[A-Za-z0-9_.:\-\[\]]+(/[^\s]*)?$", u):
@@ -966,6 +1122,9 @@ ROUTES = [
     ("POST", r"^/api/refs/mendeley$", api_refs_mendeley), ("POST", r"^/api/proposal/handoff$", api_handoff),
     ("POST", r"^/api/secrets/openai$", api_secret_openai), ("POST", r"^/api/secrets/git$", api_secret_git),
     ("GET", r"^/api/panes$", api_panes), ("POST", r"^/api/test/frames$", api_test_frames),
+    ("GET", r"^/api/overview$", api_overview), ("GET", r"^/api/connections$", api_connections), ("POST", r"^/api/test/openai$", api_test_openai),
+    ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/test/cleaner$", api_test_cleaner),
+    ("GET", r"^/api/papers/discover$", api_discover), ("POST", r"^/api/papers/add$", api_add_paper),
     ("GET", r"^/api/chat/threads$", api_chat_threads), ("POST", r"^/api/chat/new$", api_chat_new), ("POST", r"^/api/chat/rename$", api_chat_rename),
     ("POST", r"^/api/chat/delete$", api_chat_delete), ("GET", r"^/api/chat$", api_chat_get), ("POST", r"^/api/chat/send$", api_chat_send),
     ("POST", r"^/api/chat/run$", api_chat_run), ("POST", r"^/api/chat/count$", api_chat_count), ("POST", r"^/api/chat/cancel$", api_chat_cancel),

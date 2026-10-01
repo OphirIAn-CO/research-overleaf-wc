@@ -3,8 +3,9 @@
 #   ./ui.sh build       build the image once (Python + git + poppler)
 #   ./ui.sh up          start it, print the URL (with this launch's access token) and open the browser (--no-open to skip)
 #   ./ui.sh down        stop it     |  ./ui.sh status  |  ./ui.sh logs
+#   ./ui.sh folders add ~/Documents/overleaf   let the app list and add the Overleaf clones in that folder (also: rm <folder>, list)
 # Safe by construction: published on 127.0.0.1 only; runs as you (not root) with a read-only filesystem and no extra privileges;
-# sees only your registered paper folders, the data folder and the inbox; stops itself after the idle time set in Settings.
+# sees only your registered paper folders (and folders you chose with "folders add"), the data folder and the inbox; stops itself when idle.
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 DATA="${OVERLEAF_SKILL_HOME:-$HOME/.config/overleaf-skill}"
@@ -110,7 +111,7 @@ case "$cmd" in
         --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
         -p "127.0.0.1:${1}:${1}" \
         -e OVERLEAF_UI_BIND=0.0.0.0 -e OVERLEAF_UI_PORT="$1" -e OVERLEAF_UI_PUBLIC_PORT="$1" \
-        -e OVERLEAF_UI_TOKEN_FILE="$DATA/.ui_token" -e OVERLEAF_SKILL_HOME="$DATA" -e HOME=/tmp/home \
+        -e OVERLEAF_UI_TOKEN_FILE="$DATA/.ui_token" -e OVERLEAF_SKILL_HOME="$DATA" -e OLS_HOST_DIR="$DIR" -e HOME=/tmp/home \
         -e GIT_AUTHOR_NAME="${GN:-Overleaf skill}" -e GIT_COMMITTER_NAME="${GN:-Overleaf skill}" \
         -e GIT_AUTHOR_EMAIL="${GE:-overleaf-skill@localhost}" -e GIT_COMMITTER_EMAIL="${GE:-overleaf-skill@localhost}" \
         -e GIT_CONFIG_COUNT=2 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
@@ -143,9 +144,14 @@ case "$cmd" in
     if ! wait_ready "$PORT"; then echo "It did not start. Last log lines:"; docker logs --tail 20 "$NAME" 2>&1 || true; exit 1; fi
     URL="http://127.0.0.1:${PORT}/?token=$(cat "$DATA/.ui_token")"
     echo "Running. Only this computer can reach it (127.0.0.1:${PORT}); it closes itself when idle."
-    echo "Papers visible to it: $n   (a paper registered later needs ./ui.sh down, then up)"
+    echo "Folders visible to it: $n   (a paper outside them, registered later, needs ./ui.sh down, then up; or share its parent folder: ./ui.sh folders add <folder>)"
     echo "$URL"
     open_url "$URL" "${2:-}"
+    ;;
+  folders)
+    shift
+    python3 "$DIR/scripts/common.py" folders "$@"
+    case "${1:-}" in add|rm|remove) echo "Restart the app so it can see the change: ./ui.sh down && ./ui.sh up" ;; esac
     ;;
   down)
     need_docker
