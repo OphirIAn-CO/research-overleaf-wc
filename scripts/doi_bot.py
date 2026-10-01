@@ -60,7 +60,19 @@ def to_mendeley(bib, doi, bib_path, group):
     return f"Mendeley: added to {group}." if r.returncode == 0 else "Mendeley FAILED: " + (r.stdout + r.stderr)[-200:]
 
 
-def add(doi, bib_path, push=False, group=None):
+def log_added(bib_path, doi, key, source, mendeley, pushed=None):
+    """Metadata-only `doi_added` event in the paper's own log, so the web app's Monitor and References pages see additions
+    made from Telegram, the CLI or the web. Optional and silent: the bot works without the writing package."""
+    try:
+        from writing_core import config, events
+        name = common.project_for_bib(bib_path)
+        _, proj = common.resolve(name, check=False)
+        events.log(config.paper_dir(proj), events.DOI_ADDED, paper=name, source=source, doi=doi, key=key, mendeley=bool(mendeley), pushed=pushed)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def add(doi, bib_path, push=False, group=None, source="cli"):
     """Returns a one-line status message. Never raises on user-level problems."""
     m = DOI_RE.search(urllib.parse.unquote(doi))
     if not m:
@@ -84,6 +96,7 @@ def add(doi, bib_path, push=False, group=None):
     msg = f"Added \\cite{{{key}}}\n{title}"
     if group:
         msg += "\n" + to_mendeley(bib, doi, bib_path, group)
+    log_added(bib_path, doi, key, source, group, None)
     if push:
         repo = str(bib_path.parent)
         g = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, text=True)
@@ -137,7 +150,7 @@ def run():
         except (KeyError, RuntimeError) as e:
             return say(chat, f"Refusing: {e}")
         common.set_active(name, "telegram")
-        out = "\n\n".join(add(d, common.bib_path(proj), False, g) for d in dois)
+        out = "\n\n".join(add(d, common.bib_path(proj), False, g, source="telegram") for d in dois)
         btn = None
         if cfg.get("push", True):  # one push per message, not per DOI
             ok, t = git_sync(common.bib_path(proj), "Add references (doi bot)")

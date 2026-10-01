@@ -225,7 +225,7 @@
       const r = await api.get('/api/proposals?paper=' + encodeURIComponent(S.paper));
       if (!r.proposals.length) list.append(h('span', { class: 'muted', text: 'None yet.' }));
       for (const p of r.proposals.slice(0, 8)) {
-        list.append(h('div', null, h('button', { type: 'button', class: 'ghost small', text: `${p.id} · ${p.status} · ${p.hunks} hunks`, onclick: async () => {
+        list.append(h('div', null, h('button', { type: 'button', class: 'ghost small', text: `${p.id} · ${p.status}${p.handoff ? ' (handed to Claude)' : ''} · ${p.hunks} hunks`, onclick: async () => {
           const full = await api.get(`/api/proposal?paper=${encodeURIComponent(S.paper)}&id=${p.id}`);
           W.proposal = full; W.selected = new Set(full.units.flatMap((u) => u.hunks.map((x) => x.uid)));
           renderProposal(result, full);
@@ -295,6 +295,14 @@
       renderApplied(result, p, r);
     });
     const updateCount = () => { count.textContent = `${sel.size} of ${nHunks} selected`; applyBtn.textContent = `Apply ${sel.size} selected change(s)`; applyBtn.disabled = !sel.size || p.status === 'applied'; };
+    const handBtn = guarded(h('button', { type: 'button', text: 'Hand to Claude' }), async () => {
+      const accept = [...sel];
+      if (!accept.length) throw new Error('Select at least one change.');
+      await api.post('/api/proposal/handoff', { paper: p.paper, id: p.id, accept });
+      p.handoff = { accepted: accept };
+      head.append(notice('ok', h('strong', { text: 'Handed to Claude. ' }), 'In Claude Code say: "apply the proposal I handed you". Claude applies exactly the changes you ticked, cleans them per step 6b, and records it here.'));
+    });
+    handBtn.title = 'Claude applies the ticked changes itself (it runs the watermark clean). Use this when the cleaner is not set up here.';
     const rejectBtn = guarded(h('button', { type: 'button', text: 'Reject all' }), async () => {
       await api.post('/api/proposal/record', { paper: p.paper, id: p.id, accepted: [], rejected: 'all' });
       toast('Rejected; nothing was changed'); p.status = 'rejected'; renderProposal(result, p);
@@ -303,7 +311,7 @@
       head.append(h('div', { class: 'row' },
         h('button', { type: 'button', text: 'Select all', onclick: () => { p.units.forEach((u) => u.hunks.forEach((x) => sel.add(x.uid))); result.querySelectorAll('.hunk input[type=checkbox]').forEach((c) => { c.checked = true; }); updateCount(); } }),
         h('button', { type: 'button', text: 'Select none', onclick: () => { sel.clear(); result.querySelectorAll('.hunk input[type=checkbox]').forEach((c) => { c.checked = false; }); updateCount(); } }),
-        count, h('span', { class: 'grow' }), rejectBtn, applyBtn));
+        count, h('span', { class: 'grow' }), rejectBtn, handBtn, applyBtn));
     }
     for (const u of p.units) {
       const bad = (u.validators || []).filter((v) => !v.ok);

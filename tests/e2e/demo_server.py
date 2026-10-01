@@ -34,6 +34,9 @@ def main():
     ap.add_argument("--port", type=int, default=8799)
     args = ap.parse_args()
     ui = load_ui_server()
+    import doi_bot
+    doi_bot.fetch_bibtex = lambda d: ("@article{x,\n author={Lee, K.},\n title={Soil Water Dynamics Under Irrigation},\n year={2021},\n journal={Demo Journal}\n}"
+                                      if "bad" not in d else (_ for _ in ()).throw(RuntimeError("HTTP 404")))  # no network in the demo
     papers_dir = Path(home) / "papers"
     names = {}
     for name, tweak in (("soil-yield", lambda s: s), ("traffic-gnn", lambda s: s.replace("Soil Moisture Effects on Crop Yield", "Graph Networks for Traffic")

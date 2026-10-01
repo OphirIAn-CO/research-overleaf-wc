@@ -251,6 +251,10 @@ def tool_chatgpt_revise(args):
         name, proj, err = resolve_paper(args)
         if err:
             return err
+        if args.get("proposal_id"):  # an existing proposal, e.g. one the author handed over from the web app
+            return revise.format_proposal(revise.get_proposal(proj, args["proposal_id"]))
+        if not args.get("instruction"):  # nothing to do yet: what is waiting for Claude?
+            return revise.format_handoffs(revise.waiting_handoffs(proj))
         res = revise.run(name, proj, args.get("instruction", ""), part=args.get("part"), chunk_ids=args.get("chunk_ids"),
                          book_id=args.get("book_id"), dry_run=args.get("dry_run"), confirm=args.get("confirm"), source="claude")
         return revise.format_preview(res) if res["status"] == "preview" else revise.format_proposal(res["proposal"])
@@ -308,8 +312,10 @@ TOOLS = {
             "Sends ONE passage plus the matching book rules to ChatGPT and returns a validated PROPOSAL of reviewable hunks; it "
             "never edits files. While the paper's dry-run setting is on (default) it returns the exact payload and a payload_hash "
             "instead: show it to the author, and only after they agree call again with dry_run=false and confirm=<payload_hash>. "
-            "Args: instruction (required), part (e.g. methods, abstract) or chunk_ids, book_id, dry_run, confirm, repo_path."),
-        "inputSchema": {"type": "object", "properties": {"instruction": {"type": "string"}, "part": {"type": "string"},
+            "Args: instruction (required), part (e.g. methods, abstract) or chunk_ids, book_id, dry_run, confirm, repo_path. With NO instruction it "
+            "lists proposals the author handed to you from the web app; with proposal_id it shows that proposal (apply exactly the changes the "
+            "author chose)."),
+        "inputSchema": {"type": "object", "properties": {"instruction": {"type": "string"}, "proposal_id": {"type": "string"}, "part": {"type": "string"},
                                                           "chunk_ids": {"type": "array", "items": {"type": "string"}}, "book_id": {"type": "string"},
                                                           "dry_run": {"type": "boolean"}, "confirm": {"type": "string"}, **REPO_PATH_PROP}},
         "fn": tool_chatgpt_revise,

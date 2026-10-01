@@ -244,6 +244,9 @@ validated proposal; never edits files), `revise_record` (logs accept/reject).
    text, as in "Implementing advisor/reviewer comments"). Steps 6 (no dashes) and 6b
    (watermark clean) apply to the new text exactly as for any prose you write; clean
    before inserting. If a hunk's old text no longer matches the file, stop and re-run.
+   If the user says they handed a proposal over from the web app ("apply what I chose"), call
+   `chatgpt_revise` with no instruction to list what is waiting, then with `proposal_id` to
+   see it: apply exactly the changes the author chose, nothing else.
 6. `revise_record` with the accepted/rejected hunk ids (`applied: true`), then
    `overleaf_status` / `overleaf_sync` as usual and step 9 (session memory).
 
@@ -254,6 +257,12 @@ them the printed URL (it carries a one-time access token; do not repeat it anywh
 
 What leaves the machine: only the selected passage (LaTeX masked), the paper card, and a
 few capped book rule snippets; never the whole manuscript, credentials, or another paper.
+Paper card: each paper may have `<paper>/.overleaf-skill/paper_card.md` (research question,
+contribution, key terms with one canonical spelling, tense/voice, notation, venue, decisions
+such as "call it X, never Y"). It travels with every ChatGPT request, so terminology stays
+consistent. If a paper has none, offer to draft one from its manuscript and let the author edit
+it (web app: Paper index page); never invent facts for it. After reading a paper's card, treat
+its decisions as binding for that paper only.
 Setup (the user does these themselves): `python3 <skill>/scripts/writing.py book-ingest
 <book.pdf> --id <slug>` once, and `~/.config/overleaf-skill/openai.json`
 (`{"api_key": "...", "model": "..."}`, never pasted in chat). `writing.py doctor` reports

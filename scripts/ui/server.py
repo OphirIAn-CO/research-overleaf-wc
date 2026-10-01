@@ -19,6 +19,7 @@ import sys
 import threading
 import time
 import traceback
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -26,6 +27,7 @@ from urllib.parse import parse_qs, urlparse
 SCRIPTS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
+import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
 from writing_core import (book_index, chunk_book, config, events, health, openai_client, paper_index, retrieve, revise,  # noqa: E402
                           stats, taxonomy, watermark)
@@ -427,6 +429,145 @@ def api_settings(r):
     return {"ok": True}
 
 
+CARD_TEMPLATE = """# Paper card
+
+Short facts that every ChatGPT request for this paper carries, so terminology and style stay consistent.
+Keep it under about 40 lines. Only this paper's own facts.
+
+## Research question
+-
+
+## Contribution
+-
+
+## Key terms (one canonical spelling each)
+- say "...", never "..."
+
+## Style
+- Tense: past for what we did and found, present for established knowledge
+- Voice:
+
+## Notation and units
+-
+
+## Target venue
+-
+
+## Decisions
+-
+"""
+CARD_MAX = 20000
+
+
+def api_card_get(r):
+    n, p = paper_ref(r.m.group(1))
+    path = config.paper_dir(p) / "paper_card.md"
+    try:
+        return {"exists": True, "text": path.read_text(encoding="utf-8"), "template": CARD_TEMPLATE}
+    except FileNotFoundError:
+        return {"exists": False, "text": "", "template": CARD_TEMPLATE}
+
+
+def api_card_save(r):
+    n, p = paper_ref(r.m.group(1))
+    text = r.body.get("text")
+    if not isinstance(text, str) or len(text) > CARD_MAX:
+        raise ApiError(400, f"text must be a string of at most {CARD_MAX} characters")
+    d = config.ensure_paper_dir(p)
+    tmp = d / f".paper_card.{os.getpid()}.tmp"
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, d / "paper_card.md")
+    return {"saved": len(text)}
+
+
+def api_decisions(r):
+    n, p = paper_ref(r.m.group(1))
+    path = config.paper_dir(p) / "decisions.jsonl"
+    rows = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines()[-100:]:
+            try:
+                rows.append(json.loads(line))
+            except ValueError:
+                continue
+    except FileNotFoundError:
+        pass
+    return {"decisions": rows[::-1]}
+
+
+def api_index_list(r):
+    n, p = paper_ref(r.m.group(1))
+    paper_index.refresh(n, p, trigger="view", source="web")
+    return paper_index.list_chunks(n, p)
+
+
+def api_index_chunk(r):
+    n, p = paper_ref(r.m.group(1))
+    got = paper_index.get_chunks(n, p, [r.arg("id", "")])
+    if not got:
+        raise ApiError(404, "no such chunk")
+    return got[0]
+
+
+def _clean_dois(text):
+    return list(dict.fromkeys(d.rstrip(".,;)") for d in doi_bot.DOI_RE.findall(urllib.parse.unquote(str(text)))))[:20]
+
+
+def api_refs_preview(r):
+    n, p = paper_ref(r.body.get("paper", ""))
+    dois = _clean_dois(r.body.get("text", ""))
+    if not dois:
+        raise ApiError(400, "no DOI found in that text")
+    existing = Path(common.bib_path(p)).read_text(encoding="utf-8", errors="replace").lower()
+    out = []
+    for d in dois:
+        if d.lower() in existing:
+            out.append({"doi": d, "status": "duplicate"})
+            continue
+        try:
+            bib, key = doi_bot.restyle(doi_bot.fetch_bibtex(d))
+            title = (re.search(r"title\s*=\s*[{\"]+(.+?)[}\"]+,?\s*\n", bib, re.S | re.I) or [0, ""])[1]
+            out.append({"doi": d, "status": "new", "key": key, "bibtex": bib, "title": re.sub(r"\s+", " ", title)})
+        except Exception as e:  # noqa: BLE001  (404 = unknown DOI, otherwise network)
+            out.append({"doi": d, "status": "error", "error": str(e)[:200]})
+    return {"paper": n, "group": (p.get("mendeley_group") or {}).get("name"), "refs": out}
+
+
+def api_refs_add(r):
+    n, p = paper_ref(r.body.get("paper", ""))
+    dois = [d for d in (r.body.get("dois") or []) if isinstance(d, str)][:20]
+    if not dois:
+        raise ApiError(400, "no DOIs to add")
+    group = (p.get("mendeley_group") or {}).get("name") if r.body.get("mendeley") else None
+    common.set_active(n, "ui")
+    msgs = [doi_bot.add(d, common.bib_path(p), False, group, source="web") for d in dois]
+    out = {"messages": msgs}
+    if r.body.get("push"):
+        ok, text = doi_bot.git_sync(common.bib_path(p), "Add references (web app)")
+        out["push"] = {"ok": ok, "text": text}
+    paper_index.refresh(n, p, trigger="after_edit", source="web")
+    return out
+
+
+def api_refs_recent(r):
+    n, p = paper_ref(r.arg("paper", ""))
+    evs = [e for e in events.read(config.paper_dir(p), types={"doi_added"})][-30:][::-1]
+    idx = paper_index.peek(p) or {"counts": {}}
+    return {"recent": [{k: e.get(k) for k in ("ts", "source", "doi", "key", "mendeley")} for e in evs], "bib_entries": idx["counts"].get("bib", 0)}
+
+
+def api_refs_mendeley(r):
+    n, p = paper_ref(r.body.get("paper", ""))
+    out = overleaf_mcp.tool_mendeley_fetch({"repo_path": n, "_source": "ui"})
+    paper_index.refresh(n, p, trigger="after_edit", source="web")
+    return {"output": out}
+
+
+def api_handoff(r):
+    n, p = paper_ref(r.body.get("paper", ""))
+    return revise.handoff(n, p, _pid(r), accept=r.body.get("accept", "all"), source="web")
+
+
 ROUTES = [
     ("GET", r"^/api/state$", api_state), ("POST", r"^/api/papers/active$", api_set_active),
     ("POST", r"^/api/papers/(pull|status|sync)$", None),
@@ -441,6 +582,11 @@ ROUTES = [
     ("POST", r"^/api/proposal/apply$", api_apply), ("POST", r"^/api/proposal/record$", api_record),
     ("GET", r"^/api/monitor$", api_monitor), ("GET", r"^/api/events$", api_events),
     ("GET", r"^/api/health$", api_health), ("POST", r"^/api/settings$", api_settings),
+    ("GET", r"^/api/paper/([^/]+)/card$", api_card_get), ("POST", r"^/api/paper/([^/]+)/card$", api_card_save),
+    ("GET", r"^/api/paper/([^/]+)/decisions$", api_decisions), ("GET", r"^/api/paper/([^/]+)/index$", api_index_list),
+    ("GET", r"^/api/paper/([^/]+)/chunk$", api_index_chunk),
+    ("POST", r"^/api/refs/preview$", api_refs_preview), ("POST", r"^/api/refs/add$", api_refs_add), ("GET", r"^/api/refs/recent$", api_refs_recent),
+    ("POST", r"^/api/refs/mendeley$", api_refs_mendeley), ("POST", r"^/api/proposal/handoff$", api_handoff),
 ]
 ROUTES = [(m, re.compile(p), fn) for m, p, fn in ROUTES]
 EXTENSIONS = []  # (method, compiled regex, fn): later phases register their pages here

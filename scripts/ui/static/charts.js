@@ -168,7 +168,7 @@
     return [
       { key: 'lookups', label: 'Lookups', cls: 's1', values: sum('retrieve') },
       { key: 'index', label: 'Index refreshes', cls: 's2', values: sum('index_refresh') },
-      { key: 'chatgpt', label: 'ChatGPT passes and decisions', cls: 's3', values: sum('revise', 'decision') },
+      { key: 'chatgpt', label: 'ChatGPT passes and decisions', cls: 's3', values: sum('revise', 'decision', 'handoff') },
       { key: 'other', label: 'Other (imports, DOIs, errors)', cls: 's0', values: sum('book_ingest', 'doi_added', 'error') },
     ];
   }

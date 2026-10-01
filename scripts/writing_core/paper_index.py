@@ -8,13 +8,12 @@ Refresh is incremental and lazy: a cheap fingerprint of the source files decides
 hashes decide what to rewrite. Added / changed / unchanged / removed counts are logged on every pass (event `index_refresh`).
 """
 import json
-import subprocess
 import time
 from pathlib import Path
 
 import common
 
-from . import chunk_tex, config, events, retrieve, store, taxonomy
+from . import chunk_tex, config, events, gitguard, retrieve, store, taxonomy
 
 SCHEMA = 1
 KINDS_DEFAULT = ("tex", "memory", "review")
@@ -32,30 +31,9 @@ def _identity(name, proj):
     return {"paper_name": name, "remote_id": common.remote_id(proj)}
 
 
-_CHECKED = set()
-
-
 def ensure_ignored(proj):
-    """Make sure .overleaf-skill/ can never be committed (overleaf_sync runs `git add -A`). Prefers the clone-local
-    .git/info/exclude: nothing is added to the repo that Overleaf would receive."""
-    root = Path(proj["path"])
-    if str(root) in _CHECKED:
-        return "checked"
-    probe = ".overleaf-skill/index.sqlite"
-    r = subprocess.run(["git", "-C", str(root), "check-ignore", "-q", probe], capture_output=True)
-    if r.returncode == 0:
-        _CHECKED.add(str(root))
-        return "already ignored"
-    exclude = root / ".git" / "info" / "exclude"
-    try:
-        exclude.parent.mkdir(parents=True, exist_ok=True)
-        with open(exclude, "a", encoding="utf-8") as f:
-            f.write(("\n" if exclude.exists() and exclude.stat().st_size and not exclude.read_text().endswith("\n") else "")
-                    + ".overleaf-skill/\n")
-        _CHECKED.add(str(root))
-        return "added to .git/info/exclude"
-    except OSError as e:
-        raise RuntimeError(f"cannot protect .overleaf-skill/ from git ({e}); refusing to write index files") from e
+    """See gitguard: keep .overleaf-skill/ from ever being committed."""
+    return gitguard.ensure_ignored(proj["path"])
 
 
 SCHEMA_SQL = """
@@ -200,7 +178,8 @@ def _apply(con, chunks, info, fp):
         store.meta_set(con, "warnings", info["warnings"])
         store.meta_set(con, "manuscript_tokens", sum(c["tokens"] for c in chunks if c["kind"] == "tex"))
     return {"added": len(added), "changed": len(changed), "removed": len(removed), "unchanged": unchanged,
-            "total": len(fresh), "tex_tokens": sum(c["tokens"] for c in chunks if c["kind"] == "tex"), "warnings": info["warnings"]}
+            "total": len(fresh), "tex_tokens": sum(c["tokens"] for c in chunks if c["kind"] == "tex"), "warnings": info["warnings"],
+            "added_ids": added[:40], "changed_ids": changed[:40], "removed_ids": removed[:40]}
 
 
 # ------------------------------------------------------------------------------ reading
@@ -242,6 +221,21 @@ def outline(name, proj, refresh_first=True, source="cli"):
                 "warnings": store.meta_get(con, "warnings", []), "indexed_at": store.meta_get(con, "indexed_at")}
     finally:
         con.close()
+
+
+def list_chunks(name, proj):
+    """Every chunk without its text, in document order, plus which ones the last refresh added or changed."""
+    con = open_index(name, proj)
+    try:
+        rows = con.execute("SELECT id, kind, file, line_start, line_end, section_path, part, tokens, hash, ord FROM chunks "
+                           "ORDER BY CASE kind WHEN 'tex' THEN 0 WHEN 'memory' THEN 1 WHEN 'review' THEN 2 ELSE 3 END, ord").fetchall()
+    finally:
+        con.close()
+    last = [e for e in events.read(config.paper_dir(proj), types={"index_refresh"}) if (e.get("added", 0) or e.get("changed", 0) or e.get("removed", 0))]
+    touched = set((last[-1].get("added_ids") or []) + (last[-1].get("changed_ids") or [])) if last else set()
+    return {"chunks": [{**dict(r), "hash": r["hash"][:8], "recent": r["id"] in touched} for r in rows],
+            "last_change": last[-1]["ts"] if last else None, "last_change_trigger": last[-1].get("trigger") if last else None,
+            "removed": (last[-1].get("removed_ids") or []) if last else []}
 
 
 def get_chunks(name, proj, ids):

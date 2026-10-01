@@ -85,9 +85,17 @@ def paper_settings(proj):
     return {"dry_run": True, **s}  # dry run stays on until you turn it off for this paper
 
 
-def set_paper_setting(proj, key, value):
+def ensure_paper_dir(proj):
+    """The paper's state folder, created only after git has been told to ignore it."""
+    from . import gitguard
+    gitguard.ensure_ignored(proj["path"])
     d = paper_dir(proj)
     d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def set_paper_setting(proj, key, value):
+    d = ensure_paper_dir(proj)
     s = paper_settings(proj)
     s[key] = value
     (d / "settings.json").write_text(json.dumps(s, indent=2))

@@ -47,6 +47,50 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) failed+
   ok(await page.isVisible('text=The index followed'), 'apply reports that the index followed the edit');
   await shot('write-applied');
 
+  // ---- Hand to Claude (a second proposal; the first was applied)
+  await page.click('#nav a[href="#/write"]');
+  await page.waitForSelector('#w-instr');
+  await page.selectOption('#w-part', 'methods');
+  await page.fill('#w-instr', 'Make the methods more concise.');
+  await page.click('text=Preview what will be sent');
+  await page.waitForSelector('text=Send to ChatGPT');
+  await page.click('text=Send to ChatGPT');
+  await page.waitForSelector('section[aria-label="Proposal"]', { timeout: 20000 });
+  await page.click('button:has-text("Hand to Claude")');
+  await page.waitForSelector('text=Handed to Claude');
+  ok(true, 'Hand to Claude confirms and tells the author what to say');
+  await shot('write-handoff');
+
+  // ---- Paper index and card
+  await page.click('#nav a[href="#/paper_index"]');
+  await page.waitForSelector('section[aria-label="Index"] table');
+  const updated = await page.$$('span.badge:has-text("updated")');
+  ok(updated.length >= 1, `index page marks ${updated.length} recently rewritten chunk(s)`);
+  await page.click('section[aria-label="Index"] tbody button >> nth=2');
+  await page.waitForSelector('section[aria-label="Chunk"] pre');
+  ok((await page.textContent('section[aria-label="Chunk"] pre')).length > 20, 'a chunk opens in the reader');
+  await page.click('button:has-text("Insert the template")');
+  await page.fill('textarea[aria-label="Paper card"]', 'Key term: say "yield", never "harvest".');
+  await page.click('button:has-text("Save the card")');
+  await page.waitForSelector('.toast:has-text("Saved")');
+  ok(true, 'paper card saved');
+  ok(await page.isVisible('text=What you accepted and rejected'), 'decision log is on the page');
+  await shot('paper-index');
+
+  // ---- References
+  await page.click('#nav a[href="#/references"]');
+  await page.waitForSelector('textarea[aria-label="DOIs"]');
+  await page.fill('textarea[aria-label="DOIs"]', 'https://doi.org/10.1234/abc and 10.9999/bad');
+  await page.click('button:has-text("Look up")');
+  await page.waitForSelector('text=Lee2021');
+  ok(await page.isVisible('text=not found'), 'an unknown DOI is reported as not found');
+  await shot('references-preview');
+  await page.click('button:has-text("Add 1 reference")');
+  await page.waitForSelector('text=Done');
+  await page.waitForSelector('td:has-text("web")');
+  ok(true, 'DOI added and listed under recent additions with its source');
+  await shot('references-done');
+
   // ---- Book: open a chunk, run a query
   await page.click('#nav a[href="#/book"]');
   await page.waitForSelector('.tree details');

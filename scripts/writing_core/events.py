@@ -13,8 +13,8 @@ from pathlib import Path
 MAX_STR = 240
 MAX_ITEMS = 200
 
-BOOK_INGEST, INDEX_REFRESH, RETRIEVE, REVISE, DECISION, DOI_ADDED, ERROR = (
-    "book_ingest", "index_refresh", "retrieve", "revise", "decision", "doi_added", "error")
+BOOK_INGEST, INDEX_REFRESH, RETRIEVE, REVISE, DECISION, DOI_ADDED, ERROR, HANDOFF = (
+    "book_ingest", "index_refresh", "retrieve", "revise", "decision", "doi_added", "error", "handoff")
 
 
 def _clip(v, depth=0):
@@ -38,6 +38,8 @@ def log(scope_dir, type_, **fields):
     ev = {"v": 1, "ts": round(time.time(), 3), "type": type_}
     ev.update({k: _clip(v) for k, v in fields.items()})
     try:
+        from . import gitguard  # imported here: gitguard has no dependencies, this just avoids load-order surprises
+        gitguard.guard_scope(scope_dir)  # never write into a paper's .overleaf-skill/ before git is told to ignore it
         p = month_file(scope_dir, ev["ts"])
         p.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(p, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
@@ -46,7 +48,7 @@ def log(scope_dir, type_, **fields):
         finally:
             os.close(fd)
         return ev
-    except OSError:
+    except (OSError, RuntimeError):
         return None
 
 

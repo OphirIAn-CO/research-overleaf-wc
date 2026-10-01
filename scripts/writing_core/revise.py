@@ -66,7 +66,7 @@ def list_proposals(proj):
         except json.JSONDecodeError:
             continue
         out.append({**{k: d.get(k) for k in ("id", "created", "status", "instruction", "part", "source", "model", "usage")},
-                    "hunks": sum(len(u.get("hunks", [])) for u in d.get("units", []))})
+                    "hunks": sum(len(u.get("hunks", [])) for u in d.get("units", [])), "handoff": bool(d.get("handoff"))})
     return out
 
 
@@ -428,6 +428,38 @@ def record(name, proj, pid, accepted=None, rejected=None, applied=False, synced=
     return {"proposal": pid, "status": proposal["status"], "accepted": len(acc), "rejected": len(rej), "pending": len(pending)}
 
 
+def handoff(name, proj, pid, accept="all", source="web"):
+    """The author chose which hunks to take but the text will be applied by Claude (who runs step 6b itself)."""
+    proposal = get_proposal(proj, pid)
+    if proposal["status"] != "proposed":
+        raise ReviseError(f"proposal {pid} is {proposal['status']}; only a proposed one can be handed over")
+    chosen = _selected(proposal, accept)
+    if not chosen:
+        raise ReviseError("select at least one change to hand over")
+    proposal["handoff"] = {"accepted": sorted(chosen), "at": time.time(), "by": source}
+    _atomic_json(proposals_dir(proj) / f"{pid}.json", proposal)
+    events.log(config.paper_dir(proj), events.HANDOFF, paper=name, source=source, proposal=pid, hunks=len(chosen))
+    return {"proposal": pid, "accepted": sorted(chosen)}
+
+
+def waiting_handoffs(proj):
+    out = []
+    for p in list_proposals(proj):
+        full = get_proposal(proj, p["id"])
+        if full.get("handoff") and full["status"] == "proposed":
+            out.append({"id": full["id"], "instruction": full["instruction"], "accepted": full["handoff"]["accepted"], "at": full["handoff"]["at"]})
+    return out
+
+
+def format_handoffs(items):
+    if not items:
+        return "No proposals are waiting for Claude."
+    lines = ["Proposals the author handed to you (apply exactly the chosen changes):"]
+    for h in items:
+        lines.append(f"- {h['id']}: {h['instruction'][:80]!r}, chosen: {', '.join(h['accepted'])}. See it with chatgpt_revise proposal_id={h['id']}")
+    return "\n".join(lines)
+
+
 def _log_decisions(name, proj, proposal, applied, synced, source, note):
     scope = config.paper_dir(proj)
     acc = [h for u in proposal["units"] for h in u["hunks"] if h["status"] == "accepted"]
@@ -487,5 +519,10 @@ def format_proposal(p):
             lines.append("  + " + h["new"].strip().replace("\n", "\n    "))
         for q in u["questions"]:
             lines.append(f"\nQUESTION for the author: {q}")
-    lines.append("\nNothing has been written. Apply accepted hunks (clean them per step 6b first), then call revise_record.")
+    if p.get("handoff"):
+        chosen = p["handoff"]["accepted"]
+        lines.append(f"\nTHE AUTHOR CHOSE THESE CHANGES: {', '.join(chosen)}. Apply exactly those, in place with Edit (clean each new text per step 6b first); "
+                     "the others are rejected. Then call revise_record with accepted=those ids, rejected='all' for the rest, applied=true.")
+    else:
+        lines.append("\nNothing has been written. Apply accepted hunks (clean them per step 6b first), then call revise_record.")
     return "\n".join(lines)
