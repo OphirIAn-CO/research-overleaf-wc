@@ -250,10 +250,14 @@ validated proposal; never edits files), `revise_record` (logs accept/reject).
 6. `revise_record` with the accepted/rejected hunk ids (`applied: true`), then
    `overleaf_status` / `overleaf_sync` as usual and step 9 (session memory).
 
-The same flow is available to the user in the local web app (`<skill>/ui.sh up`, Docker, loopback
-only): a readable side-by-side diff, the book browser, and a Monitor page of everything the
-system did. When the user asks to "open the UI / dashboard / monitor", run `ui.sh up` and give
-them the printed URL (it carries a one-time access token; do not repeat it anywhere else).
+The same flow is available to the user in the local chat app (`<skill>/ui.sh up`, Docker, loopback
+only): the user picks a paper, says what they want in plain words, and gets the explanation and a
+readable before/after to keep or set aside; the same chat also does a peer review (it asks first,
+reading the whole paper) and adds a pasted DOI to the bibliography, the paper's Mendeley group and
+Overleaf. QuillBot, Overleaf and the paper text can sit beside the chat. Suggestions the author
+hands over ("Let Claude apply it") arrive as `chatgpt_revise` proposals, as described above.
+When the user asks to "open the UI / app / dashboard", run `ui.sh up` and give them the printed
+URL (it carries a one-time access token; do not repeat it anywhere else).
 
 What leaves the machine: only the selected passage (LaTeX masked), the paper card, and a
 few capped book rule snippets; never the whole manuscript, credentials, or another paper.
@@ -261,7 +265,7 @@ Paper card: each paper may have `<paper>/.overleaf-skill/paper_card.md` (researc
 contribution, key terms with one canonical spelling, tense/voice, notation, venue, decisions
 such as "call it X, never Y"). It travels with every ChatGPT request, so terminology stays
 consistent. If a paper has none, offer to draft one from its manuscript and let the author edit
-it (web app: Paper index page); never invent facts for it. After reading a paper's card, treat
+it (web app: Settings, Advanced, what the app remembers about this paper); never invent facts for it. After reading a paper's card, treat
 its decisions as binding for that paper only.
 Setup (the user does these themselves): `python3 <skill>/scripts/writing.py book-ingest
 <book.pdf> --id <slug>` once, and `~/.config/overleaf-skill/openai.json`

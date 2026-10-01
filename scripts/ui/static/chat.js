@@ -494,9 +494,12 @@
     }
 
     box.append(h('div', { class: 'chat-page' }, head, threadEl, composer));
-    renderThread();
-    if (data.running.length) data.running.forEach((j) => watch(j.job));
+    // the router attaches this page to the document right after we return, and the thread only draws itself while attached
+    setTimeout(() => {
+      renderThread();
+      if (data.running.length) data.running.forEach((j) => watch(j.job));
+      ta.focus();
+    }, 0);
     if (window.OLS.panes && window.OLS.panes.setTargetFromThread) window.OLS.panes.setTargetFromThread(st.messages);
-    ta.focus();
   });
 }());

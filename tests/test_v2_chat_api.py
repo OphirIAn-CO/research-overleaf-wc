@@ -106,10 +106,26 @@ class ChatApi(ChatBase):
         self.assertEqual(r["messages"][1]["data"]["chunk_ids"], self.chat_thread()["thread"]["messages"][1]["data"]["chunk_ids"])
         self.wait_job(r["job"])
 
-    def test_help_and_the_not_yet_built_paths_do_not_call_openai(self):
+    def test_help_does_not_call_openai(self):
         self.assertIn("Tell me what to do", self.send("help")["messages"][1]["text"])
-        self.send("10.1016/j.cageo.2020.104524")
-        self.send("peer review my paper")
+        self.assertEqual(self.oa.requests, [])
+
+    def test_a_pasted_doi_is_added_in_the_background_and_answered_with_a_card(self):
+        import doi_bot
+        orig = doi_bot.fetch_bibtex, doi_bot.git_sync
+        doi_bot.fetch_bibtex = lambda d: "@article{x,\n author={Lee, K.},\n title={Soil},\n year={2021},\n doi={%s}\n}" % d
+        doi_bot.git_sync = lambda bib, msg: (True, "Pushed to Overleaf.")
+        try:
+            r = self.send("please add 10.1016/j.cageo.2020.104524 to my paper")
+            self.assertTrue(r["job"])
+            j = self.wait_job(r["job"])
+            self.assertEqual((j["status"], j["result"]), ("done", {"added": 1}), j)
+            m = self.last("refs")
+            self.assertEqual(m["data"]["results"][0]["cite"], "\\cite{Lee2021Soil}")
+            self.assertTrue(m["data"]["push"]["ok"])
+            self.assertIn("Lee2021Soil", (Path(self.proj["path"]) / "references.bib").read_text())
+        finally:
+            doi_bot.fetch_bibtex, doi_bot.git_sync = orig
         self.assertEqual(self.oa.requests, [])
 
     def test_missing_key_and_openai_errors_are_explained(self):

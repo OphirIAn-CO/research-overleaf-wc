@@ -1,138 +1,149 @@
-// Interactive end-to-end flows against the demo server: Write (preview, send, review, apply), Book (open chunk, query), Monitor tooltip.
+// End-to-end flows of the chat app in a real browser, against the demo server (stand-in OpenAI, doi.org, Mendeley, Overleaf).
+// usage: python3 tests/e2e/demo_server.py --port 8799 &      (prints the URL with the token and the HOME folder)
+//        node tests/e2e/flows.js <url-with-token> <home-folder> [screenshot-dir]
+// Needs Playwright (/opt/node-tools) and the preinstalled Chromium. Exits non-zero on any failed check or console error.
 const { chromium } = require('/opt/node-tools/node_modules/playwright');
 const fs = require('fs');
 const url = process.argv[2];
-const out = process.argv[3] || '/tmp/claude-0/scratch/shots';
+const home = process.argv[3];
+const out = process.argv[4] || '/tmp/claude-0/scratch/shots';
 fs.mkdirSync(out, { recursive: true });
 const errors = [];
 let failed = 0;
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) failed++; };
+// words an author should never meet on the pages used every day
+const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?|BM25|FTS5|index(?:es|ed)?)\b/i;
 
 (async () => {
   const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome', args: ['--no-sandbox'] });
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-  const page = await ctx.newPage();
-  page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push('console ' + m.type() + ': ' + m.text()); });
-  page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
-  await page.goto(url);
-  await page.waitForSelector('#nav a');
-  const shot = (n) => page.screenshot({ path: `${out}/${n}.png`, fullPage: true });
+  const open = async (viewport, scheme) => {
+    const ctx = await browser.newContext({ viewport, colorScheme: scheme || 'light', permissions: ['clipboard-read', 'clipboard-write'] });
+    const page = await ctx.newPage();
+    page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`console ${m.type()}: ${m.text()}`); });
+    page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+    page.on('requestfailed', (r) => errors.push('requestfailed: ' + r.url()));
+    await page.goto(url);
+    await page.waitForSelector('.chat-page');
+    return page;
+  };
+  const shot = (page, n) => page.screenshot({ path: `${out}/${n}.png`, fullPage: false });
+  const text = (page, sel) => page.$eval(sel, (e) => e.innerText);
+  const mainTex = () => fs.readFileSync(`${home}/papers/soil-yield/main.tex`, 'utf8');
 
-  // ---- Write: preview -> send -> review -> apply
-  await page.click('#nav a[href="#/write"]');
-  await page.waitForSelector('#w-instr');
-  await page.selectOption('#w-part', 'methods');
-  await page.fill('#w-instr', 'Tighten my methods and follow the book on describing sampling.');
-  await page.click('text=Preview what will be sent');
-  await page.waitForSelector('text=Preview: nothing has been sent');
-  ok(await page.isVisible('text=Send to ChatGPT'), 'preview shows a Send button');
-  const rules = await page.$$eval('section[aria-label="Preview"] li', (l) => l.map((x) => x.textContent));
-  ok(rules.length > 0 && rules.some((r) => r.includes('Describing') || r.includes('Writing the Methods')), 'preview lists the book rules: ' + rules.slice(0, 2).join(' | '));
-  await page.click('summary:has-text("exact text")');
-  const payload = await page.textContent('.payload pre');
-  ok(payload.includes('[[LX') && !payload.includes('\\subsection'), 'payload is masked (placeholders, no raw LaTeX headings)');
-  await shot('write-preview');
-  await page.click('text=Send to ChatGPT');
-  await page.waitForSelector('section[aria-label="Proposal"]', { timeout: 20000 });
-  const hunks = await page.$$('.hunk');
-  ok(hunks.length >= 2, `proposal shows ${hunks.length} reviewable changes`);
-  ok(await page.isVisible('ins.d') && await page.isVisible('del.d'), 'word-level insertions and deletions are highlighted');
-  ok(await page.isVisible('text=Question for you'), 'model question surfaced for the author');
-  await shot('write-proposal');
-  await (await page.$('.hunk input[type=checkbox]')).uncheck();
-  const left = hunks.length - 1;
-  ok((await page.textContent('section[aria-label="Proposal"]')).includes(`${left} of ${hunks.length} selected`), 'unchecking a change updates the count');
-  await page.click(`button:has-text("Apply ${left} selected")`);
-  await page.waitForSelector('text=Applied', { timeout: 20000 });
-  ok(await page.isVisible('text=The index followed'), 'apply reports that the index followed the edit');
-  await shot('write-applied');
+  let page = await open({ width: 1400, height: 900 });
 
-  // ---- Hand to Claude (a second proposal; the first was applied)
-  await page.click('#nav a[href="#/write"]');
-  await page.waitForSelector('#w-instr');
-  await page.selectOption('#w-part', 'methods');
-  await page.fill('#w-instr', 'Make the methods more concise.');
-  await page.click('text=Preview what will be sent');
-  await page.waitForSelector('text=Send to ChatGPT');
-  await page.click('text=Send to ChatGPT');
-  await page.waitForSelector('section[aria-label="Proposal"]', { timeout: 20000 });
-  await page.click('button:has-text("Hand to Claude")');
-  await page.waitForSelector('text=Handed to Claude');
-  ok(true, 'Hand to Claude confirms and tells the author what to say');
-  await shot('write-handoff');
+  // ---- the shell
+  ok((await page.$$eval('#nav a', (a) => a.map((x) => x.textContent))).join(',') === 'Chat,References,Activity,Settings', 'menu is Chat, References, Activity, Settings');
+  ok((await page.$$eval('#paper-list .side-item', (a) => a.length)) >= 2, 'the sidebar lists the papers');
+  await page.waitForSelector('.welcome');
+  ok(/What would you like to do with/.test(await text(page, '.thread')) && /Say what you want/.test(await text(page, '.thread')), 'an empty chat explains how it works');
+  ok(!JARGON.test(await text(page, '#app')), 'the chat page uses no jargon: ' + (JARGON.exec(await text(page, '#app')) || [''])[0]);
+  await shot(page, '01-chat-empty');
 
-  // ---- Paper index and card
-  await page.click('#nav a[href="#/paper_index"]');
-  await page.waitForSelector('section[aria-label="Index"] table');
-  const updated = await page.$$('span.badge:has-text("updated")');
-  ok(updated.length >= 1, `index page marks ${updated.length} recently rewritten chunk(s)`);
-  await page.click('section[aria-label="Index"] tbody button >> nth=2');
-  await page.waitForSelector('section[aria-label="Chunk"] pre');
-  ok((await page.textContent('section[aria-label="Chunk"] pre')).length > 20, 'a chunk opens in the reader');
-  await page.click('button:has-text("Insert the template")');
-  await page.fill('textarea[aria-label="Paper card"]', 'Key term: say "yield", never "harvest".');
-  await page.click('button:has-text("Save the card")');
-  await page.waitForSelector('.toast:has-text("Saved")');
-  ok(true, 'paper card saved');
-  ok(await page.isVisible('text=What you accepted and rejected'), 'decision log is on the page');
-  ok(await page.isVisible('text=What the system has learned from your decisions'), 'learned-preferences panel is on the page');
-  await shot('paper-index');
+  // ---- an edit: understood, sent straight away, explained, then adjusted by hand and approved
+  await page.fill('#composer', 'improve the flow of the text before figure 1 inside methods');
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('.msg.assistant .approach', { timeout: 20000 });
+  const thread = await text(page, '.thread');
+  ok(/Before Figure 1/.test(thread), 'it understood "before Figure 1"');
+  ok(/Sent to OpenAI/.test(thread) && !/Send to OpenAI/.test(thread.replace(/Sent to OpenAI/g, '')), 'it was sent without a preview step');
+  ok(/active voice|plainer|Active voice/i.test(thread), 'each change comes with a reason');
+  ok(/ch05|p\.\d+/.test(thread), 'the reason says where in the book it comes from');
+  ok(!/After the map we describe/.test(thread), 'the part after the figure is not in the answer');
+  ok(!JARGON.test(await text(page, '.thread')), 'the answer uses no jargon: ' + (JARGON.exec(await text(page, '.thread')) || [''])[0]);
+  await page.click('button:has-text("Adjust the tone myself")');
+  await page.waitForSelector('.tone textarea:not([readonly])');
+  const box = page.locator('.tone textarea:not([readonly])').first();
+  const original = await box.inputValue();
+  await box.fill(original.replace('its own climate', 'a climate of its own'));
+  await page.waitForSelector('.checks .chk.ok');
+  ok(/still there/.test(await text(page, '.checks')), 'the live check says the citations and formulas are still there');
+  await box.fill(original.replace('three regions', 'four regions'));
+  await page.waitForSelector('.checks .chk.error');
+  ok(await page.isDisabled('.tone button:has-text("Approve and save")'), 'a new number blocks approval');
+  await box.fill(original.replace('its own climate', 'a climate of its own'));
+  await page.waitForSelector('.checks .chk.ok');
+  await shot(page, '02-tone-panel');
+  await page.click('.tone >> text=Approve and save');
+  await page.waitForSelector('text=Saved in main.tex', { timeout: 15000 });
+  const written = mainTex();
+  ok(written.includes('a climate of its own') && !written.includes('its own climate and soil'), 'the author\'s own version is what reached main.tex');
+  ok(written.includes('\\begin{figure}') && written.includes('After the map we describe the sampling frame'), 'the figure and the text after it are untouched');
+  await shot(page, '03-saved');
 
-  // ---- References
-  await page.click('#nav a[href="#/references"]');
-  await page.waitForSelector('textarea[aria-label="DOIs"]');
-  await page.fill('textarea[aria-label="DOIs"]', 'https://doi.org/10.1234/abc and 10.9999/bad');
-  await page.click('button:has-text("Look up")');
-  await page.waitForSelector('text=Lee2021');
-  ok(await page.isVisible('text=not found'), 'an unknown DOI is reported as not found');
-  await shot('references-preview');
-  await page.click('button:has-text("Add 1 reference")');
-  await page.waitForSelector('text=Done');
-  await page.waitForSelector('td:has-text("web")');
-  ok(true, 'DOI added and listed under recent additions with its source');
-  await shot('references-done');
+  // ---- peer review: asks first, then reports, and "Fix this" is an ordinary suggestion
+  await page.fill('#composer', 'peer review my paper');
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('button:has-text("Run the review")');
+  ok(/checking with you first|always check with you first/.test(await text(page, '.thread')), 'a review asks before it reads the whole paper');
+  await page.click('button:has-text("Run the review")');
+  await page.waitForSelector('.issues .issue', { timeout: 20000 });
+  ok((await page.$$eval('.issue', (a) => a.length)) === 3, 'the review lists its issues');
+  await shot(page, '04-review');
+  await page.click('.issue button:has-text("Fix this") >> nth=0');
+  await page.waitForFunction(() => document.querySelectorAll('.msg.assistant .approach').length >= 2, null, { timeout: 20000 });
+  ok(true, '"Fix this" produced a normal suggestion');
 
-  // ---- Book: open a chunk, run a query
-  await page.click('#nav a[href="#/book"]');
-  await page.waitForSelector('.tree details');
-  await page.click('.tree summary:has-text("Ch 2")');
-  await page.click('.tree details[open] summary:has-text("Reporting the statistical analysis")');
-  await page.click('.tree button.chunk[data-id="B:mini:c02.s03.k01"]');
-  await page.waitForSelector('.reader');
-  ok((await page.textContent('.reader')).length > 100, 'chunk text shown in the reader');
-  ok(await page.isVisible('section[aria-label="Rule cards"]'), 'rule-card panel is on the Book page');
-  await page.click('button:has-text("Preview the cost")');
-  await page.waitForSelector('text=This sends the book text to OpenAI');
-  ok(await page.isVisible('button:has-text("Send the book to OpenAI once")'), 'rule-card plan shows the cost warning and a confirm button (nothing sent yet)');
-  await page.fill('input[type=search]', 'how do I describe the statistical analysis');
-  await page.click('button:has-text("Search")');
-  await page.waitForSelector('section[aria-label="Query result"]');
-  ok((await page.textContent('section[aria-label="Query result"]')).includes('methods'), 'query shows routing to methods');
-  await shot('book-query');
-  await page.click('summary:has-text("Import or re-import")');
-  await page.click('button:has-text("Review the outline")');
-  await page.waitForSelector('text=PDF page = printed page');
-  ok(await page.isVisible('button:has-text("Save outline")'), 'outline editor opens');
-  await shot('book-outline');
+  // ---- a DOI pasted in the chat
+  await page.fill('#composer', 'please add 10.5555/flows-one');
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('.refcard code.cite', { timeout: 20000 });
+  const refs = await text(page, '.refcard:last-of-type');
+  ok(/\\cite\{/.test(refs) && /Mendeley/.test(refs) && /Sent to Overleaf/.test(refs), 'the reference card shows the \\cite, Mendeley and Overleaf');
+  await shot(page, '05-reference');
 
-  // ---- Monitor: tooltip on a bar
-  await page.click('#nav a[href="#/monitor"]');
-  await page.waitForSelector('.chart svg');
-  const box = await (await page.$('.chart .col rect[tabindex="0"] >> nth=24')).boundingBox();
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.waitForSelector('#tooltip:not([hidden])');
-  const tt = await page.textContent('#tooltip');
-  ok(/Lookups|Changed/.test(tt), 'hover tooltip lists every series: ' + tt.replace(/\s+/g, ' ').slice(0, 90));
-  await shot('monitor-hover');
-  await page.click('button:has-text("View as table") >> nth=0');
-  ok(await page.isVisible('.table-wrap table'), 'table view is available');
+  // ---- coming back later: the conversation is still there
+  await page.reload();
+  await page.waitForSelector('.msg.user');
+  ok((await page.$$eval('.msg.user', (a) => a.length)) >= 4 && await page.isVisible('.approach'), 'after a reload the whole conversation is back');
 
-  // ---- keyboard: a bar takes focus and shows the same tooltip
-  await page.click('button:has-text("View as chart") >> nth=0');
-  await (await page.$('.chart .col rect[tabindex="0"] >> nth=24')).focus();
-  ok(await page.isVisible('#tooltip:not([hidden])'), 'keyboard focus shows the tooltip too');
+  // ---- other pages
+  await page.click('#nav a:has-text("References")');
+  await page.waitForSelector('text=Add a reference');
+  ok(!JARGON.test(await text(page, '#main')), 'References uses no jargon');
+  await page.click('#nav a:has-text("Activity")');
+  await page.waitForSelector('.feed-card');
+  const act = await text(page, '#main');
+  ok(/You asked|OpenAI suggested/.test(act) && /Added the reference/.test(act), 'Activity tells the story in sentences');
+  ok(!JARGON.test(act), 'Activity uses no jargon: ' + (JARGON.exec(act) || [''])[0]);
+  await shot(page, '06-activity');
+  await page.click('#nav a:has-text("Settings")');
+  await page.waitForSelector('section[aria-label="OpenAI"]');
+  const settings = await text(page, '#main');
+  ok(/OpenAI/.test(settings) && /Overleaf/.test(settings) && /Text-cleaning service/.test(settings) && /Mendeley/.test(settings), 'Settings has every key and connection in one place');
+  ok(!/sk-demo/.test(await page.content()), 'the saved API key is never in the page');
+  ok(!JARGON.test(settings.split('Advanced')[0]), 'Settings (before Advanced) uses no jargon: ' + (JARGON.exec(settings.split('Advanced')[0]) || [''])[0]);
+  await page.click('section[aria-label="OpenAI"] button:has-text("Test")');
+  await page.waitForSelector('section[aria-label="OpenAI"] .notice.ok');
+  ok(true, 'the OpenAI test reports success');
+  await shot(page, '07-settings');
+  await page.click('#nav a:has-text("Chat")');
+  await page.waitForSelector('.chat-page');
+
+  // ---- the panes beside the chat
+  await page.click('.pane-bar button:has-text("Paper text")');
+  await page.waitForSelector('.ptext .ln');
+  await page.click('.pane-bar button:has-text("QuillBot")');
+  await page.waitForSelector('#panes-area .pane h2:has-text("QuillBot")');
+  ok((await page.$$eval('#panes-area .pane h2', (a) => a.map((x) => x.textContent))).join() === 'Paper text,QuillBot', 'the panes sit beside the chat');
+  await shot(page, '08-panes');
+  await page.close();
+
+  // ---- phone and dark
+  page = await open({ width: 390, height: 800 });
+  await page.fill('#composer', 'improve the first paragraph of the methods');
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('.msg.assistant .approach', { timeout: 20000 });
+  ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'no sideways scrolling on a phone');
+  await shot(page, '09-phone');
+  await page.close();
+  page = await open({ width: 1300, height: 800 }, 'dark');
+  await shot(page, '10-dark');
+  await page.close();
 
   await browser.close();
-  console.log(errors.length ? 'ERRORS:\n' + errors.join('\n') : 'no console errors');
-  process.exit(failed || errors.length ? 1 : 0);
-})().catch((e) => { console.error('flow failed:', e.message); process.exit(2); });
+  const real = errors.filter((e) => !/quillbot|overleaf\.com|ERR_BLOCKED|ERR_TUNNEL|ERR_NAME|Failed to load resource/i.test(e));
+  ok(real.length === 0, 'no console errors' + (real.length ? ': ' + real.join(' | ') : ''));
+  console.log(failed ? `${failed} check(s) FAILED` : 'all checks passed');
+  process.exit(failed ? 1 : 0);
+})().catch((e) => { console.error('driver failed:', e); process.exit(2); });
