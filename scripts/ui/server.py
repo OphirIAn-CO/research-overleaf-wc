@@ -31,7 +31,7 @@ import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
 from writing_core import (activity, book_index, chat, chunk_book, config, events, health, openai_client, panes, paper_index, preferences,  # noqa: E402
-                          retrieve, revise, rule_cards, stats, taxonomy, watermark)
+                          retrieve, review, revise, rule_cards, stats, taxonomy, watermark)
 
 STATIC = Path(__file__).resolve().parent / "static"
 FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
@@ -101,7 +101,7 @@ class Jobs:
 
 def friendly(e):
     """Message for errors we expect and can explain; None for anything else (-> logged, generic 500)."""
-    known = (book_index.BookError, config.ConfigError, paper_index.IsolationError, revise.ReviseError, ValueError, FileNotFoundError,
+    known = (book_index.BookError, config.ConfigError, paper_index.IsolationError, revise.ReviseError, review.ReviewError, ValueError, FileNotFoundError,
              watermark.WatermarkError)
     if isinstance(e, openai_client.OpenAIError):
         return f"OpenAI error ({e.kind}): {e}"
@@ -621,7 +621,7 @@ def api_chat_cancel(r):
     n, p, cid = _chat_ctx(r)
     (mid,) = need(r.body, "message")
     m = chat.get_message(p, cid, str(mid))
-    if not m or m["kind"] != "plan" or m["data"].get("state") != "waiting":
+    if not m or m["kind"] not in ("plan", "review_plan") or m["data"].get("state") != "waiting":
         raise ApiError(409, "that request is not waiting")
     chat.update(p, cid, m["id"], state="cancelled")
     return {"ok": True}
@@ -693,7 +693,15 @@ def api_chat_send(r):
     elif kind == "refs":
         job = _start_refs(r.app, n, p, cid, chat.find_dois(text)[:20])
     elif kind == "review":
-        out.append(chat.append(p, cid, "assistant", "text", "Peer review from the chat arrives in an upcoming update."))
+        if config.openai_status()[0] != "ok":
+            out.append(chat.append(p, cid, "assistant", "error", "ChatGPT is not set up yet. Open Settings and add your OpenAI key and model, then ask again."))
+            return {"messages": out}
+        try:
+            ids, scope = chat.review_scope(n, p, text)
+            pl = review.plan(n, p, ids, scope)
+            out.append(chat.append(p, cid, "assistant", "review_plan", "", plan=pl, state="waiting"))  # a review always waits for a yes
+        except (review.ReviewError, config.ConfigError, ValueError) as e:
+            out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
     else:
         if config.openai_status()[0] != "ok":
             out.append(chat.append(p, cid, "assistant", "error", "ChatGPT is not set up yet. Open Settings and add your OpenAI key and model, then ask again."))
@@ -737,9 +745,33 @@ def _start_refs(app, n, p, cid, dois):
     return app.jobs.submit(f"Adding references to {n}", work, with_steps=True, meta={"paper": n, "chat": cid})
 
 
+def _start_review(app, n, p, cid, mid):
+    msg = chat.get_message(p, cid, mid)
+    if not msg or msg["kind"] != "review_plan":
+        raise ApiError(404, "that review is not in this chat")
+    if msg["data"].get("state") != "waiting":
+        raise ApiError(409, "that review was already started")
+    plan = msg["data"]["plan"]
+    chat.update(p, cid, mid, state="sent")
+
+    def work(progress, set_steps):
+        try:
+            res = review.run(n, p, plan.get("chunk_ids"), plan["scope"], confirm=plan["hash"], source="web", progress=set_steps)
+        except Exception as e:  # noqa: BLE001
+            chat.update(p, cid, mid, state="failed")
+            chat.append(p, cid, "assistant", "error", plain_error(e))
+            raise
+        chat.append(p, cid, "assistant", "review", "", scope=plan["scope"], **res)
+        return {"issues": len(res["issues"])}
+    return app.jobs.submit(f"Reviewing {n}", work, with_steps=True, meta={"paper": n, "chat": cid})
+
+
 def api_chat_run(r):
     n, p, cid = _chat_ctx(r)
     (mid,) = need(r.body, "message")
+    m = chat.get_message(p, cid, str(mid))
+    if m and m["kind"] == "review_plan":
+        return {"job": _start_review(r.app, n, p, cid, str(mid))}
     return {"job": _start_pass(r.app, n, p, cid, str(mid))}
 
 

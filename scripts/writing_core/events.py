@@ -13,8 +13,8 @@ from pathlib import Path
 MAX_STR = 240
 MAX_ITEMS = 200
 
-BOOK_INGEST, INDEX_REFRESH, RETRIEVE, REVISE, DECISION, DOI_ADDED, ERROR, HANDOFF = (
-    "book_ingest", "index_refresh", "retrieve", "revise", "decision", "doi_added", "error", "handoff")
+BOOK_INGEST, INDEX_REFRESH, RETRIEVE, REVISE, DECISION, DOI_ADDED, ERROR, HANDOFF, REVIEW = (
+    "book_ingest", "index_refresh", "retrieve", "revise", "decision", "doi_added", "error", "handoff", "review")
 
 
 def _clip(v, depth=0):

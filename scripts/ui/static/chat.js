@@ -18,6 +18,54 @@
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + 's'}`;
   const icon = (level) => ({ ok: '✓', warn: '!', error: '✗' }[level] || '•');
 
+  /* A small, safe Markdown renderer for the review report: headings, lists, tables, bold, italics, code. Text nodes only, never HTML. */
+  function inline(text) {
+    const out = [];
+    const re = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*\s][^*]*\*)/g;
+    let last = 0, m;
+    while ((m = re.exec(text))) {
+      if (m.index > last) out.push(document.createTextNode(text.slice(last, m.index)));
+      const t = m[0];
+      out.push(t.startsWith('**') ? h('strong', { text: t.slice(2, -2) }) : t.startsWith('`') ? h('code', { text: t.slice(1, -1) }) : h('em', { text: t.slice(1, -1) }));
+      last = m.index + t.length;
+    }
+    if (last < text.length) out.push(document.createTextNode(text.slice(last)));
+    return out;
+  }
+  function mdLite(md) {
+    const box = h('div', { class: 'md' });
+    const lines = String(md).split('\n');
+    let i = 0;
+    while (i < lines.length) {
+      const ln = lines[i];
+      let m;
+      if (!ln.trim()) { i++; continue; }
+      if ((m = ln.match(/^(#{1,4})\s+(.*)$/))) { box.append(h('h' + Math.min(m[1].length + 2, 5), null, ...inline(m[2]))); i++; continue; }
+      if (/^\s*[-*]\s+/.test(ln)) {
+        const ul = h('ul');
+        while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) { ul.append(h('li', null, ...inline(lines[i].replace(/^\s*[-*]\s+/, '')))); i++; }
+        box.append(ul); continue;
+      }
+      if (/^\s*\d+[.)]\s+/.test(ln)) {
+        const ol = h('ol');
+        while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) { ol.append(h('li', null, ...inline(lines[i].replace(/^\s*\d+[.)]\s+/, '')))); i++; }
+        box.append(ol); continue;
+      }
+      if (/^\s*\|/.test(ln)) {
+        const rows = [];
+        while (i < lines.length && /^\s*\|/.test(lines[i])) { if (!/^\s*\|[\s:|-]+\|?\s*$/.test(lines[i])) rows.push(lines[i].trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim())); i++; }
+        if (rows.length) box.append(h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, rows[0].map((c) => h('th', null, ...inline(c))))),
+          h('tbody', null, rows.slice(1).map((r) => h('tr', null, r.map((c) => h('td', null, ...inline(c)))))))));
+        continue;
+      }
+      if (/^\s*(---+|\*\*\*+)\s*$/.test(ln)) { box.append(h('hr')); i++; continue; }
+      const para = [];
+      while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|\s*[-*]\s|\s*\d+[.)]\s|\s*\|)/.test(lines[i])) { para.push(lines[i].trim()); i++; }
+      box.append(h('p', null, ...inline(para.join(' '))));
+    }
+    return box;
+  }
+
   function stepList(steps, running) {
     return h('ul', { class: 'steps', 'aria-live': running ? 'polite' : null }, (steps || []).map((s) =>
       h('li', { class: 'step ' + s.state }, h('span', { class: 'mark', 'aria-hidden': 'true', text: s.state === 'done' ? '✓' : s.state === 'failed' ? '✗' : s.state === 'skipped' ? '–' : '' }),
@@ -191,6 +239,39 @@
       useBtn.addEventListener('click', () => send(d.original || 'Improve this.', { chunk_ids: ticked() }));
       el.append(h('div', { class: 'row' }, filter), list, status, h('div', { class: 'row' }, useBtn));
       refresh();
+    }
+
+    // ---- peer review
+    function reviewPlanBubble(m) {
+      const d = m.data, pl = d.plan;
+      const foot = h('div');
+      if (d.state === 'waiting') {
+        foot.append(h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Run the review' }), async () => {
+          const r = await api.post('/api/chat/run', { paper, id: st.cid, message: m.id });
+          await reload(); await watch(r.job);
+        }), guarded(h('button', { type: 'button', text: 'Cancel' }), async () => { await api.post('/api/chat/cancel', { paper, id: st.cid, message: m.id }); await reload(); })));
+      } else foot.append(h('p', { class: 'muted small', text: { sent: 'Review started.', failed: 'The review could not be completed.', cancelled: 'Cancelled, nothing was sent.' }[d.state] || '' }));
+      return assistant(h('p', null, 'I can peer review ', h('strong', { text: pl.scope }), '.'),
+        h('p', { class: 'small secondary', text: `A review reads far more of your paper at once than an edit does (about ${fmtTok(pl.tokens * 0.75)} words go to ${pl.model}${pl.est_cost != null ? ', roughly ' + pl.est_cost.toFixed(4) + ' in your price units' : ''}), so I always check with you first. Nothing in your paper is changed; the report is saved in the paper's notes folder.` }), foot);
+    }
+
+    function reviewBubble(m) {
+      const d = m.data;
+      const sev = { major: 'bad', minor: 'warn', suggestion: '' };
+      const issues = (d.issues || []).map((it) => h('li', { class: 'issue' },
+        h('div', { class: 'row tight' }, h('span', { class: 'badge ' + (sev[it.severity] || ''), text: it.severity }), it.where ? h('strong', { class: 'small', text: it.where }) : null),
+        it.quote ? h('div', { class: 'small muted', text: '“' + it.quote + '”' }) : null, h('div', { text: it.problem }), it.suggestion ? h('div', { class: 'small secondary', text: it.suggestion }) : null,
+        it.chunk_ids && it.chunk_ids.length ? h('div', null, h('button', { type: 'button', class: 'small', text: 'Fix this', onclick: () =>
+          send(`Address this reviewer comment${it.where ? ' about ' + it.where : ''}: ${it.problem} ${it.suggestion || ''}`.trim(), { chunk_ids: it.chunk_ids }) })) : null));
+      const scores = Object.entries(d.scores || {});
+      return assistant(
+        h('div', { class: 'row' }, h('strong', { text: 'Peer review of ' + d.scope }), d.verdict ? h('span', { class: 'badge', text: d.verdict }) : null,
+          h('span', { class: 'small secondary', text: `${d.model} · ${fmtTok(d.usage.input_tokens)} in / ${fmtTok(d.usage.output_tokens)} out${d.usage.cost != null ? ' · cost ' + d.usage.cost : ''}` })),
+        scores.length ? h('div', { class: 'row chips' }, scores.map(([k, v]) => h('span', { class: 'chip static', text: `${k.replace(/_/g, ' ')}: ${v}` }))) : null,
+        issues.length ? h('div', null, h('h4', { text: `Issues to look at (${issues.length})` }), h('ul', { class: 'issues' }, ...issues)) : null,
+        h('details', { open: !issues.length }, h('summary', { text: 'Full report' }), mdLite(d.report)),
+        h('div', { class: 'row' }, h('button', { type: 'button', class: 'small', text: 'Copy the report', onclick: () => copyText(d.report, 'Report') }), h('span', { class: 'small muted', text: 'Saved in ' + d.path })),
+        h('p', { class: 'small muted', text: 'Nothing was changed in your paper. "Fix this" asks for an ordinary suggestion that you approve or set aside.' }));
     }
 
     // ---- references
@@ -390,6 +471,8 @@
         else if (m.kind === 'ask') threadEl.append(askBubble(m));
         else if (m.kind === 'result') threadEl.append(resultBubble(m));
         else if (m.kind === 'refs') threadEl.append(refsBubble(m));
+        else if (m.kind === 'review_plan') threadEl.append(reviewPlanBubble(m));
+        else if (m.kind === 'review') threadEl.append(reviewBubble(m));
         else if (m.kind === 'error') threadEl.append(assistant(notice('bad', m.text)));
         else threadEl.append(assistant(textBlock(m.text)));
       }

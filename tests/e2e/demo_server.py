@@ -59,7 +59,15 @@ def main():
 
     oa = FakeOpenAI("responses")
 
+    rubric = Path(home) / "rubric" / "peer_reviewer_agent.md"
+    rubric.parent.mkdir()
+    rubric.write_text("# Peer reviewer\nScore five dimensions from 1 to 5 and give a verdict.\n")
+    os.environ["OLS_RUBRIC"] = str(rubric)
+    from tests.test_v2_review import REPORT
+
     def edit(body):
+        if "text" not in body and "peer reviewer" in str(body.get("instructions", "")).lower():
+            return REPORT          # a review asks for free text, not the JSON of an edit
         t = passage_of(body)
         t = t.replace("We sampled 40 farms by stratified random sampling.", "We drew a stratified random sample of 40 farms.")
         t = t.replace("Informed consent was obtained from all farmers.", "All farmers gave informed consent.")

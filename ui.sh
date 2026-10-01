@@ -103,6 +103,11 @@ case "$cmd" in
     while IFS= read -r p; do
       [ -n "$p" ] && [ -d "$p" ] && mounts+=(--mount "$(mount_arg "$p" "$p")") && n=$((n + 1))
     done < <(python3 "$DIR/scripts/common.py" paths)
+    rubric_env=()   # the peer review rubric of the academic-paper skill, read-only, so the app reads the live file like Claude does
+    RUBRIC_DIR="$HOME/.claude/skills/academic-paper/agents"
+    if [ -f "$RUBRIC_DIR/peer_reviewer_agent.md" ]; then
+      mounts+=(--mount "$(mount_arg "$RUBRIC_DIR" /rubric readonly)"); rubric_env=(-e OLS_RUBRIC=/rubric/peer_reviewer_agent.md)
+    fi
     GN="$(git config user.name 2>/dev/null || true)"; GE="$(git config user.email 2>/dev/null || true)"
     start_container() {  # start_container PORT -> 0 started | 98 port taken | 1 other failure (message printed)
       local out
@@ -111,7 +116,7 @@ case "$cmd" in
         --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
         -p "127.0.0.1:${1}:${1}" \
         -e OVERLEAF_UI_BIND=0.0.0.0 -e OVERLEAF_UI_PORT="$1" -e OVERLEAF_UI_PUBLIC_PORT="$1" \
-        -e OVERLEAF_UI_TOKEN_FILE="$DATA/.ui_token" -e OVERLEAF_SKILL_HOME="$DATA" -e OLS_HOST_DIR="$DIR" -e HOME=/tmp/home \
+        -e OVERLEAF_UI_TOKEN_FILE="$DATA/.ui_token" -e OVERLEAF_SKILL_HOME="$DATA" -e OLS_HOST_DIR="$DIR" -e HOME=/tmp/home ${rubric_env[@]+"${rubric_env[@]}"} \
         -e GIT_AUTHOR_NAME="${GN:-Overleaf skill}" -e GIT_COMMITTER_NAME="${GN:-Overleaf skill}" \
         -e GIT_AUTHOR_EMAIL="${GE:-overleaf-skill@localhost}" -e GIT_COMMITTER_EMAIL="${GE:-overleaf-skill@localhost}" \
         -e GIT_CONFIG_COUNT=2 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \

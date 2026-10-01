@@ -472,3 +472,26 @@ def plan(name, proj, instruction, chunk_ids, book_id=None):
     return {"instruction": instruction, "chunk_ids": chunk_ids, "units": res["units"], "passages": res["passages"], "est_tokens_in": res["est_tokens_in"],
             "est_cost": res["est_cost"], "manuscript_tokens": res["manuscript_tokens"], "model": res["model"], "tips": len(res["rules"]),
             "payload_hash": res["payload_hash"], "warnings": res["warnings"], "book": res["book"], "parts": res["parts"]}
+
+
+# ------------------------------------------------------------------------------------------- peer review: which part?
+
+_REVIEW_NOISE = re.compile(r"\b(peer[\s-]*reviews?|reviewers?|reviews?|critique|referee|evaluate|act as|report|my|our|the|this|a|an|paper|draft|manuscript|article|work|"
+                           r"please|section|part|of|for|on|in|and|only|just)\b", re.I)
+
+
+def review_scope(name, proj, text):
+    """'peer review my paper' -> (None, 'the whole paper'); 'review the methods' -> (chunk ids of the methods, 'the methods')."""
+    cleaned = _REVIEW_NOISE.sub(" ", text or "")
+    paper_index.refresh(name, proj, trigger="pass_start", source="web")
+    tex = [c for c in paper_index.list_chunks(name, proj)["chunks"] if c["kind"] == "tex"]
+    tags = taxonomy.classify(cleaned, min_ratio=retrieve.REQUEST_RATIO) if cleaned.strip() else []
+    parents = list(dict.fromkeys(t.split(".")[0] for t in tags))
+    if parents:
+        got = paper_index.part_chunks(name, proj, parents, refresh_first=False)
+        if got:
+            return [c["id"] for c in got], "the " + ", ".join(taxonomy.label(x) for x in parents)
+    cands, label = _title_match(cleaned, tex) if cleaned.strip() else ([], "")
+    if cands:
+        return [c["id"] for c in cands], f"the section “{label}”"
+    return None, "the whole paper"

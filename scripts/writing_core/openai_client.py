@@ -47,20 +47,21 @@ def _scrub(msg, cfg):
     return msg.replace(key, "[key]") if key else msg
 
 
-def build_request(cfg, system, user, schema=REVISION_SCHEMA, name="revision"):
-    """-> (url, body). The body is exactly what is sent (and what a dry run shows)."""
+def build_request(cfg, system, user, schema=REVISION_SCHEMA, name="revision", plain=False, max_output=None):
+    """-> (url, body). The body is exactly what is sent (and what a dry run shows). plain=True asks for free text (a review), not JSON."""
     base = cfg["base_url"].rstrip("/")
-    mode = cfg.get("json_mode", "schema")
+    mode = "none" if plain else cfg.get("json_mode", "schema")
+    out_tokens = max_output or cfg["max_output_tokens"]
     if cfg.get("api", "responses") == "chat":
         body = {"model": cfg["model"], "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                "max_completion_tokens": cfg["max_output_tokens"], "store": False}
+                "max_completion_tokens": out_tokens, "store": False}
         if mode == "schema":
             body["response_format"] = {"type": "json_schema", "json_schema": {"name": name, "schema": schema, "strict": True}}
         elif mode == "object":
             body["response_format"] = {"type": "json_object"}
         url = base + "/chat/completions"
     else:
-        body = {"model": cfg["model"], "instructions": system, "input": user, "max_output_tokens": cfg["max_output_tokens"], "store": False}
+        body = {"model": cfg["model"], "instructions": system, "input": user, "max_output_tokens": out_tokens, "store": False}
         if mode == "schema":
             body["text"] = {"format": {"type": "json_schema", "name": name, "schema": schema, "strict": True}}
         elif mode == "object":
@@ -135,9 +136,9 @@ def _http_error(cfg, e):
     return OpenAIError(f"request rejected ({e.code}): {msg}", "bad_request", e.code)
 
 
-def call(cfg, system, user, schema=REVISION_SCHEMA, retries=2):
+def call(cfg, system, user, schema=REVISION_SCHEMA, retries=2, plain=False, max_output=None, timeout=None):
     """One request (with retries on rate limit / 5xx / network). -> dict(text, data, usage, latency_ms, model, tries)"""
-    url, body = build_request(cfg, system, user, schema)
+    url, body = build_request(cfg, system, user, schema, plain=plain, max_output=max_output)
     payload = json.dumps(body).encode("utf-8")
     headers = {"Authorization": "Bearer " + cfg["api_key"], "Content-Type": "application/json", "User-Agent": UA}
     for k, h in (("organization", "OpenAI-Organization"), ("project", "OpenAI-Project")):
@@ -148,7 +149,7 @@ def call(cfg, system, user, schema=REVISION_SCHEMA, retries=2):
         t0 = time.time()
         try:
             req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-            with urllib.request.urlopen(req, timeout=cfg["timeout"]) as r:
+            with urllib.request.urlopen(req, timeout=timeout or cfg["timeout"]) as r:
                 data = json.loads(r.read().decode("utf-8"))
             text, usage = _extract(cfg, data)
             return {"text": text, "usage": usage, "latency_ms": round((time.time() - t0) * 1000), "model": data.get("model", cfg["model"]),
