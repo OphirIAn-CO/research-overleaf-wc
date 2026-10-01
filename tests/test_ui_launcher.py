@@ -106,6 +106,9 @@ class PortHandling(IsolatedHome):
         d = self.bin / "docker"
         d.write_text(FAKE_DOCKER)
         d.chmod(d.stat().st_mode | stat.S_IEXEC)
+        lsof = self.bin / "lsof"   # deterministic whatever the machine has: prints the command name in FAKE_LSOF_CMD (lsof -Fc format)
+        lsof.write_text('#!/usr/bin/env bash\n[ -n "${FAKE_LSOF_CMD:-}" ] && printf "p4242\\nc%s\\n" "$FAKE_LSOF_CMD"\nexit 0\n')
+        lsof.chmod(lsof.stat().st_mode | stat.S_IEXEC)
         self.log = self.tmp / "docker.log"
         self.pid = self.tmp / "server.pid"
         s = socket.socket()
@@ -146,9 +149,31 @@ class PortHandling(IsolatedHome):
         finally:
             hog.close()
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn(f"Port {self.base} is already in use by another program", r.stdout)
+        self.assertIn(f"Port {self.base} is already in use by another program on this computer", r.stdout)
         self.assertEqual(len(self.runs()), 1)
         self.assertIn(f"127.0.0.1:{self.base + 1}:", self.runs()[0])
+
+    def busy_up(self, **env):
+        hog = socket.socket()
+        hog.bind(("127.0.0.1", self.base))
+        hog.listen()
+        try:
+            return self.up(**env)
+        finally:
+            hog.close()
+
+    def test_a_port_held_by_docker_desktop_itself_is_named_and_explained(self):
+        # what a real Mac showed: lsof lists com.docker.backend (Docker Desktop's forwarder) on 127.0.0.1:8765
+        r = self.busy_up(FAKE_LSOF_CMD="com.docke")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("in use by Docker Desktop itself", r.stdout)
+        self.assertIn("docker rm -f", r.stdout)
+        self.assertIn(f"Using port {self.base + 1}", r.stdout)
+
+    def test_another_program_is_named_when_lsof_can_tell(self):
+        r = self.busy_up(FAKE_LSOF_CMD="Anki")
+        self.assertIn('in use by the program "Anki"', r.stdout)
+        self.assertNotIn("docker rm -f", r.stdout)
 
     def test_the_normal_case_uses_the_wanted_port_and_says_nothing_about_ports(self):
         r = self.up()

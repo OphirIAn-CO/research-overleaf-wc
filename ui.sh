@@ -35,8 +35,19 @@ finally:
     s.close()
 PY
 }
-who_holds() {  # who_holds PORT: name of the Docker container publishing that port, if any
-  docker ps --filter "publish=$1" --format '{{.Names}}' 2>/dev/null | head -1
+who_holds() {  # who_holds PORT: a short description of what holds that port
+  local c
+  c="$(docker ps --filter "publish=$1" --format '{{.Names}}' 2>/dev/null | head -1)"
+  if [ -n "$c" ]; then echo "the Docker container \"$c\""; return; fi
+  if command -v lsof >/dev/null 2>&1; then
+    c="$(lsof -nP -iTCP:"$1" -sTCP:LISTEN -Fc 2>/dev/null | sed -n 's/^c//p' | head -1)"
+    case "$c" in
+      "") ;;
+      com.docke*|vpnkit*|docker*) echo "Docker Desktop itself (a container, possibly stopped, published it earlier)"; return ;;
+      *) echo "the program \"$c\""; return ;;
+    esac
+  fi
+  echo "another program on this computer"
 }
 cfg_port() {
   if [ -n "${OVERLEAF_UI_PORT:-}" ]; then echo "$OVERLEAF_UI_PORT"; return; fi
@@ -118,8 +129,8 @@ case "$cmd" in
       if ! port_free "$cand"; then
         holder="$(who_holds "$cand")"
         if [ "$i" -eq 0 ]; then
-          if [ -n "$holder" ]; then by="by the Docker container \"$holder\""; else by="by another program on this computer"; fi
-          echo "Port ${cand} is already in use ${by}; looking for a free one."
+          echo "Port ${cand} is already in use by ${holder}; looking for a free one."
+          case "$holder" in "Docker Desktop itself"*) echo "  (to free it: docker ps -a, then docker rm -f <name>; or restart Docker Desktop)" ;; esac
         fi
         continue
       fi
