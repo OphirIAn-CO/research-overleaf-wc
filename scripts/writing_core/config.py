@@ -15,7 +15,9 @@ OPENAI_DEFAULTS = {
     "rule_budget_tokens": 2000,
     "prices": None,  # {"input_per_1m": x, "output_per_1m": y} in your currency; cost is shown only if set
 }
-UI_DEFAULTS = {"port": 8765, "idle_minutes": 60, "watermark_url": None}
+UI_DEFAULTS = {"port": 8765, "idle_minutes": 60, "watermark_url": None,
+               "guard_passages": 8,   # above this many passages in one request the chat asks before sending
+               "max_passages": 25}    # a hard ceiling for one request
 
 
 class ConfigError(Exception):
@@ -82,7 +84,8 @@ def paper_settings(proj):
         s = json.loads(p.read_text())
     except (FileNotFoundError, json.JSONDecodeError):
         s = {}
-    return {"dry_run": True, **s}  # dry run stays on until you turn it off for this paper
+    # dry_run governs Claude Code and the terminal (they preview first until you turn it off); the chat uses confirm_before_send instead
+    return {"dry_run": True, "confirm_before_send": False, "send_refs_to_overleaf": True, **s}
 
 
 def ensure_paper_dir(proj):

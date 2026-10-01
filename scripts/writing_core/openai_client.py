@@ -21,8 +21,9 @@ SLEEP = time.sleep  # replaced in tests
 UA = "research-overleaf-wc/writing-coach"
 
 REVISION_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["revised_text", "changes", "questions"],
+    "type": "object", "additionalProperties": False, "required": ["approach", "revised_text", "changes", "questions"],
     "properties": {
+        "approach": {"type": "string"},
         "revised_text": {"type": "string"},
         "changes": {"type": "array", "items": {
             "type": "object", "additionalProperties": False, "required": ["before", "after", "reason", "rule"],

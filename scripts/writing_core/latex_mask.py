@@ -306,3 +306,51 @@ def attach_reasons(hunks_, changes):
             if ch.get("rule") and ch["rule"] not in best["rules"]:
                 best["rules"].append(str(ch["rule"]))
     return hunks_
+
+
+# ------------------------------------------------------------------------------------------- text edited by the author
+
+_LOOSE_TAG = re.compile(r"(?:\[\s*){1,2}LX\s*(\d{3,5})(?:\s*\]){1,2}|(?<![\w\[])LX(\d{3,5})(?![\w\]])")
+
+
+def normalize_tags(text):
+    """Tags that went through another tool come back slightly changed ([LX001], [[ LX001 ]], a bare LX001). Put them back in the canonical
+    spelling so they are matched like the originals."""
+    return _LOOSE_TAG.sub(lambda m: f"[[LX{m.group(1) or m.group(2)}]]", text)
+
+
+def restore_literals(text, mapping, original):
+    """If a protected piece is missing as a tag but its LaTeX appears in the text as it is (the author pasted the 'as LaTeX' version),
+    turn that occurrence back into its tag. Only tags the original had, and only pieces that are really missing."""
+    have = Counter(placeholders(text))
+    want = Counter(placeholders(original))
+    for key in sorted(want):
+        if have[key] >= want[key]:
+            continue
+        literal = mapping.get(key)
+        if literal and literal in text:
+            text = text.replace(literal, f"[[{key}]]", 1)
+            have[key] += 1
+    return text
+
+
+def missing_details(original, text, mapping, context_words=6):
+    """For every protected piece the text lost: what it was and which words it sat between, so the author can put it back."""
+    have = Counter(placeholders(text))
+    out = []
+    for m in PH.finditer(original):
+        key = "LX" + m.group(1)
+        if have[key] > 0:
+            have[key] -= 1
+            continue
+        before = re.sub(r"\s+", " ", PH.sub("", original[:m.start()])).split()[-context_words:]
+        after = re.sub(r"\s+", " ", PH.sub("", original[m.end():])).split()[:context_words]
+        out.append({"tag": key, "latex": mapping.get(key, ""), "words_before": " ".join(before), "words_after": " ".join(after)})
+    return out
+
+
+def check_author_text(original, text, mapping):
+    """The author's own version of a masked passage. -> (normalized text, validator results, missing-piece details).
+    Same validators as for the model's answer, run on the text after forgiving tag spellings."""
+    fixed = restore_literals(normalize_tags(text), mapping, original)
+    return fixed, validate(original, fixed), missing_details(original, fixed, mapping)

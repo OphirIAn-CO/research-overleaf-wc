@@ -14,13 +14,13 @@ def user_of(body):
     return body["input"] if "input" in body else body["messages"][-1]["content"]
 
 
-def reply(*pairs, changes=None, questions=None):
+def reply(*pairs, changes=None, questions=None, approach="The sentences were wordy, so they were tightened."):
     """A fake model answer that applies (old -> new) replacements to the masked passage it receives."""
     def step(body):
         text = passage_of(body)
         for a, b in pairs:
             text = text.replace(a, b)
-        return {"revised_text": text, "changes": changes or [], "questions": questions or []}
+        return {"approach": approach, "revised_text": text, "changes": changes or [], "questions": questions or []}
     return step
 
 
