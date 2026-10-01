@@ -12,6 +12,11 @@
   writing.py query "<request>" [--paper P] [--part P] [--kind K] [--budget N] [--no-text] [--json]
         Find the relevant chunks of ONE paper (empty request = outline). --paper: registered name or path; default = the
         current directory's paper, else the paper last worked on.
+  writing.py revise "<instruction>" [--paper P] [--part X | --chunk ID ...] [--book ID] [--no-book] [--dry-run] [--send HASH] [--json]
+        ChatGPT correction pass for ONE passage -> a validated proposal (never edits files). While the paper's dry-run setting is on
+        (default) this only prints the exact payload and a hash; send it with --send <hash> after you have read it.
+  writing.py proposals [--paper P] | proposal <id> [--paper P]
+  writing.py settings [--paper P] [--dry-run on|off]
   writing.py doctor
 
 --id may be omitted when exactly one book is imported. Data lives in ~/.config/overleaf-skill/ (never in git).
@@ -23,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common  # noqa: E402
-from writing_core import book_eval, book_index, chunk_book, config, paper_index, retrieve  # noqa: E402
+from writing_core import book_eval, book_index, chunk_book, config, openai_client, paper_index, retrieve, revise  # noqa: E402
 
 COMMANDS = {}
 
@@ -141,6 +146,42 @@ def cmd_query(args):
         print(paper_index.format_paper_result(res, with_text=not args.no_text))
 
 
+@command("revise")
+def cmd_revise(args):
+    name, proj = resolve_paper(args)
+    dry = True if args.dry_run else (False if args.send else None)
+    res = revise.run(name, proj, args.instruction, part=args.part, chunk_ids=args.chunk or None, book_id=args.book,
+                     dry_run=dry, confirm=args.send, source="cli", use_book=not args.no_book)
+    if args.json:
+        emit(res)
+    else:
+        print(revise.format_preview(res) if res["status"] == "preview" else revise.format_proposal(res["proposal"]))
+
+
+@command("proposals")
+def cmd_proposals(args):
+    name, proj = resolve_paper(args)
+    rows = revise.list_proposals(proj)
+    for r in rows:
+        print(f"{r['id']}  {r['status']:10} {r['hunks']:2} hunks  {', '.join(r['part'] or [])}: {r['instruction'][:60]}")
+    if not rows:
+        print("no proposals yet")
+
+
+@command("proposal")
+def cmd_proposal(args):
+    name, proj = resolve_paper(args)
+    print(revise.format_proposal(revise.get_proposal(proj, args.proposal_id)))
+
+
+@command("settings")
+def cmd_settings(args):
+    name, proj = resolve_paper(args)
+    if args.dry_run:
+        config.set_paper_setting(proj, "dry_run", args.dry_run == "on")
+    print(json.dumps({"paper": name, **config.paper_settings(proj)}, indent=2))
+
+
 @command("doctor")
 def cmd_doctor(args):
     common.main(["doctor"])
@@ -184,6 +225,22 @@ def build_parser():
     p.add_argument("--budget", type=int, default=2500)
     p.add_argument("--no-text", action="store_true")
     p.add_argument("--json", action="store_true")
+    p = add("revise", (["instruction"], {}))
+    p.add_argument("--paper")
+    p.add_argument("--part")
+    p.add_argument("--chunk", action="append")
+    p.add_argument("--book")
+    p.add_argument("--no-book", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--send", metavar="HASH")
+    p.add_argument("--json", action="store_true")
+    p = add("proposals")
+    p.add_argument("--paper")
+    p = add("proposal", (["proposal_id"], {}))
+    p.add_argument("--paper")
+    p = add("settings")
+    p.add_argument("--paper")
+    p.add_argument("--dry-run", choices=["on", "off"])
     add("doctor")
     return ap
 
@@ -192,8 +249,11 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         COMMANDS[args.cmd](args)
+    except openai_client.OpenAIError as e:
+        print(f"OpenAI error ({e.kind}): {e}", file=sys.stderr)
+        return 1
     except (book_index.BookError, config.ConfigError, chunk_book.ToolMissing, paper_index.IsolationError,
-            FileNotFoundError, ValueError) as e:
+            revise.ReviseError, FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     return 0

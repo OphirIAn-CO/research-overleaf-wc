@@ -17,24 +17,30 @@ DEFAULT_REPO = os.environ.get("OVERLEAF_REPO")  # legacy fallback only
 MENDELEY_SYNC = os.path.join(SCRIPTS_DIR, "mendeley_sync.py")
 
 
-def resolve_repo(args):
-    """repo_path may be a registered project name, an absolute path (auto-registered),
-    or omitted (cwd if it is an Overleaf clone, else the registry default)."""
+def resolve_paper(args):
+    """-> (name, proj, error). repo_path may be a registered project name, an absolute path (auto-registered), or omitted
+    (cwd if it is an Overleaf clone, else the paper last worked on, else the registry default)."""
     ref = args.get("repo_path") or args.get("project")
     try:
         name, proj = common.resolve(ref)
     except KeyError as e:
         if ref or not DEFAULT_REPO:
-            return None, str(e)
+            return None, None, str(e)
         name, proj = common.resolve(DEFAULT_REPO)
     except RuntimeError as e:
-        return None, f"refusing to act: {e}"
+        return None, None, f"refusing to act: {e}"
     common.set_active(name, "claude")  # the Telegram bot follows the paper Claude is working on
-    repo = proj["path"]
-    if not os.path.isdir(os.path.join(repo, ".git")):
-        return None, f"not a git repo: {repo}"
+    if not os.path.isdir(os.path.join(proj["path"], ".git")):
+        return None, None, f"not a git repo: {proj['path']}"
+    return name, proj, None
+
+
+def resolve_repo(args):
+    name, proj, err = resolve_paper(args)
+    if err:
+        return None, err
     args.setdefault("bib_filename", proj["bib"])
-    return repo, None
+    return proj["path"], None
 
 
 def tool_projects(args):
@@ -190,6 +196,79 @@ def tool_mendeley_add_reference(args):
     return out or "no output"
 
 
+def _writing_call(fn):
+    """Run a writing-coach tool; known failures become a plain message instead of a stack trace. Imports are lazy so a
+    problem in the writing package can never break the sync tools above."""
+    try:
+        return fn()
+    except Exception as e:  # noqa: BLE001
+        from writing_core import book_index, config, openai_client, paper_index, revise
+        known = (book_index.BookError, config.ConfigError, paper_index.IsolationError, revise.ReviseError, ValueError)
+        if isinstance(e, known):
+            return f"error: {e}"
+        if isinstance(e, openai_client.OpenAIError):
+            return f"OpenAI error ({e.kind}): {e}"
+        raise
+
+
+def _book_for(args):
+    from writing_core import config
+    if args.get("book_id"):
+        return args["book_id"]
+    books = config.list_books()
+    if len(books) == 1:
+        return books[0]
+    raise ValueError("which book? pass book_id (imported: %s)" % (", ".join(books) or "none; run writing.py book-ingest"))
+
+
+def tool_book_query(args):
+    def go():
+        from writing_core import config, retrieve
+        if not args.get("query"):
+            return "provide query (what you want the book's advice on)"
+        name, proj, _ = resolve_paper(dict(args))  # a paper in context lets the event be audited; not required
+        res = retrieve.book_query(_book_for(args), args["query"], part=args.get("part"), budget=int(args.get("budget") or 2000),
+                                  paper=name, paper_scope=config.paper_dir(proj) if proj else None, source="claude")
+        return retrieve.format_book_result(res)
+    return _writing_call(go)
+
+
+def tool_paper_query(args):
+    def go():
+        from writing_core import paper_index
+        name, proj, err = resolve_paper(args)
+        if err:
+            return err
+        res = paper_index.query(name, proj, args.get("query") or "", part=args.get("part"), kind=args.get("kind"),
+                                budget=int(args.get("budget") or 2500), source="claude")
+        return paper_index.format_paper_result(res)
+    return _writing_call(go)
+
+
+def tool_chatgpt_revise(args):
+    def go():
+        from writing_core import revise
+        name, proj, err = resolve_paper(args)
+        if err:
+            return err
+        res = revise.run(name, proj, args.get("instruction", ""), part=args.get("part"), chunk_ids=args.get("chunk_ids"),
+                         book_id=args.get("book_id"), dry_run=args.get("dry_run"), confirm=args.get("confirm"), source="claude")
+        return revise.format_preview(res) if res["status"] == "preview" else revise.format_proposal(res["proposal"])
+    return _writing_call(go)
+
+
+def tool_revise_record(args):
+    def go():
+        from writing_core import revise
+        name, proj, err = resolve_paper(args)
+        if err:
+            return err
+        r = revise.record(name, proj, args.get("proposal_id", ""), accepted=args.get("accepted"), rejected=args.get("rejected"),
+                          applied=bool(args.get("applied")), synced=bool(args.get("synced")), source="claude", note=args.get("note", ""))
+        return f"recorded for proposal {r['proposal']}: {r['accepted']} accepted, {r['rejected']} rejected, {r['pending']} pending (status {r['status']})"
+    return _writing_call(go)
+
+
 REPO_PATH_PROP = {
     "repo_path": {
         "type": "string",
@@ -202,6 +281,48 @@ TOOLS = {
         "description": "List/add/default the registry of Overleaf papers (name, folder, bib file, Mendeley group) shared by every tool and the Telegram DOI bot. Args: action (list|add|default, default list); add takes path, name (optional), group (Mendeley group name, optional); default takes name.",
         "inputSchema": {"type": "object", "properties": {"action": {"type": "string"}, "path": {"type": "string"}, "name": {"type": "string"}, "group": {"type": "string"}}},
         "fn": tool_projects,
+    },
+    "book_query": {
+        "description": (
+            "Writing coach: fetch the few book chunks relevant to a request (never the whole book), with page references to cite. "
+            "Args: query (required, e.g. 'how to describe sampling in methods'), part (optional: introduction, methods, results, "
+            "discussion, abstract, style, ... or a sub-part like methods.analysis; otherwise routed from the query), book_id (optional "
+            "if one book is imported), budget (tokens, default 2000), repo_path (optional paper)."),
+        "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "part": {"type": "string"}, "book_id": {"type": "string"},
+                                                          "budget": {"type": "integer"}, **{k: v for k, v in REPO_PATH_PROP.items()}}},
+        "fn": tool_book_query,
+    },
+    "paper_query": {
+        "description": (
+            "Writing coach: find the relevant chunks of ONE paper (never reads the whole manuscript). Empty query = outline. "
+            "'my methods' returns that whole part in document order with file and line ranges (use them with Read/Edit); other "
+            "requests do a full-text search. Args: query, part, kind (tex|memory|review|bib), budget, repo_path. The paper's index "
+            "refreshes itself on every call; only changed chunks are rewritten."),
+        "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "part": {"type": "string"}, "kind": {"type": "string"},
+                                                          "budget": {"type": "integer"}, **REPO_PATH_PROP}},
+        "fn": tool_paper_query,
+    },
+    "chatgpt_revise": {
+        "description": (
+            "Writing coach, OPT-IN ONLY (run it only when the user asks to improve/polish/rewrite/check a part against the book). "
+            "Sends ONE passage plus the matching book rules to ChatGPT and returns a validated PROPOSAL of reviewable hunks; it "
+            "never edits files. While the paper's dry-run setting is on (default) it returns the exact payload and a payload_hash "
+            "instead: show it to the author, and only after they agree call again with dry_run=false and confirm=<payload_hash>. "
+            "Args: instruction (required), part (e.g. methods, abstract) or chunk_ids, book_id, dry_run, confirm, repo_path."),
+        "inputSchema": {"type": "object", "properties": {"instruction": {"type": "string"}, "part": {"type": "string"},
+                                                          "chunk_ids": {"type": "array", "items": {"type": "string"}}, "book_id": {"type": "string"},
+                                                          "dry_run": {"type": "boolean"}, "confirm": {"type": "string"}, **REPO_PATH_PROP}},
+        "fn": tool_chatgpt_revise,
+    },
+    "revise_record": {
+        "description": (
+            "Writing coach: log which hunks of a proposal the author accepted/rejected after you applied them with Edit (so the "
+            "Monitor and the paper's decision log stay true). Args: proposal_id, accepted (list of hunk ids like u1.h2, or 'all'), "
+            "rejected (list or 'all'), applied (bool: the accepted text is now in the file), synced (bool), note, repo_path."),
+        "inputSchema": {"type": "object", "properties": {"proposal_id": {"type": "string"}, "accepted": {}, "rejected": {},
+                                                          "applied": {"type": "boolean"}, "synced": {"type": "boolean"}, "note": {"type": "string"},
+                                                          **REPO_PATH_PROP}},
+        "fn": tool_revise_record,
     },
     "overleaf_pull": {
         "description": "Pull latest changes from Overleaf (git pull --ff-only) for the given repo_path. Run before editing to avoid conflicts with edits made in the browser.",
@@ -340,7 +461,7 @@ def main():
                 "result": {
                     "protocolVersion": params.get("protocolVersion", "2024-11-05"),
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "overleaf-mcp", "version": "0.1.0"},
+                    "serverInfo": {"name": "overleaf-mcp", "version": "0.2.0"},
                 },
             })
         elif method == "notifications/initialized":

@@ -1,6 +1,6 @@
 ---
 name: research-overleaf-wc
-description: Sync and edit any locally-cloned Overleaf project backed by its Overleaf Git bridge, anywhere on disk, including pulling new references from Mendeley, citing them, and running a peer-review pass on the draft. Use when the user says "overleaf", "sync the paper", "pull/push overleaf", "edit main.tex", "update the paper on overleaf", "pull references from Mendeley", "fetch new citations", "review my paper", "peer review this draft", or asks to read/edit/find/review something in an Overleaf project's LaTeX or bibliography.
+description: Sync and edit any locally-cloned Overleaf project backed by its Overleaf Git bridge, anywhere on disk, including pulling new references from Mendeley, citing them, and running a peer-review pass on the draft. Use when the user says "overleaf", "sync the paper", "pull/push overleaf", "edit main.tex", "update the paper on overleaf", "pull references from Mendeley", "fetch new citations", "review my paper", "peer review this draft", or asks to read/edit/find/review something in an Overleaf project's LaTeX or bibliography. Also use for the writing coach: "improve / polish / tighten / rewrite my methods (abstract, introduction, ...)", "follow the book", "check this section against the writing book", "what does the book say about ...".
 allowed-tools:
   - Read
   - Edit
@@ -14,6 +14,10 @@ allowed-tools:
   - mcp__overleaf__mendeley_list_groups
   - mcp__overleaf__mendeley_catalog_search
   - mcp__overleaf__mendeley_add_reference
+  - mcp__overleaf__book_query
+  - mcp__overleaf__paper_query
+  - mcp__overleaf__chatgpt_revise
+  - mcp__overleaf__revise_record
   - WebSearch
   - WebFetch
   - mcp__code-review-graph__build_or_update_graph_tool
@@ -39,7 +43,7 @@ skill's behavior in general — treat every new repo/group pairing as unknown
 until established the same way.
 
 One MCP server (`overleaf`, registered at user scope, script at
-`<skill>/scripts/overleaf_mcp.py`) exposes eight tools, nothing else:
+`<skill>/scripts/overleaf_mcp.py`) exposes twelve tools, nothing else:
 - `overleaf_projects`: the registry of papers (name, folder, bib file,
   Mendeley group) that every tool and the Telegram bot share.
 - `overleaf_pull`, `overleaf_status`, `overleaf_sync`: git sync with the
@@ -49,8 +53,11 @@ One MCP server (`overleaf`, registered at user scope, script at
 - `mendeley_catalog_search`, `mendeley_add_reference`: look up a paper in
   Mendeley's canonical catalog and add it to a Mendeley group/library, then
   fetch it into the bib file.
+- `paper_query`, `book_query`, `chatgpt_revise`, `revise_record`: the writing coach
+  (see "Writing coach" below).
 (Mendeley tools wrap `<skill>/scripts/mendeley_sync.py`; shared state lives in
-`scripts/common.py`.)
+`scripts/common.py`; the writing coach lives in `scripts/writing_core/` with a CLI,
+`scripts/writing.py`.)
 
 For finding a paper to cite in the first place (general literature search,
 not just what's already in Mendeley), use the native `WebSearch`/`WebFetch`
@@ -202,6 +209,51 @@ an automatic new-section case — ask the user where it should go, or infer
 placement from the paper's own structure (discovered via step 4's
 grep/glob) rather than defaulting to appending at the end.
 
+## Writing coach (book rules + per-paper index + ChatGPT pass)
+
+**Opt-in only, like peer review.** Start it when the user asks to improve, polish,
+tighten, rewrite, or "check against the book" a part of a paper (or asks what the book
+says about something). Never as a side effect of syncing, editing, or citing.
+
+What it is: a book (imported once) and each paper (indexed separately, refreshed on
+every call) are searched by *retrieval*, so you never read the whole book or whole
+manuscript. ChatGPT is only the editor: one passage per call, validated before you see
+it. Each paper's index is private to it: never use, quote or mention another paper's
+content while working on this one (same rule as step 0).
+
+Tools: `paper_query` (this paper's relevant chunks with file and line ranges; empty
+query = outline; "my methods" returns that whole part), `book_query` (the few book
+chunks that matter, with page references to cite), `chatgpt_revise` (one passage ->
+validated proposal; never edits files), `revise_record` (logs accept/reject).
+
+1. Resolve the paper (step 0) and `overleaf_pull`.
+2. Which part? If unclear, `paper_query` with no query shows the outline; confirm with
+   the user. For "what does the book say about X" just use `book_query` and cite pages.
+3. `chatgpt_revise` with `instruction` and `part` (or `chunk_ids`). While the paper's
+   dry-run setting is on (the default) it returns a **preview**: the exact payload
+   (masked passage, book rules, model) and a `payload_hash`. Show it to the user and
+   ask. Only after they agree call again with `dry_run: false` and
+   `confirm: <payload_hash>`. Never send without that agreement. (Once the user has
+   turned the preview off for a paper, `writing.py settings --dry-run off`, it sends
+   directly.)
+4. Present the proposal: each hunk (`u1.h2`) with old/new text, the reason, and the
+   book page it follows. Questions the model raised go to the user; never answer them by
+   guessing. If validation failed, say so; nothing is offered, and do not hand-edit
+   around it.
+5. Apply only the hunks the user accepts, with native `Edit` in place (old text -> new
+   text, as in "Implementing advisor/reviewer comments"). Steps 6 (no dashes) and 6b
+   (watermark clean) apply to the new text exactly as for any prose you write; clean
+   before inserting. If a hunk's old text no longer matches the file, stop and re-run.
+6. `revise_record` with the accepted/rejected hunk ids (`applied: true`), then
+   `overleaf_status` / `overleaf_sync` as usual and step 9 (session memory).
+
+What leaves the machine: only the selected passage (LaTeX masked), the paper card, and a
+few capped book rule snippets; never the whole manuscript, credentials, or another paper.
+Setup (the user does these themselves): `python3 <skill>/scripts/writing.py book-ingest
+<book.pdf> --id <slug>` once, and `~/.config/overleaf-skill/openai.json`
+(`{"api_key": "...", "model": "..."}`, never pasted in chat). `writing.py doctor` reports
+what is missing.
+
 ## Session memory
 
 Every repo this skill touches gets its own local, git-ignored notes file:
@@ -234,7 +286,9 @@ you don't need. Instead:
 3. **Only if that's not enough** — the user asks about something from
    further back ("why did we pick this Mendeley group," "when did we last
    touch the Methods section") and the relevant date isn't obvious from the
-   `### ` headers alone — reach for the code-review-graph tools instead of
+   `### ` headers alone — first try `paper_query` with `kind: "memory"` (the
+   memory file is indexed per paper, one chunk per dated entry). Only if that
+   is unavailable, reach for the code-review-graph tools instead of
    reading down the rest of the file blind:
    - `mcp__code-review-graph__build_or_update_graph_tool` with
      `repo_root: <repo_path>` first, if `list_graph_stats_tool` shows no
