@@ -200,6 +200,13 @@ def api_git(r, action):
     if action == "sync":
         args["message"] = str(r.body.get("message") or "Update via the Overleaf skill web app")[:200]
     out = fn(args)
+    low = out.lower()
+    if any(m in low for m in ("could not read password", "terminal prompts disabled", "authentication failed", "invalid username or password",
+                              "could not read username")):
+        have = (config.data_dir() / "overleaf_git.json").exists()
+        return {"output": out, "hint": "token", "friendly": (
+            "Overleaf did not accept the sign-in. Your Overleaf Git token is not accepted: create a new one in Overleaf (Account Settings, Git Integration) and paste it in Settings."
+            if have else "This app is not signed in to Overleaf yet. In Settings, paste your Overleaf Git token once (Overleaf: Account Settings, Git Integration, create a token).")}
     if action in ("pull", "sync"):
         try:  # keep the paper's index in step with what Overleaf just gave us
             n, p = common.resolve(name)
@@ -436,6 +443,36 @@ def api_health(r):
     return {"issues": issues, "watermark": {"state": wstate, "detail": wdetail}}
 
 
+def _secret(value, what, min_len=8):
+    v = value.strip() if isinstance(value, str) else ""
+    if len(v) < min_len or any(c.isspace() for c in v) or len(v) > 500:
+        raise ApiError(400, f"{what} looks wrong: it should be one string without spaces")
+    return v
+
+
+def api_secret_openai(r):
+    """Create or update openai.json from the Settings form. The key is written (0600) and never sent back to any page."""
+    key = r.body.get("api_key")
+    cur = common.load("openai.json", {}) or {}
+    model = str(r.body.get("model") or cur.get("model") or "").strip()
+    if not model or len(model) > 100 or any(c.isspace() for c in model):
+        raise ApiError(400, "the model id is required (for example the name shown in your OpenAI account), without spaces")
+    if key in (None, ""):
+        if not cur.get("api_key"):
+            raise ApiError(400, "paste your OpenAI API key")
+        key = cur["api_key"]  # only the model changed
+    else:
+        key = _secret(key, "the API key")
+    out = {**cur, "api_key": key, "model": model}
+    common.save("openai.json", out)
+    return {"ok": True}
+
+
+def api_secret_git(r):
+    common.save("overleaf_git.json", {"token": _secret(r.body.get("token"), "the token")})
+    return {"ok": True}
+
+
 def api_settings(r):
     body = r.body
     if body.get("paper") is not None and "dry_run" in body:
@@ -628,6 +665,7 @@ ROUTES = [
     ("POST", r"^/api/paper/([^/]+)/forget$", api_forget),
     ("POST", r"^/api/refs/preview$", api_refs_preview), ("POST", r"^/api/refs/add$", api_refs_add), ("GET", r"^/api/refs/recent$", api_refs_recent),
     ("POST", r"^/api/refs/mendeley$", api_refs_mendeley), ("POST", r"^/api/proposal/handoff$", api_handoff),
+    ("POST", r"^/api/secrets/openai$", api_secret_openai), ("POST", r"^/api/secrets/git$", api_secret_git),
 ]
 ROUTES = [(m, re.compile(p), fn) for m, p, fn in ROUTES]
 EXTENSIONS = []  # (method, compiled regex, fn): later phases register their pages here

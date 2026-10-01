@@ -20,11 +20,11 @@ class WatermarkError(Exception):
     pass
 
 
-def _post(url, path, payload):
+def _post(url, path, payload, timeout=None):
     req = urllib.request.Request(url.rstrip("/") + path, data=json.dumps(payload).encode("utf-8"),
                                  headers={"Content-Type": "application/json"}, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+        with urllib.request.urlopen(req, timeout=timeout or TIMEOUT) as r:
             data = json.loads(r.read().decode("utf-8"))
     except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
         raise WatermarkError(f"the watermark service at {url} did not answer {path} as expected ({getattr(e, 'reason', e)})") from None
@@ -33,14 +33,14 @@ def _post(url, path, payload):
     return data
 
 
-def make_cleaner(url):
+def make_cleaner(url, timeout=None):
     """-> callable(text) -> cleaned text. Never returns the input unchanged on failure: it raises."""
     if not url:
         raise WatermarkError("no watermark service URL is configured (Settings)")
 
     def clean(text):
-        _post(url, "/inspect", {"text": text})
-        data = _post(url, "/clean", {"text": text, "layer": "A"})
+        _post(url, "/inspect", {"text": text}, timeout)
+        data = _post(url, "/clean", {"text": text, "layer": "A"}, timeout)
         for k in _CLEAN_KEYS:
             if isinstance(data.get(k), str) and data[k].strip():
                 return data[k]
@@ -54,7 +54,7 @@ def check(url):
     if not url:
         return "not configured", "Set the service URL in Settings (the service from the watermarks-remover skill)."
     try:
-        make_cleaner(url)("Probe sentence for the service check.")
+        make_cleaner(url, timeout=5)("Probe sentence for the service check.")
         return "ok", "reachable and answering in the expected shape"
     except WatermarkError as e:
         return "unreachable", str(e)

@@ -92,8 +92,9 @@ def _read_lines(path):
     return raw.decode("utf-8", errors="replace").replace("\r\n", "\n").split("\n"), b"\r\n" in raw
 
 
-def make_units(proj, chunks, max_unit_tokens=MAX_UNIT_TOKENS):
-    """Group adjacent chunks of one file into passages; the passage text is read from the file itself (exact lines)."""
+def group_chunks(chunks, max_unit_tokens=MAX_UNIT_TOKENS):
+    """Adjacent chunks of one file that fit together become one passage. Pure (reads no files): the chat page uses it to say
+    how many passages a selection will be before anything is sent."""
     groups, cur = [], []
     for c in sorted(chunks, key=lambda c: c["ord"]):
         if cur and c["file"] == cur[-1]["file"] and c["line_start"] > cur[-1]["line_end"] and \
@@ -105,6 +106,12 @@ def make_units(proj, chunks, max_unit_tokens=MAX_UNIT_TOKENS):
             cur = [c]
     if cur:
         groups.append(cur)
+    return groups
+
+
+def make_units(proj, chunks, max_unit_tokens=MAX_UNIT_TOKENS):
+    """Group adjacent chunks of one file into passages; the passage text is read from the file itself (exact lines)."""
+    groups = group_chunks(chunks, max_unit_tokens)
     units = []
     for i, g in enumerate(groups, 1):
         lines, _ = _read_lines(Path(proj["path"]) / g[0]["file"])
@@ -183,8 +190,8 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
     chunks, parts = resolve_target(name, proj, instruction, part, chunk_ids, source)
     units = make_units(proj, chunks)
     if len(units) > max_units:
-        raise ReviseError(f"that is {len(units)} passages (limit {max_units} per run, to keep cost predictable). "
-                          "Name a narrower part or pass chunk ids.")
+        raise ReviseError(f"that selection is {len(units)} separate passages and one run handles at most {max_units} (limit set to keep the cost predictable). "
+                          "Pick fewer or smaller pieces (for example one section, or the paragraphs before a figure) and run it again for the rest.")
     card = read_card(proj)
     prefs = preferences.digest(proj)
 

@@ -227,13 +227,13 @@ def list_chunks(name, proj):
     """Every chunk without its text, in document order, plus which ones the last refresh added or changed."""
     con = open_index(name, proj)
     try:
-        rows = con.execute("SELECT id, kind, file, line_start, line_end, section_path, part, tokens, hash, ord FROM chunks "
+        rows = con.execute("SELECT id, kind, file, line_start, line_end, section_path, part, tokens, hash, ord, substr(plain, 1, 160) AS preview FROM chunks "
                            "ORDER BY CASE kind WHEN 'tex' THEN 0 WHEN 'memory' THEN 1 WHEN 'review' THEN 2 ELSE 3 END, ord").fetchall()
     finally:
         con.close()
     last = [e for e in events.read(config.paper_dir(proj), types={"index_refresh"}) if (e.get("added", 0) or e.get("changed", 0) or e.get("removed", 0))]
     touched = set((last[-1].get("added_ids") or []) + (last[-1].get("changed_ids") or [])) if last else set()
-    return {"chunks": [{**dict(r), "hash": r["hash"][:8], "recent": r["id"] in touched} for r in rows],
+    return {"chunks": [{**dict(r), "hash": r["hash"][:8], "recent": r["id"] in touched, "preview": " ".join((r["preview"] or "").split())} for r in rows],
             "last_change": last[-1]["ts"] if last else None, "last_change_trigger": last[-1].get("trigger") if last else None,
             "removed": (last[-1].get("removed_ids") or []) if last else []}
 
