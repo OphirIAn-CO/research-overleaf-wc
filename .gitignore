@@ -8,3 +8,15 @@ telegram.json
 telegram_state.json
 projects.json
 .overleaf-skill/
+# writing coach: secrets, the book, derived indexes, proposals, events (all live outside git; belt and braces)
+*openai*.json
+*git*token*.json
+overleaf_git.json
+ui.json
+books/
+inbox/
+index.sqlite*
+proposals/
+events-*.jsonl
+*.lease
+*.corrupt

@@ -28,10 +28,19 @@ def load(name, default=None):
 
 
 def save(name, data):
+    """Atomic: write a private temp file, then rename over the target, so the MCP server, the Telegram bot and the
+    web app (host and container share these files) never read a half-written registry."""
     HOME.mkdir(parents=True, exist_ok=True, mode=0o700)
     p = HOME / name
-    p.write_text(json.dumps(data, indent=2))
-    p.chmod(0o600)
+    tmp = p.with_name(f".{name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(data, indent=2))
+        os.replace(tmp, p)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def registry():
@@ -169,7 +178,18 @@ def main(a):
             gi = Path(p["path"]) / ".gitignore"
             if not (gi.exists() and ".overleaf-skill" in gi.read_text()):
                 issues.append(f"{n}: .overleaf-skill/ not in .gitignore (session memory could be pushed)")
+            try:  # writing coach checks (optional package; a bug there must not break doctor)
+                from writing_core import health
+                issues += health.paper_issues(n, p)
+            except Exception as e:  # noqa: BLE001
+                issues.append(f"{n}: writing checks failed ({e})")
             print(("OK   " if not issues else "WARN ") + n, *issues, sep="\n     " if issues else "")
+        try:
+            from writing_core import health
+            env = health.env_issues()
+            print(("OK   " if not env else "INFO ") + "writing coach (global)", *env, sep="\n     " if env else "")
+        except Exception as e:  # noqa: BLE001
+            print(f"INFO writing coach (global)\n     checks failed ({e})")
     elif a[:1] == ["rm"] and len(a) > 1:
         reg["projects"].pop(a[1], None)
         reg["default"] = reg["default"] if reg["default"] in reg["projects"] else next(iter(reg["projects"]), None)
