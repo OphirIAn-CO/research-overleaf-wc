@@ -100,7 +100,7 @@
   }
   const paperObj = (name) => (S.st.papers || []).find((p) => p.name === (name || S.paper));
 
-  const NAV = ['papers', 'write', 'book', 'monitor', 'paper_index', 'references', 'settings'];
+  const NAV = ['papers', 'write', 'book', 'monitor', 'paper_index', 'references', 'panes', 'settings'];
   function buildNav() {
     const nav = clear(document.getElementById('nav'));
     for (const id of NAV.filter((x) => S.pages[x])) nav.append(h('a', { href: '#/' + id, 'aria-current': id === S.page ? 'page' : null, text: S.pages[id].title }));

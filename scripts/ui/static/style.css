@@ -161,3 +161,8 @@ main:focus { outline: none; }
 #main > div > * + * { margin-top: 14px; }
 #main > div > .page-head + * { margin-top: 0; }
 #main > div > .card + .card { margin-top: 14px; }
+
+/* side panes */
+.panes-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; } @media (max-width: 1000px) { .panes-grid { grid-template-columns: 1fr; } }
+.pane-body { min-height: 120px; } .pane-frame { width: 100%; height: 68vh; min-height: 420px; border: 1px solid var(--border); border-radius: 8px; background: #fff; }
+.panes-grid > .card, .panes-grid > .card + .card { margin-top: 0; }

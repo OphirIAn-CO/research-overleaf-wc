@@ -119,7 +119,12 @@ class Security(UiBase):
             self.assertIn("default-src 'none'", csp, path)
             self.assertIn("script-src 'self'", csp)
             self.assertNotIn("unsafe-inline", csp)
-            self.assertNotIn("http", csp)  # no external origin may ever be allowed
+            for directive in csp.split(";"):  # no external origin may be allowed, except to FRAME the two side-pane sites
+                name, _, rest = directive.strip().partition(" ")
+                if name == "frame-src":
+                    self.assertEqual(set(rest.split()), {"https://quillbot.com", "https://*.quillbot.com", "https://www.overleaf.com"})
+                else:
+                    self.assertNotIn("http", directive)
             self.assertEqual(hd["x-content-type-options"], "nosniff")
             self.assertEqual(hd["cache-control"], "no-store")
             self.assertEqual(hd["x-frame-options"], "DENY")

@@ -29,15 +29,16 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (book_index, chunk_book, config, events, health, openai_client, paper_index, preferences, retrieve,  # noqa: E402
-                          revise, rule_cards, stats, taxonomy, watermark)
+from writing_core import (book_index, chunk_book, config, events, health, openai_client, panes, paper_index, preferences,  # noqa: E402
+                          retrieve, revise, rule_cards, stats, taxonomy, watermark)
 
 STATIC = Path(__file__).resolve().parent / "static"
 FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
          "/charts.js": ("charts.js", "text/javascript; charset=utf-8"), "/pages.js": ("pages.js", "text/javascript; charset=utf-8"),
+         "/panes.js": ("panes.js", "text/javascript; charset=utf-8"),
          "/style.css": ("style.css", "text/css; charset=utf-8")}
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
-       "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+       "frame-src " + " ".join(panes.FRAME_HOSTS) + "; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 MAX_BODY = 1 << 20
 PID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -473,6 +474,21 @@ def api_secret_git(r):
     return {"ok": True}
 
 
+def api_panes(r):
+    """The two addresses the side panes load. Overleaf is the author's own project (its id is in the paper's Git address)."""
+    n, p = paper_ref(r.arg("paper", ""))
+    return {"paper": n, "quillbot": panes.QUILLBOT_URL, "overleaf": panes.overleaf_url(p)}
+
+
+def api_test_frames(r):
+    """Ask the two sites, from here, whether they allow being shown inside another page. Headers only; nothing about the paper is sent."""
+    n, p = paper_ref(r.body.get("paper", ""))
+    out = {"quillbot": panes.probe(panes.QUILLBOT_URL)}
+    url = panes.overleaf_url(p)
+    out["overleaf"] = panes.probe(url) if url else {"url": None, "error": "this paper's Overleaf address has no project id"}
+    return out
+
+
 def api_settings(r):
     body = r.body
     if body.get("paper") is not None and "dry_run" in body:
@@ -666,6 +682,7 @@ ROUTES = [
     ("POST", r"^/api/refs/preview$", api_refs_preview), ("POST", r"^/api/refs/add$", api_refs_add), ("GET", r"^/api/refs/recent$", api_refs_recent),
     ("POST", r"^/api/refs/mendeley$", api_refs_mendeley), ("POST", r"^/api/proposal/handoff$", api_handoff),
     ("POST", r"^/api/secrets/openai$", api_secret_openai), ("POST", r"^/api/secrets/git$", api_secret_git),
+    ("GET", r"^/api/panes$", api_panes), ("POST", r"^/api/test/frames$", api_test_frames),
 ]
 ROUTES = [(m, re.compile(p), fn) for m, p, fn in ROUTES]
 EXTENSIONS = []  # (method, compiled regex, fn): later phases register their pages here
