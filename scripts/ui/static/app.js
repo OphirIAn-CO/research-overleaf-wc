@@ -84,277 +84,75 @@
   const tile = (label, value, sub) => h('div', { class: 'tile' }, h('div', { class: 'label', text: label }), h('div', { class: 'value', text: value }), sub ? h('div', { class: 'sub', text: sub }) : null);
 
   // ------------------------------------------------------------------ state, pages, router
-  const S = { st: null, page: 'papers', pages: {}, order: [] };
+  const S = { st: null, page: 'chat', pages: {}, order: [], threads: [], chatId: null };
   function registerPage(id, title, render) { S.pages[id] = { title, render }; S.order.push(id); }
   async function loadState() {
     S.st = await api.get('/api/state', { poll: true });
-    const sel = document.getElementById('active-paper');
-    clear(sel);
-    for (const p of S.st.papers) sel.append(h('option', { value: p.name, selected: p.name === S.st.active, text: p.name }));
-    if (!S.st.papers.length) sel.append(h('option', { text: '(no papers registered)' }));
-    S.paper = S.st.active && S.st.papers.some((p) => p.name === S.st.active) ? S.st.active : (S.st.papers[0] || {}).name;
-    sel.value = S.paper || '';
+    const known = (n) => S.st.papers.some((p) => p.name === n);
+    S.paper = known(S.st.active) ? S.st.active : (S.st.papers[0] || {}).name;
     const mins = Math.ceil(S.st.idle_seconds_left / 60);
     document.getElementById('local-badge').textContent = 'Local only, closes after ' + mins + ' min idle';
+    renderPapers();
     return S.st;
   }
   const paperObj = (name) => (S.st.papers || []).find((p) => p.name === (name || S.paper));
 
-  const NAV = ['papers', 'write', 'book', 'monitor', 'paper_index', 'references', 'panes', 'settings'];
+  async function setPaper(name) {
+    if (name === S.paper) return;
+    await api.post('/api/papers/active', { name });
+    S.chatId = null; S.threads = [];
+    await loadState();
+    await loadThreads();
+    if (S.page !== 'chat') location.hash = '#/chat'; else route();
+  }
+  function renderPapers() {
+    const box = clear(document.getElementById('paper-list'));
+    if (!S.st.papers.length) { box.append(h('p', { class: 'muted small', text: 'No papers yet. Add one in Settings.' })); return; }
+    for (const p of S.st.papers) {
+      box.append(h('button', { type: 'button', class: 'side-item', 'aria-current': p.name === S.paper ? 'true' : null, title: p.path, onclick: () => setPaper(p.name).catch((e) => toast(e.message)) },
+        h('span', { class: 'dot ' + (p.problem ? 'bad' : 'ok'), 'aria-hidden': 'true' }), h('span', { class: 'grow ellipsis', text: p.name })));
+    }
+  }
+  async function loadThreads() {
+    if (!S.paper) { S.threads = []; renderThreads(); return; }
+    try { S.threads = (await api.get('/api/chat/threads?paper=' + encodeURIComponent(S.paper), { poll: true })).threads; } catch (e) { S.threads = []; }
+    if (!S.chatId || !S.threads.some((t) => t.id === S.chatId)) S.chatId = (S.threads[0] || {}).id || null;
+    renderThreads();
+  }
+  function renderThreads() {
+    const box = clear(document.getElementById('chat-list'));
+    for (const t of S.threads.slice(0, 12)) {
+      box.append(h('button', { type: 'button', class: 'side-item', 'aria-current': t.id === S.chatId && S.page === 'chat' ? 'true' : null, onclick: () => { S.chatId = t.id; if (S.page === 'chat') route(); else location.hash = '#/chat'; } },
+        h('span', { class: 'grow ellipsis', text: t.title })));
+    }
+  }
+
+  const NAV = [['chat', 'Chat'], ['references', 'References'], ['monitor', 'Activity'], ['settings', 'Settings']];
+  const HIDDEN_PAGES = { write: 'chat', papers: 'chat' };  // old addresses still land somewhere sensible
   function buildNav() {
     const nav = clear(document.getElementById('nav'));
-    for (const id of NAV.filter((x) => S.pages[x])) nav.append(h('a', { href: '#/' + id, 'aria-current': id === S.page ? 'page' : null, text: S.pages[id].title }));
+    for (const [id, label] of NAV.filter(([x]) => S.pages[x])) nav.append(h('a', { href: '#/' + id, 'aria-current': id === S.page ? 'page' : null, text: label }));
   }
   async function route() {
-    const id = (location.hash.match(/^#\/(\w+)/) || [])[1];
-    S.page = S.pages[id] ? id : 'papers';
+    let id = (location.hash.match(/^#\/(\w+)/) || [])[1];
+    id = HIDDEN_PAGES[id] || id;
+    S.page = S.pages[id] ? id : 'chat';
+    document.body.dataset.page = S.page;
+    document.getElementById('app').classList.remove('drawer-open');
     buildNav();
     const main = clear(document.getElementById('main'));
-    main.append(h('p', { class: 'muted' }, busy('Loading...')));
+    main.append(h('p', { class: 'muted', text: 'Loading...' }));
     try {
-      if (!S.st) await loadState();
-      const box = h('div');
+      if (!S.st) { await loadState(); await loadThreads(); }
+      const box = h('div', { class: 'page-box' });
       await S.pages[S.page].render(box);
       clear(main).append(box);
+      renderThreads();
+      if (window.OLS.panes && window.OLS.panes.onRoute) window.OLS.panes.onRoute(S.page);
     } catch (e) {
       clear(main).append(notice('bad', h('strong', { text: 'Could not load this page. ' }), e.message));
     }
     main.focus({ preventScroll: true });
-  }
-
-  // ------------------------------------------------------------------ Papers
-  registerPage('papers', 'Papers', async (box) => {
-    await loadState();
-    const st = S.st;
-    box.append(h('div', { class: 'page-head' }, h('h1', { text: 'Papers' }),
-      h('span', { class: 'muted small', text: st.active ? `Active: ${st.active} (set by ${st.active_source}, ${ago(Date.now() / 1000 - st.active_age)})` : 'No paper has been chosen yet; the first one is shown' })));
-    if (!st.papers.length) {
-      box.append(notice('warn', 'No papers are registered. In a terminal: ', h('code', { text: 'python3 scripts/common.py add /path/to/overleaf/clone --group "Mendeley group"' }),
-        '. Papers registered after this app started need a restart (ui.sh down, ui.sh up) to be visible here.'));
-    }
-    for (const p of st.papers) box.append(paperCard(p, st));
-  });
-
-  function paperCard(p, st) {
-    const out = h('pre', { class: 'small payload', hidden: true });
-    const msg = h('input', { type: 'text', value: 'Update via the Overleaf skill web app', 'aria-label': 'Commit message', class: 'grow' });
-    const run = (action, body) => async () => {
-      const r = await api.post('/api/papers/' + action, Object.assign({ name: p.name }, body || {}));
-      out.hidden = false; out.textContent = r.output;
-      await loadState();
-    };
-    const idx = p.index;
-    const idxLine = idx ? `${idx.chunks} chunks (${Object.entries(idx.counts).map(([k, v]) => v + ' ' + k).join(', ')}), ~${fmtTok(idx.manuscript_tokens)} manuscript tokens, refreshed ${ago(idx.indexed_at)}${idx.unreadable ? ' (unreadable, rebuilds itself)' : ''}` : 'not indexed yet (it is built the first time you query or revise)';
-    const dry = h('input', { type: 'checkbox', checked: p.settings.dry_run, 'aria-label': 'Preview before sending' });
-    dry.addEventListener('change', async () => {
-      try { await api.post('/api/settings', { paper: p.name, dry_run: dry.checked }); toast(dry.checked ? 'Preview required before anything is sent' : 'Preview no longer required for this paper'); await loadState(); }
-      catch (e) { toast(e.message); dry.checked = !dry.checked; }
-    });
-    return h('section', { class: 'card', 'aria-label': p.name },
-      h('div', { class: 'row' }, h('h2', { text: p.name }), p.name === st.active ? h('span', { class: 'badge ok', text: 'active' }) : null,
-        p.problem ? h('span', { class: 'badge bad', text: 'problem' }) : h('span', { class: 'badge ok', text: 'healthy' }),
-        h('span', { class: 'grow' }),
-        p.name !== st.active ? guarded(h('button', { type: 'button', text: 'Make active' }), async () => { await api.post('/api/papers/active', { name: p.name }); await loadState(); route(); }) : null),
-      p.problem ? notice('bad', p.problem) : null,
-      h('p', { class: 'small secondary' }, h('code', { text: p.path }), ` · Overleaf project ${p.remote_id} · bib ${p.bib} · Mendeley ${p.group || 'not linked'}`),
-      h('p', { class: 'small secondary', text: 'Index: ' + idxLine }),
-      h('div', { class: 'row' },
-        guarded(h('button', { type: 'button', text: 'Pull from Overleaf' }), run('pull')),
-        guarded(h('button', { type: 'button', text: 'What changed' }), run('status')),
-        guarded(h('button', { type: 'button', text: 'Refresh index' }), async () => { const r = await api.post('/api/paper/' + encodeURIComponent(p.name) + '/refresh', {}); out.hidden = false; out.textContent = `${r.added} added, ${r.changed} changed, ${r.removed} removed, ${r.unchanged} unchanged`; await loadState(); }),
-        h('a', { href: '#/write', onclick: async () => { await api.post('/api/papers/active', { name: p.name }); } }, 'Improve the writing')),
-      h('div', { class: 'row' }, msg, guarded(h('button', { type: 'button', class: 'primary', text: 'Commit and push to Overleaf' }), async () => { await run('sync', { message: msg.value })(); })),
-      h('label', { class: 'check small secondary' }, dry, 'Show me exactly what will be sent to ChatGPT, and require my confirmation, before every pass'),
-      out);
-  }
-
-  // ------------------------------------------------------------------ Write
-  const W = { preview: null, proposal: null, selected: new Set() };
-
-  registerPage('write', 'Write', async (box) => {
-    await loadState();
-    const st = S.st;
-    if (!S.paper) { box.append(notice('warn', 'Register a paper first (Papers page).')); return; }
-    const ostate = st.settings.openai.state;
-    box.append(h('div', { class: 'page-head' }, h('h1', { text: 'Write' }), h('span', { class: 'muted small', text: 'ChatGPT edits one passage at a time, following the book. Nothing is written until you apply it.' })));
-    if (ostate !== 'ok') box.append(notice('warn', 'ChatGPT is not configured yet: ', st.settings.openai.detail, ' See Settings.'));
-
-    let outline = { outline: [] };
-    try { outline = await api.get('/api/paper/' + encodeURIComponent(S.paper) + '/outline'); } catch (e) { box.append(notice('bad', e.message)); }
-    const parts = [];
-    for (const o of outline.outline) if (o.part && !parts.some((x) => x.part === o.part) && o.chunks) parts.push({ part: o.part, title: o.title });
-
-    const partSel = h('select', { id: 'w-part' }, h('option', { value: '', text: 'Work it out from my instruction' }),
-      parts.map((p) => h('option', { value: p.part, text: `${p.part} (${p.title})` })));
-    const bookSel = h('select', { id: 'w-book' }, st.books.length ? st.books.map((b) => h('option', { value: b.id, text: `${b.id} (${b.chunks} chunks)` })) : null, h('option', { value: '', text: 'No book rules' }));
-    const instr = h('textarea', { id: 'w-instr', placeholder: 'e.g. Tighten the methods and follow the book on describing sampling.', 'aria-label': 'Instruction' });
-    instr.value = W.instruction || '';
-    const result = h('div');
-    const previewBox = h('div');
-
-    const body = () => ({ paper: S.paper, instruction: instr.value, part: partSel.value || null, book_id: bookSel.value || null, use_book: !!bookSel.value });
-    const previewBtn = guarded(h('button', { type: 'button', class: 'primary', text: 'Preview what will be sent' }), async () => {
-      if (!instr.value.trim()) throw new Error('Say what to do first.');
-      W.instruction = instr.value;
-      clear(previewBox).append(busy('Preparing the exact request...'));
-      try {
-        W.preview = await api.post('/api/revise/preview', body());
-        W.previewBody = JSON.stringify(body());
-        await showPreview(previewBox, result);
-      } catch (e) { clear(previewBox).append(notice('bad', e.message)); throw e; }
-    });
-
-    box.append(h('div', { class: 'cols' },
-      h('div', null,
-        h('section', { class: 'card', 'aria-label': 'What to improve' }, h('h2', { text: 'What to improve' }),
-          h('div', { class: 'stack' },
-            h('label', { class: 'field' }, h('span', { text: 'Part of the paper (' + S.paper + ')' }), partSel),
-            h('label', { class: 'field' }, h('span', { text: 'Writing book' }), bookSel),
-            h('label', { class: 'field' }, h('span', { text: 'Instruction' }), instr),
-            h('div', { class: 'row' }, previewBtn))),
-        previewBox,
-        h('section', { class: 'card', 'aria-label': 'Recent proposals' }, h('h2', { text: 'Recent proposals' }), await recentProposals(result))),
-      result));
-    if (W.proposal && W.proposal.paper === S.paper) renderProposal(result, W.proposal);
-    else result.append(notice('ok', 'Pick the part, write what you want, and press Preview. You will see the exact text that would leave this computer before you send it.'));
-  });
-
-  async function recentProposals(result) {
-    const list = h('div', { class: 'stack small' });
-    try {
-      const r = await api.get('/api/proposals?paper=' + encodeURIComponent(S.paper));
-      if (!r.proposals.length) list.append(h('span', { class: 'muted', text: 'None yet.' }));
-      for (const p of r.proposals.slice(0, 8)) {
-        list.append(h('div', null, h('button', { type: 'button', class: 'ghost small', text: `${p.id} · ${p.status}${p.handoff ? ' (handed to Claude)' : ''} · ${p.hunks} hunks`, onclick: async () => {
-          const full = await api.get(`/api/proposal?paper=${encodeURIComponent(S.paper)}&id=${p.id}`);
-          W.proposal = full; W.selected = new Set(full.units.flatMap((u) => u.hunks.map((x) => x.uid)));
-          renderProposal(result, full);
-        } }), h('div', { class: 'muted', text: (p.instruction || '').slice(0, 80) })));
-      }
-    } catch (e) { list.append(h('span', { class: 'muted', text: e.message })); }
-    return list;
-  }
-
-  async function showPreview(previewBox, result) {
-    const pv = W.preview;
-    const rules = [];
-    for (const id of pv.rules.slice(0, 8)) {
-      const bookId = id.split(':')[1];
-      try { const c = await api.get(`/api/book/${encodeURIComponent(bookId)}/chunk?id=${encodeURIComponent(id)}`); rules.push(h('li', { text: c.label })); }
-      catch (e) { rules.push(h('li', { text: id })); }
-    }
-    const sendBtn = guarded(h('button', { type: 'button', class: 'primary', text: 'Send to ChatGPT' }), async () => {
-      if (W.previewBody !== JSON.stringify({ paper: S.paper, instruction: document.getElementById('w-instr').value, part: document.getElementById('w-part').value || null, book_id: document.getElementById('w-book').value || null, use_book: !!document.getElementById('w-book').value })) {
-        throw new Error('You changed the request after the preview. Preview it again first.');
-      }
-      clear(result).append(h('section', { class: 'card' }, busy('Waiting for ChatGPT...')));
-      const r = await api.post('/api/revise/run', Object.assign(JSON.parse(W.previewBody), { confirm: pv.payload_hash }));
-      let res;
-      try { res = await waitJob(r.job); } catch (e) { clear(result).append(notice('bad', e.message)); throw e; }
-      const prop = await api.get(`/api/proposal?paper=${encodeURIComponent(S.paper)}&id=${res.proposal}`);
-      W.proposal = prop; W.selected = new Set(prop.units.flatMap((u) => u.hunks.map((x) => x.uid)));
-      renderProposal(result, prop);
-    });
-    clear(previewBox).append(h('section', { class: 'card', 'aria-label': 'Preview' },
-      h('h2', { text: 'Preview: nothing has been sent' }),
-      h('p', { class: 'small secondary', text: `Model ${pv.model} at ${pv.endpoint}. ${pv.payloads.length} request(s), about ${fmtTok(pv.est_tokens_in)} tokens in (instructions, book rules and the passage); the whole manuscript is ${fmtTok(pv.manuscript_tokens)} tokens. LaTeX such as citations, formulas and headings is replaced by placeholders and never leaves.` }),
-      pv.warnings.length ? notice('warn', pv.warnings.join(' ')) : null,
-      h('h3', { text: 'Book rules included' }), rules.length ? h('ul', { class: 'small' }, rules) : h('p', { class: 'small muted', text: 'None.' }),
-      h('details', null, h('summary', { text: 'The exact text that would be sent' }),
-        pv.payloads.map((p) => h('div', { class: 'payload' }, h('div', { class: 'small muted', text: `${p.file}, lines ${p.lines[0]}-${p.lines[1]}` }), h('pre', { text: (p.request.instructions || p.request.messages[0].content) + '\n\n----\n\n' + (p.request.input || p.request.messages[1].content) })))),
-      h('div', { class: 'row' }, sendBtn)));
-  }
-
-  function renderProposal(result, p) {
-    clear(result);
-    const sel = W.selected;
-    const nHunks = p.units.reduce((n, u) => n + u.hunks.length, 0);
-    const usage = p.usage || {};
-    const head = h('section', { class: 'card', 'aria-label': 'Proposal' },
-      h('div', { class: 'row' }, h('h2', { text: 'Proposal ' + p.id }), h('span', { class: 'badge ' + (p.status === 'applied' ? 'ok' : p.status === 'failed' ? 'bad' : ''), text: p.status })),
-      h('p', { class: 'small secondary', text: `${p.model} · ${fmtTok(usage.input_tokens)} in / ${fmtTok(usage.output_tokens)} out${usage.cost != null ? ' · cost ' + usage.cost : ''} · book rules: ${p.rules.length}` }),
-      p.instruction ? h('p', { class: 'small', text: 'Instruction: ' + p.instruction }) : null,
-      (p.warnings || []).map((w) => notice('warn', w)));
-    result.append(head);
-    if (p.status === 'failed') head.append(notice('bad', 'ChatGPT did not return an acceptable answer, so nothing is offered. ', p.units.map((u) => u.error).filter(Boolean).join(' ')));
-    if (p.status === 'no_changes') head.append(notice('ok', 'ChatGPT found nothing it would change.'));
-
-    const count = h('span', { class: 'muted small' });
-    const applyBtn = guarded(h('button', { type: 'button', class: 'primary' }), async () => {
-      const accept = [...sel];
-      if (!accept.length) throw new Error('Select at least one change.');
-      let r;
-      try { r = await api.post('/api/proposal/apply', { paper: p.paper, id: p.id, accept }); }
-      catch (e) {
-        head.append(notice('bad', h('strong', { text: 'Not applied: ' }), e.message, e.data && e.data.handoff_available ? ' Nothing was written.' : ''));
-        throw e;
-      }
-      toast('Applied ' + r.accepted.length + ' change(s)');
-      p.status = 'applied';
-      await loadState();
-      renderApplied(result, p, r);
-    });
-    const updateCount = () => { count.textContent = `${sel.size} of ${nHunks} selected`; applyBtn.textContent = `Apply ${sel.size} selected change(s)`; applyBtn.disabled = !sel.size || p.status === 'applied'; };
-    const handBtn = guarded(h('button', { type: 'button', text: 'Hand to Claude' }), async () => {
-      const accept = [...sel];
-      if (!accept.length) throw new Error('Select at least one change.');
-      await api.post('/api/proposal/handoff', { paper: p.paper, id: p.id, accept });
-      p.handoff = { accepted: accept };
-      head.append(notice('ok', h('strong', { text: 'Handed to Claude. ' }), 'In Claude Code say: "apply the proposal I handed you". Claude applies exactly the changes you ticked, cleans them per step 6b, and records it here.'));
-    });
-    handBtn.title = 'Claude applies the ticked changes itself (it runs the watermark clean). Use this when the cleaner is not set up here.';
-    const rejectBtn = guarded(h('button', { type: 'button', text: 'Reject all' }), async () => {
-      await api.post('/api/proposal/record', { paper: p.paper, id: p.id, accepted: [], rejected: 'all' });
-      toast('Rejected; nothing was changed'); p.status = 'rejected'; renderProposal(result, p);
-    });
-    if (nHunks && p.status !== 'applied' && p.status !== 'rejected') {
-      head.append(h('div', { class: 'row' },
-        h('button', { type: 'button', text: 'Select all', onclick: () => { p.units.forEach((u) => u.hunks.forEach((x) => sel.add(x.uid))); result.querySelectorAll('.hunk input[type=checkbox]').forEach((c) => { c.checked = true; }); updateCount(); } }),
-        h('button', { type: 'button', text: 'Select none', onclick: () => { sel.clear(); result.querySelectorAll('.hunk input[type=checkbox]').forEach((c) => { c.checked = false; }); updateCount(); } }),
-        count, h('span', { class: 'grow' }), rejectBtn, handBtn, applyBtn));
-    }
-    for (const u of p.units) {
-      const bad = (u.validators || []).filter((v) => !v.ok);
-      const unit = h('section', { class: 'card', 'aria-label': u.unit_id },
-        h('h3', { text: `${u.file}, lines ${u.line_start}-${u.line_end}` }), h('p', { class: 'small muted', text: u.section_path + (u.retries ? ` · ChatGPT was asked to redo it ${u.retries}x` : '') }),
-        u.status === 'failed' ? notice('bad', u.error || 'failed') : null,
-        bad.length && u.status !== 'failed' ? notice('warn', 'Heads up: ', bad.map((v) => `${v.name}: ${v.detail}`).join('; ')) : null,
-        u.questions.map((q) => notice('warn', h('strong', { text: 'Question for you: ' }), q)));
-      for (const hk of u.hunks) unit.append(hunkCard(hk, sel, updateCount, p.status === 'applied' || p.status === 'rejected'));
-      result.append(unit);
-    }
-    updateCount();
-  }
-
-  function diffSpans(ops, side) {
-    return ops.filter(([op]) => op === '=' || (side === 'old' ? op === '-' : op === '+')).map(([op, t]) => (op === '=' ? document.createTextNode(t) : h(op === '-' ? 'del' : 'ins', { class: 'd', text: t })));
-  }
-  function hunkCard(hk, sel, onChange, locked) {
-    const cb = h('input', { type: 'checkbox', checked: sel.has(hk.uid) || (locked && hk.status === 'accepted'), disabled: locked, 'aria-label': 'Accept change ' + hk.uid });
-    cb.addEventListener('change', () => { if (cb.checked) sel.add(hk.uid); else sel.delete(hk.uid); onChange(); });
-    return h('div', { class: 'hunk', 'aria-label': 'Change ' + hk.uid },
-      h('header', null, cb, h('div', { class: 'grow' },
-        h('div', { class: 'small', text: hk.reasons.length ? hk.reasons.join('; ') : '(no reason given)' }),
-        hk.rules.length ? h('div', { class: 'rule', text: 'Follows: ' + hk.rules.join(', ') }) : null),
-        locked ? h('span', { class: 'badge', text: hk.status }) : null),
-      h('div', { class: 'sides' },
-        h('div', { class: 'side' }, h('h4', { text: 'Now' }), diffSpans(hk.diff, 'old')),
-        h('div', { class: 'side' }, h('h4', { text: 'Proposed' }), diffSpans(hk.diff, 'new'))));
-  }
-
-  function renderApplied(result, p, r) {
-    clear(result);
-    const msg = h('input', { type: 'text', class: 'grow', value: 'Improve writing with the book rules (' + p.id + ')', 'aria-label': 'Commit message' });
-    result.append(h('section', { class: 'card' },
-      h('h2', { text: 'Applied' }),
-      notice('ok', `Wrote ${r.written.map((w) => w.file).join(', ')}. The index followed: ${r.index.changed} changed, ${r.index.unchanged} unchanged.`),
-      h('p', { class: 'small secondary', text: 'The text is only on this computer until you send it to Overleaf.' }),
-      h('div', { class: 'row' }, msg, guarded(h('button', { type: 'button', class: 'primary', text: 'Commit and push to Overleaf' }), async () => {
-        const out = await api.post('/api/papers/sync', { name: p.paper, message: msg.value });
-        await api.post('/api/proposal/record', { paper: p.paper, id: p.id, accepted: [], rejected: [], applied: false, synced: true, note: 'synced from the web app' }).catch(() => {});
-        toast(out.output.split('\n')[0] || 'Done');
-        result.append(h('pre', { class: 'small payload', text: out.output }));
-      }))));
   }
 
   // ------------------------------------------------------------------ Book
@@ -507,6 +305,12 @@
     texture.addEventListener('change', () => { document.documentElement.dataset.texture = texture.checked ? 'on' : 'off'; store.set('ols-texture', texture.checked ? 'on' : 'off'); });
     box.append(h('section', { class: 'card', 'aria-label': 'Display' }, h('h2', { text: 'Display' }),
       h('label', { class: 'check' }, texture, 'Pattern fills on charts (for colour-blind readers and printing)')));
+    box.append(h('section', { class: 'card', 'aria-label': 'Advanced' }, h('h2', { text: 'Advanced' }),
+      h('p', { class: 'small secondary', text: 'You do not need these for daily work. They show what happens behind the scenes.' }),
+      h('ul', null,
+        h('li', null, h('a', { href: '#/panes', text: 'Test the side panes' }), ' (can QuillBot and Overleaf sit beside the chat in your browser?)'),
+        h('li', null, h('a', { href: '#/book', text: 'Writing book library' }), ' (how the book was prepared)'),
+        h('li', null, h('a', { href: '#/paper_index', text: 'What the app remembers about this paper' }), ' (notes and learned preferences)'))));
     if (st.settings.in_docker) box.append(notice('ok', 'Running in Docker: only the registered paper folders, the data folder and the inbox are visible to this app. A paper registered after it started needs ui.sh down and ui.sh up.'));
   });
 
@@ -522,14 +326,20 @@
       const next = cur === 'auto' ? 'light' : cur === 'light' ? 'dark' : 'auto';
       store.set('ols-theme', next); applyTheme(next); toast('Theme: ' + next);
     });
-    document.getElementById('active-paper').addEventListener('change', async (e) => {
-      try { await api.post('/api/papers/active', { name: e.target.value }); await loadState(); route(); } catch (err) { toast(err.message); }
+    document.getElementById('menu-btn').addEventListener('click', () => document.getElementById('app').classList.toggle('drawer-open'));
+    document.getElementById('new-chat').addEventListener('click', async () => {
+      if (!S.paper) return;
+      try {
+        const r = await api.post('/api/chat/new', { paper: S.paper });
+        S.chatId = r.thread.id; await loadThreads();
+        if (S.page === 'chat') route(); else location.hash = '#/chat';
+      } catch (e) { toast(e.message); }
     });
     window.addEventListener('hashchange', route);
     setInterval(() => { if (S.st) loadState().catch(() => {}); }, 60000);
     route();
   }
 
-  window.OLS = { h, clear, api, waitJob, toast, notice, busy, guarded, tile, fmtTok, ago, registerPage, S, route, loadState, paperObj, store };
+  window.OLS = { h, clear, api, waitJob, toast, notice, busy, guarded, tile, fmtTok, ago, registerPage, S, route, loadState, loadThreads, renderThreads, paperObj, setPaper, store };
   window.addEventListener('load', init);
 }());

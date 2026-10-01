@@ -29,13 +29,13 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (book_index, chunk_book, config, events, health, openai_client, panes, paper_index, preferences,  # noqa: E402
+from writing_core import (book_index, chat, chunk_book, config, events, health, openai_client, panes, paper_index, preferences,  # noqa: E402
                           retrieve, revise, rule_cards, stats, taxonomy, watermark)
 
 STATIC = Path(__file__).resolve().parent / "static"
 FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
          "/charts.js": ("charts.js", "text/javascript; charset=utf-8"), "/pages.js": ("pages.js", "text/javascript; charset=utf-8"),
-         "/panes.js": ("panes.js", "text/javascript; charset=utf-8"),
+         "/panes.js": ("panes.js", "text/javascript; charset=utf-8"), "/chat.js": ("chat.js", "text/javascript; charset=utf-8"),
          "/style.css": ("style.css", "text/css; charset=utf-8")}
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
        "frame-src " + " ".join(panes.FRAME_HOSTS) + "; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -57,10 +57,10 @@ class Jobs:
         self.lock = threading.Lock()
         self.items = {}
 
-    def submit(self, label, fn, with_progress=False):
+    def submit(self, label, fn, with_progress=False, with_steps=False, meta=None):
         jid = secrets.token_hex(6)
         with self.lock:
-            self.items[jid] = {"id": jid, "label": label, "status": "running", "started": time.time()}
+            self.items[jid] = {"id": jid, "label": label, "status": "running", "started": time.time(), "meta": meta or {}}
             for old in sorted(self.items, key=lambda k: self.items[k]["started"])[:-40]:
                 self.items.pop(old, None)
 
@@ -68,9 +68,13 @@ class Jobs:
             with self.lock:
                 self.items[jid]["progress"] = [done, total]
 
+        def set_steps(steps):
+            with self.lock:
+                self.items[jid]["steps"] = steps
+
         def run():
             try:
-                res = fn(progress) if with_progress else fn()
+                res = fn(progress, set_steps) if with_steps else fn(progress) if with_progress else fn()
                 with self.lock:
                     self.items[jid].update(status="done", result=res, finished=time.time())
             except Exception as e:  # noqa: BLE001
@@ -83,6 +87,10 @@ class Jobs:
 
         threading.Thread(target=run, daemon=True).start()
         return jid
+
+    def running(self, **meta):
+        with self.lock:
+            return [dict(j) for j in self.items.values() if j["status"] == "running" and all(j.get("meta", {}).get(k) == v for k, v in meta.items())]
 
     def get(self, jid):
         with self.lock:
@@ -193,17 +201,18 @@ def api_set_active(r):
     return {"active": name}
 
 
-def api_git(r, action):
-    (name,) = need(r.body, "name")
+_AUTH_MARKERS = ("could not read password", "terminal prompts disabled", "authentication failed", "invalid username or password", "could not read username")
+
+
+def git_action(name, action, message=None):
+    """pull | status | sync through the same code Claude uses. -> {output, [hint, friendly]}; the index follows a pull or sync."""
     paper_ref(name)
     args = {"repo_path": name, "_source": "ui"}
     fn = {"pull": overleaf_mcp.tool_pull, "status": overleaf_mcp.tool_status, "sync": overleaf_mcp.tool_sync}[action]
     if action == "sync":
-        args["message"] = str(r.body.get("message") or "Update via the Overleaf skill web app")[:200]
+        args["message"] = str(message or "Update via the Overleaf skill web app")[:200]
     out = fn(args)
-    low = out.lower()
-    if any(m in low for m in ("could not read password", "terminal prompts disabled", "authentication failed", "invalid username or password",
-                              "could not read username")):
+    if any(m in out.lower() for m in _AUTH_MARKERS):
         have = (config.data_dir() / "overleaf_git.json").exists()
         return {"output": out, "hint": "token", "friendly": (
             "Overleaf did not accept the sign-in. Your Overleaf Git token is not accepted: create a new one in Overleaf (Account Settings, Git Integration) and paste it in Settings."
@@ -215,6 +224,11 @@ def api_git(r, action):
         except Exception:  # noqa: BLE001
             pass
     return {"output": out}
+
+
+def api_git(r, action):
+    (name,) = need(r.body, "name")
+    return git_action(name, action, r.body.get("message"))
 
 
 def api_paper_outline(r):
@@ -367,9 +381,20 @@ def api_revise_run(r):
 
 
 def _trim(p):
-    """The proposal as the page needs it (without the LaTeX placeholder maps and segment lists)."""
+    """The suggestion as the page needs it: no placeholder maps or segment lists, but the texts the tone panel works with."""
     q = {k: v for k, v in p.items() if k != "units"}
-    q["units"] = [{k: v for k, v in u.items() if k not in ("mapping", "masked_original", "segments")} for u in p["units"]]
+    q["rule_labels"] = {}
+    for rid in p.get("rules", [])[:12]:  # "ch05 Style, p.141" instead of an id, so the page can say where the advice comes from
+        try:
+            q["rule_labels"][rid] = book_index.get_chunk(rid.split(":")[1], rid)["label"]
+        except Exception:  # noqa: BLE001
+            pass
+    q["units"] = []
+    for u in p["units"]:
+        v = {k: x for k, x in u.items() if k not in ("mapping", "masked_original", "segments", "model_version")}
+        if u["status"] != "failed":
+            v["views"] = revise.unit_views(u)
+        q["units"].append(v)
     return q
 
 
@@ -487,6 +512,264 @@ def api_test_frames(r):
     url = panes.overleaf_url(p)
     out["overleaf"] = panes.probe(url) if url else {"url": None, "error": "this paper's Overleaf address has no project id"}
     return out
+
+
+# ---------------------------------------------------------------------------- chat
+
+PLAIN_OPENAI = {"auth": "OpenAI did not accept your API key. Check it in Settings.", "not_found": "OpenAI does not know the model name in your Settings. Check the model there.",
+                "rate": "OpenAI says you are sending too fast or have reached a limit. Wait a minute and ask again.",
+                "quota": "OpenAI says your account has no credit or has reached its spending limit.", "network": "I could not reach OpenAI. Check your internet connection and ask again.",
+                "server": "OpenAI had a problem on its side. Ask again in a moment.", "refusal": "OpenAI declined to edit that text.",
+                "truncated": "OpenAI's answer was cut off. Try a smaller part of the text."}
+
+
+def plain_error(e):
+    if isinstance(e, openai_client.OpenAIError):
+        return PLAIN_OPENAI.get(e.kind, f"OpenAI reported a problem: {e}")
+    if isinstance(e, config.ConfigError):
+        return "ChatGPT is not set up yet. Open Settings and add your OpenAI key and model."
+    return friendly(e) or "Something went wrong on my side (details are in the container log)."
+
+
+def _chat_ctx(r):
+    paper = (r.body or {}).get("paper") or r.arg("paper", "")
+    n, p = paper_ref(paper)
+    try:
+        cid = chat.ensure_thread(p, (r.body or {}).get("id") or r.arg("id"))
+    except ValueError:
+        raise ApiError(400, "bad chat id") from None
+    return n, p, cid
+
+
+def api_chat_threads(r):
+    n, p = paper_ref(r.arg("paper", ""))
+    chat.ensure_thread(p)
+    return {"threads": chat.list_threads(p)}
+
+
+def api_chat_new(r):
+    n, p = paper_ref((r.body or {}).get("paper", ""))
+    return {"thread": chat.new_thread(p)}
+
+
+def api_chat_rename(r):
+    n, p = paper_ref(r.body.get("paper", ""))
+    try:
+        chat.rename(p, r.body.get("id", ""), str(r.body.get("title", ""))[:80])
+    except ValueError as e:
+        raise ApiError(400, str(e)) from None
+    return {"ok": True}
+
+
+def api_chat_delete(r):
+    n, p = paper_ref(r.body.get("paper", ""))
+    try:
+        chat.delete(p, r.body.get("id", ""))
+    except ValueError as e:
+        raise ApiError(400, str(e)) from None
+    return {"ok": True}
+
+
+def api_chat_get(r):
+    n, p, cid = _chat_ctx(r)
+    ostate, omsg = config.openai_status()
+    return {"id": cid, "thread": chat.get_thread(p, cid), "chips": [{"label": a, "text": b} for a, b in chat.CHIPS],
+            "running": [{"job": j["id"], "label": j["label"]} for j in r.app.jobs.running(paper=n, chat=cid)],
+            "openai": ostate, "can_apply": bool(config.ui_cfg()["watermark_url"]), "settings": config.paper_settings(p)}
+
+
+def api_chat_cancel(r):
+    n, p, cid = _chat_ctx(r)
+    (mid,) = need(r.body, "message")
+    m = chat.get_message(p, cid, str(mid))
+    if not m or m["kind"] != "plan" or m["data"].get("state") != "waiting":
+        raise ApiError(409, "that request is not waiting")
+    chat.update(p, cid, m["id"], state="cancelled")
+    return {"ok": True}
+
+
+def api_chat_count(r):
+    n, p = paper_ref(r.body.get("paper", ""))
+    ids = [str(i) for i in (r.body.get("chunk_ids") or [])][:200]
+    return chat.count(n, p, ids)
+
+
+def _start_pass(app, n, p, cid, plan_mid):
+    """Send a prepared request to OpenAI in the background; the answer lands in the chat when it is done."""
+    msg = chat.get_message(p, cid, plan_mid)
+    if not msg or msg["kind"] != "plan":
+        raise ApiError(404, "that request is not in this chat")
+    if msg["data"].get("state") == "sent":
+        raise ApiError(409, "that request was already sent")
+    plan = msg["data"]["plan"]
+    chat.update(p, cid, plan_mid, state="sent")
+
+    def work(progress, set_steps):
+        try:
+            again = chat.plan(n, p, plan["instruction"], plan["chunk_ids"], book_id=plan.get("book"))
+            if again["payload_hash"] != plan["payload_hash"]:
+                raise ValueError("Your paper changed after I prepared this request (for example after getting the latest from Overleaf). Please ask again.")
+            res = revise.run(n, p, plan["instruction"], chunk_ids=plan["chunk_ids"], book_id=plan.get("book"), dry_run=False,
+                             confirm=plan["payload_hash"], source="web", progress=set_steps)
+            if res["status"] == "preview":
+                raise ValueError("Your paper changed after I prepared this request. Please ask again.")
+        except Exception as e:  # noqa: BLE001
+            chat.update(p, cid, plan_mid, state="failed")
+            chat.append(p, cid, "assistant", "error", plain_error(e))
+            raise
+        prop = res["proposal"]
+        api_kind = next((u.get("error_kind") for u in prop["units"] if u.get("error_kind") in PLAIN_OPENAI), None)
+        if prop["status"] == "failed" and api_kind:  # the key, the account or the connection is the problem, not the text
+            chat.update(p, cid, plan_mid, state="failed")
+            chat.append(p, cid, "assistant", "error", PLAIN_OPENAI[api_kind])
+            return {"proposal": prop["id"], "failed": api_kind}
+        chat.append(p, cid, "assistant", "result", "", proposal=prop["id"], chunk_ids=plan["chunk_ids"], plan=plan_mid, status=prop["status"],
+                    usage=prop["usage"], steps=prop.get("steps", []))
+        return {"proposal": prop["id"]}
+    return app.jobs.submit(f"Improving {n}", work, with_steps=True, meta={"paper": n, "chat": cid})
+
+
+HELP_TEXT = ("Tell me what to do with your paper, in your own words. For example:\n"
+             "- improve the flow of the text before Figure 1 in the methods\n"
+             "- fix the grammar in the introduction\n"
+             "- make the abstract shorter\n"
+             "- peer review my paper\n"
+             "- or paste a DOI to add the reference.\n"
+             "I read the right part of your paper, add the advice from your writing book, and ask OpenAI for a better version with an explanation. "
+             "You decide what to keep; nothing is saved until you approve it.")
+
+
+def api_chat_send(r):
+    n, p, cid = _chat_ctx(r)
+    text = str(r.body.get("text", "")).strip()[:4000]
+    ticked = [str(i) for i in (r.body.get("chunk_ids") or [])][:200] or None
+    if not text and not ticked:
+        raise ApiError(400, "say what you want")
+    text = text or "Improve this."
+    out = [chat.append(p, cid, "user", "text", text, **({"chunk_ids": ticked} if ticked else {}))]
+    kind = chat.intent(text) if not ticked else "edit"
+    job = None
+    if kind == "help":
+        out.append(chat.append(p, cid, "assistant", "text", HELP_TEXT))
+    elif kind == "refs":
+        out.append(chat.append(p, cid, "assistant", "text", "Adding references from the chat arrives in the next update. For now, use References in the menu."))
+    elif kind == "review":
+        out.append(chat.append(p, cid, "assistant", "text", "Peer review from the chat arrives in an upcoming update."))
+    else:
+        if config.openai_status()[0] != "ok":
+            out.append(chat.append(p, cid, "assistant", "error", "ChatGPT is not set up yet. Open Settings and add your OpenAI key and model, then ask again."))
+            return {"messages": out}
+        thread = chat.get_thread(p, cid)
+        prior = [m for m in thread["messages"] if m["id"] != out[0]["id"]]
+        try:
+            u = chat.understand(n, p, text, chunk_ids=ticked, last_ids=chat.last_target({"messages": prior}))
+        except (ValueError, FileNotFoundError, paper_index.IsolationError) as e:
+            out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
+            return {"messages": out}
+        if u["status"] == "empty":
+            out.append(chat.append(p, cid, "assistant", "error", u["why"]))
+        elif u["status"] == "choose":
+            out.append(chat.append(p, cid, "assistant", "ask", u["why"], original=text, options=u["options"], preselect=u["preselect"], sections=u["sections"],
+                                   in_part=u["in_part"], limit=u["limit"], notes=u["notes"]))
+        else:
+            try:
+                pl = chat.plan(n, p, chat.instruction_for(text), u["chunk_ids"])
+            except (revise.ReviseError, config.ConfigError, openai_client.OpenAIError) as e:
+                out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
+                return {"messages": out}
+            guard = config.ui_cfg()["guard_passages"]
+            ask = config.paper_settings(p)["confirm_before_send"] or pl["units"] > guard
+            reason = ("big" if pl["units"] > guard else "setting") if ask else None
+            m = chat.append(p, cid, "assistant", "plan", "", plan=pl, title=u["title"], notes=u["notes"], chunk_ids=u["chunk_ids"], state="waiting", confirm=reason)
+            out.append(m)
+            if not ask:
+                job = _start_pass(r.app, n, p, cid, m["id"])
+                out[-1] = chat.get_message(p, cid, m["id"])
+    return {"messages": out, "job": job}
+
+
+def api_chat_run(r):
+    n, p, cid = _chat_ctx(r)
+    (mid,) = need(r.body, "message")
+    return {"job": _start_pass(r.app, n, p, cid, str(mid))}
+
+
+def api_proposal_check(r):
+    n, p = paper_ref(r.body.get("paper", ""))
+    texts = r.body.get("texts")
+    if not isinstance(texts, dict):
+        raise ApiError(400, "texts must be an object of passage ids to text")
+    return {"checks": revise.check_adopted(p, _pid(r), {str(k): str(v)[:60000] for k, v in texts.items()})}
+
+
+def api_proposal_approve(r):
+    """Save the suggestion (or the author's own version of it) into the files, and optionally send it to Overleaf in the same click."""
+    n, p = paper_ref(r.body.get("paper", ""))
+    pid = _pid(r)
+    texts, accept, cid = r.body.get("texts"), r.body.get("accept", "all"), r.body.get("chat")
+    if texts is not None:
+        if not isinstance(texts, dict):
+            raise ApiError(400, "texts must be an object of passage ids to text")
+        ad = revise.adopt(n, p, pid, {str(k): str(v)[:60000] for k, v in texts.items()}, acknowledge=bool(r.body.get("acknowledge")), source="web")
+        if not ad["ok"]:
+            return {"ok": False, "needs_ack": ad["needs_ack"], "blocked": ad["blocked"], "checks": ad["checks"]}
+        accept = "all"
+    if r.body.get("mode") == "handoff":
+        try:
+            h = revise.handoff(n, p, pid, accept=accept, source="web")
+        except revise.ReviseError as e:
+            raise ApiError(409, str(e)) from None
+        return {"ok": True, "handoff": h}
+    url = config.ui_cfg()["watermark_url"]
+    cleaner = watermark.make_cleaner(url) if url else None
+    try:
+        out = revise.apply(n, p, pid, accept=accept, cleaner=cleaner, source="web", note="edited by you" if texts is not None else "")
+    except revise.ReviseError as e:
+        raise ApiError(409, str(e), handoff_available=True) from None
+    files = sorted({w["file"] for w in out["written"]})
+    res = {"ok": True, "applied": out, "files": files}
+    if cid:
+        try:
+            chat.append(p, cid, "assistant", "note", f"Saved in {', '.join(files)}." + (" This is your own version." if texts is not None else ""), proposal=pid)
+        except ValueError:
+            pass
+    if r.body.get("push"):
+        prop = revise.get_proposal(p, pid)
+        what = ", ".join(taxonomy.label(x) for x in prop.get("part") or []) or "text"
+        res["push"] = git_action(n, "sync", f"Writing assistant: improve {what}")
+        if cid and "hint" not in res["push"]:
+            try:
+                chat.append(p, cid, "assistant", "note", "Sent to Overleaf.", proposal=pid)
+            except ValueError:
+                pass
+    return res
+
+
+def api_sections(r):
+    n, p = paper_ref(r.m.group(1))
+    paper_index.refresh(n, p, trigger="outline", source="web")
+    return {"sections": chat._sections([c for c in paper_index.list_chunks(n, p)["chunks"] if c["kind"] == "tex"])}
+
+
+def api_paper_text(r):
+    """The paper's own lines for the 'Paper text' pane: the pieces a request used, or a whole section, read fresh from the files."""
+    n, p = paper_ref(r.m.group(1))
+    ids = [i for i in (r.arg("ids", "") or "").split(",") if i][:80]
+    out, total = [], 0
+    for rid in ids:
+        cid, a, b = revise.split_range_id(rid)
+        got = paper_index.get_chunks(n, p, [cid])
+        if not got or got[0]["kind"] != "tex":
+            continue
+        c = got[0]
+        a, b = (max(a, c["line_start"]), min(b, c["line_end"])) if a else (c["line_start"], c["line_end"])
+        lines, _ = revise._read_lines(Path(p["path"]) / c["file"])
+        text = "\n".join(lines[a - 1:b])
+        total += len(text)
+        if total > 300000:
+            break
+        out.append({"id": rid, "file": c["file"], "lines": [a, b], "section": c["section_path"], "text": text})
+    return {"pieces": out}
 
 
 def api_settings(r):
@@ -683,6 +966,11 @@ ROUTES = [
     ("POST", r"^/api/refs/mendeley$", api_refs_mendeley), ("POST", r"^/api/proposal/handoff$", api_handoff),
     ("POST", r"^/api/secrets/openai$", api_secret_openai), ("POST", r"^/api/secrets/git$", api_secret_git),
     ("GET", r"^/api/panes$", api_panes), ("POST", r"^/api/test/frames$", api_test_frames),
+    ("GET", r"^/api/chat/threads$", api_chat_threads), ("POST", r"^/api/chat/new$", api_chat_new), ("POST", r"^/api/chat/rename$", api_chat_rename),
+    ("POST", r"^/api/chat/delete$", api_chat_delete), ("GET", r"^/api/chat$", api_chat_get), ("POST", r"^/api/chat/send$", api_chat_send),
+    ("POST", r"^/api/chat/run$", api_chat_run), ("POST", r"^/api/chat/count$", api_chat_count), ("POST", r"^/api/chat/cancel$", api_chat_cancel),
+    ("POST", r"^/api/proposal/check$", api_proposal_check), ("POST", r"^/api/proposal/approve$", api_proposal_approve),
+    ("GET", r"^/api/paper/([^/]+)/sections$", api_sections), ("GET", r"^/api/paper/([^/]+)/text$", api_paper_text),
 ]
 ROUTES = [(m, re.compile(p), fn) for m, p, fn in ROUTES]
 EXTENSIONS = []  # (method, compiled regex, fn): later phases register their pages here

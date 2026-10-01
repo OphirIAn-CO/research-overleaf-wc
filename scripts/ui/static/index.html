@@ -3,26 +3,30 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Overleaf skill</title>
+<title>Overleaf assistant</title>
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<div class="shell">
-  <header class="top">
-    <span class="brand">Overleaf skill</span>
-    <label class="row tight small secondary" for="active-paper">Paper <select id="active-paper" aria-label="Active paper"></select></label>
+<div class="app" id="app">
+  <header class="mobile-bar"><button class="ghost" id="menu-btn" type="button" aria-label="Show the menu">Menu</button><span class="brand">Overleaf assistant</span></header>
+  <aside class="sidebar" id="sidebar" aria-label="Papers and chats">
+    <div class="row brand-row"><span class="brand">Overleaf assistant</span><span class="grow"></span><button class="ghost small" id="theme-btn" type="button" aria-label="Switch light and dark theme">Theme</button></div>
+    <h2 class="side-h">Papers</h2>
+    <div id="paper-list" class="side-list"></div>
+    <div class="row"><h2 class="side-h grow">Chats</h2><button class="ghost small" id="new-chat" type="button">+ New chat</button></div>
+    <div id="chat-list" class="side-list"></div>
+    <nav class="side-nav" id="nav" aria-label="Pages"></nav>
     <span class="badge-local" id="local-badge">Local only</span>
-    <span class="grow"></span>
-    <button class="ghost small" id="theme-btn" type="button" aria-label="Switch light and dark theme">Theme</button>
-  </header>
-  <nav class="side" id="nav" aria-label="Pages"></nav>
+  </aside>
   <main id="main" tabindex="-1"><p class="muted">Loading...</p></main>
+  <aside id="panes-area" class="panes-area" aria-label="Side panes" hidden></aside>
 </div>
 <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
 <script src="/app.js"></script>
 <script src="/charts.js"></script>
 <script src="/pages.js"></script>
 <script src="/panes.js"></script>
+<script src="/chat.js"></script>
 </body>
 </html>

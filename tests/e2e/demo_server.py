@@ -21,7 +21,8 @@ os.environ["OVERLEAF_SKILL_HOME"] = home
 
 from tests.fake_openai import FakeOpenAI, passage_of  # noqa: E402
 from tests.helpers import common, git, load_ui_server  # noqa: E402
-from tests.test_paper import BIB, MAIN, METHODS  # noqa: E402
+from tests.test_paper import BIB, METHODS  # noqa: E402
+from tests.test_v2_chat import MAIN  # noqa: E402  (has a figure and a table, so 'before Figure 1' can be tried)
 from tests.test_ui_server import FakeWatermark  # noqa: E402
 from writing_core import book_index, config, events, paper_index, retrieve  # noqa: E402
 from tests.helpers import make_paper  # noqa: E402
@@ -40,7 +41,7 @@ def main():
     papers_dir = Path(home) / "papers"
     names = {}
     for name, tweak in (("soil-yield", lambda s: s), ("traffic-gnn", lambda s: s.replace("Soil Moisture Effects on Crop Yield", "Graph Networks for Traffic")
-                                                         .replace("Crop yield depends on water.", "Traffic forecasting depends on graph structure."))):
+                                                         .replace("Crop yield depends on water and on soil.", "Traffic forecasting depends on graph structure."))):
         root = make_paper(papers_dir, name, tweak(MAIN), bib=BIB, extra={"sections/methods.tex": tweak(METHODS)})
         git(root, "add", "-A")
         git(root, "commit", "-q", "-m", "init")
@@ -54,7 +55,12 @@ def main():
         t = t.replace("We sampled 40 farms by stratified random sampling.", "We drew a stratified random sample of 40 farms.")
         t = t.replace("Informed consent was obtained from all farmers.", "All farmers gave informed consent.")
         t = t.replace("We fitted", "We estimated")
-        return {"revised_text": t, "questions": ["What was the response rate?"], "changes": [
+        t = t.replace("Each region has a distinct climate and soil.", "Each region has its own climate and soil.")
+        t = t.replace("The study was conducted in three regions that differ in rainfall and elevation.", "The study covers three regions that differ in rainfall and elevation.")
+        return {"approach": "The opening sentences were passive and repeated the same idea. I made the actor explicit and joined the two sentences so the paragraph reads in one line of thought.",
+                "revised_text": t, "questions": ["What was the response rate?"] if "farmers" in t else [], "changes": [
+            {"before": "The study was conducted in three regions that differ in rainfall and elevation.", "after": "The study covers three regions that differ in rainfall and elevation.", "reason": "Active voice reads faster.", "rule": "B:mini:c05.s01.k01"},
+            {"before": "Each region has a distinct climate and soil.", "after": "Each region has its own climate and soil.", "reason": "Shorter and plainer.", "rule": "B:mini:c02.s01.k01"},
             {"before": "Informed consent was obtained from all farmers.", "after": "All farmers gave informed consent.", "reason": "Use the active voice when the actor matters.", "rule": "B:mini:c05.s01.k01"},
             {"before": "We sampled 40 farms by stratified random sampling.", "after": "We drew a stratified random sample of 40 farms.", "reason": "Name the sampling method plainly.", "rule": "B:mini:c02.s01.k01"}]}
     oa.script = [edit] * 50

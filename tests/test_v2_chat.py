@@ -152,7 +152,7 @@ class Understand(Base):
         text = self.lines(r["chunk_ids"])
         self.assertIn("The study was conducted", text)
         self.assertNotIn("second paragraph", text)
-        self.assertEqual(r["notes"], ["Only the first 1 paragraph."])
+        self.assertEqual(r["notes"], ["Only the first paragraph."])
         r = chat.understand(self.name, self.proj, "shorten the last paragraph of the methods")
         self.assertIn("We fitted a mixed-effects", self.lines(r["chunk_ids"]))
         r = chat.understand(self.name, self.proj, "improve the second paragraph in the methods")

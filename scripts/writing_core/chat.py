@@ -302,7 +302,8 @@ def _apply_para(proj, cands, req):
     pick = paras[:n] if which == "first" else paras[-n:] if which == "last" else paras[n - 1:n]
     if not pick:
         return [_rid(c) for c in cands], f"There is no paragraph {n} there, so I used everything."
-    name = {"first": f"first {n} paragraph{'s' if n != 1 else ''}", "last": f"last {n} paragraph{'s' if n != 1 else ''}", "nth": f"paragraph {n}"}[which]
+    many = f"{n} paragraphs" if n != 1 else "paragraph"
+    name = {"first": f"first {many}", "last": f"last {many}", "nth": f"paragraph {n}"}[which]
     return [_rid(c, a, b) for c, a, b in pick], f"Only the {name}."
 
 

@@ -433,7 +433,8 @@ def unit_views(u):
     suggested = latex_mask.assemble(u["segments"], accepted) if u.get("segments") else u.get("masked_original", "")
     return {"original_masked": u.get("masked_original", ""), "suggested_masked": suggested,
             "suggested_latex": latex_mask.unmask(suggested, u.get("mapping", {})), "original_latex": u.get("original_text", ""),
-            "tags": len(latex_mask.placeholders(u.get("masked_original", "")))}
+            "tags": len(latex_mask.placeholders(u.get("masked_original", ""))),
+            "legend": {k: (v if len(v) <= 70 else v[:67] + "...") for k, v in u.get("mapping", {}).items()}}
 
 
 def _kind(latex):
@@ -475,8 +476,10 @@ def check_adopted(proj, pid, texts):
         fixed, results, missing = latex_mask.check_author_text(u["masked_original"], str(texts[u["unit_id"]]), u["mapping"])
         errs, warns = latex_mask.errors(results), [r for r in results if not r["ok"] and r["severity"] == "warn"]
         tags = len(latex_mask.placeholders(u["masked_original"]))
+        suggested = unit_views(u)["suggested_masked"]
         out[u["unit_id"]] = {"ok": not errs, "has_warnings": bool(warns), "messages": describe_checks(results, missing, tags), "text": fixed,
-                             "latex": latex_mask.unmask(fixed, u["mapping"]), "same_as_original": fixed.strip() == u["masked_original"].strip()}
+                             "latex": latex_mask.unmask(fixed, u["mapping"]), "same_as_original": fixed.strip() == u["masked_original"].strip(),
+                             "diff_original": latex_mask.word_diff(u["masked_original"], fixed), "diff_model": latex_mask.word_diff(suggested, fixed)}
     return out
 
 

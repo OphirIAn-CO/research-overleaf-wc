@@ -109,5 +109,110 @@
       report));
   });
 
-  window.OLS.panes = { openBeside, framePane };
+  // ------------------------------------------------------------------ the panes beside the chat
+  const enc = encodeURIComponent;
+  const KEY = 'ols-panes';
+  const TITLES = { quillbot: 'QuillBot', overleaf: 'Overleaf', text: 'Paper text' };
+  const A = { enabled: [], width: 0, ids: [], prev: {}, urls: {}, mounted: {} };
+  try { A.enabled = JSON.parse(window.OLS.store.get(KEY) || '[]').filter((k) => TITLES[k]); A.width = Number(window.OLS.store.get(KEY + '-w')) || 0; } catch (e) { A.enabled = []; }
+
+  const area = () => document.getElementById('panes-area');
+  const save = () => { window.OLS.store.set(KEY, JSON.stringify(A.enabled)); };
+
+  async function addressesFor(paper) {
+    if (A.urls.paper !== paper) A.urls = Object.assign({ paper }, await api.get('/api/panes?paper=' + enc(paper)));
+    return A.urls;
+  }
+
+  function stripRange(id) { return id.replace(/@\d+-\d+$/, ''); }
+
+  async function loadText(box, selectEl) {
+    if (!S.paper) return;
+    const ids = A.manual || A.ids;
+    if (!ids.length) { clear(box).append(h('p', { class: 'muted small', text: 'Ask for a change and the part of your paper I am working on shows here. You can also pick a section above.' })); return; }
+    const r = await api.get(`/api/paper/${enc(S.paper)}/text?ids=${enc(ids.join(','))}`);
+    const frag = [];
+    for (const piece of r.pieces) {
+      const lines = piece.text.split('\n');
+      const before = A.prev[piece.id] ? new Set(A.prev[piece.id]) : null;
+      frag.push(h('h4', { class: 'small', text: `${piece.section.split(' > ').slice(-1)[0]} · ${piece.file} lines ${piece.lines[0]} to ${piece.lines[1]}` }));
+      frag.push(h('div', { class: 'ptext mono' }, lines.map((l, i) => h('div', { class: 'ln' + (before && !before.has(l) && l.trim() ? ' changed' : '') },
+        h('span', { class: 'no', 'aria-hidden': 'true', text: String(piece.lines[0] + i) }), h('span', { class: 'tx', text: l || ' ' })))));
+      A.prev[piece.id] = lines;
+    }
+    clear(box).append(...frag);
+  }
+
+  async function mountText(host) {
+    const box = h('div', { class: 'pane-scroll' });
+    const sel = h('select', { 'aria-label': 'Show' }, h('option', { value: '', text: 'What I am working on' }));
+    let sections = [];
+    try { sections = (await api.get(`/api/paper/${enc(S.paper)}/sections`)).sections; } catch (e) { sections = []; }
+    sections.forEach((x, i) => sel.append(h('option', { value: String(i), text: x.label })));
+    sel.addEventListener('change', () => { A.manual = sel.value === '' ? null : sections[Number(sel.value)].chunk_ids; A.prev = {}; loadText(box).catch((e) => toast(e.message)); });
+    host.append(h('div', { class: 'row' }, h('h2', { text: 'Paper text' }), h('span', { class: 'grow' }), sel,
+      h('button', { type: 'button', text: 'Refresh', onclick: () => loadText(box).catch((e) => toast(e.message)) })), box);
+    A.textBox = box;
+    await loadText(box);
+  }
+
+  async function renderArea() {
+    const host = area();
+    if (!host) return;
+    clear(host);
+    A.textBox = null;
+    const on = A.enabled.length > 0 && document.body.dataset.page === 'chat' && !!S.paper;
+    host.hidden = !on;
+    document.body.dataset.panes = on ? '1' : '0';
+    if (!on) return;
+    if (A.width) host.style.setProperty('--panes-w', A.width + 'px');
+    const grip = h('div', { class: 'grip', role: 'separator', 'aria-orientation': 'vertical', title: 'Drag to resize' });
+    grip.addEventListener('pointerdown', (ev) => {
+      ev.preventDefault();
+      const move = (e) => { A.width = Math.max(300, Math.min(window.innerWidth * 0.7, window.innerWidth - e.clientX)); host.style.setProperty('--panes-w', A.width + 'px'); };
+      const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); window.OLS.store.set(KEY + '-w', String(Math.round(A.width))); };
+      window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+    });
+    host.append(grip);
+    const urls = await addressesFor(S.paper).catch(() => ({}));
+    for (const key of A.enabled) {
+      const card = h('div', { class: 'card pane fill' });
+      host.append(card);
+      if (key === 'text') { await mountText(card); continue; }
+      const pane = framePane(TITLES[key], urls[key]);
+      card.replaceWith(pane.el); pane.el.classList.add('fill');
+      if (urls[key]) pane.load();
+      if (key === 'quillbot') pane.el.append(h('p', { class: 'small muted', text: 'Only what you paste here goes to QuillBot. If it stays blank or will not sign in, use "Open beside the app".' }));
+    }
+  }
+
+  /* The three switches shown in the chat header. */
+  function bar() {
+    const el = h('div', { class: 'row tight pane-bar', role: 'group', 'aria-label': 'Side panes' });
+    const draw = () => {
+      clear(el).append(h('span', { class: 'small muted', text: 'Beside the chat:' }), ...Object.entries(TITLES).map(([k, label]) =>
+        h('button', { type: 'button', class: 'small', 'aria-pressed': String(A.enabled.includes(k)), text: label, onclick: () => {
+          A.enabled = A.enabled.includes(k) ? A.enabled.filter((x) => x !== k) : [...A.enabled, k]; save(); draw(); renderArea();
+        } })));
+    };
+    draw();
+    return el;
+  }
+
+  function setTargetFromThread(messages) {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      const ids = m.role === 'assistant' && m.data && m.data.chunk_ids;
+      if (ids && ids.length) {
+        const next = [...new Set(ids.map(stripRange))];
+        if (JSON.stringify(next) !== JSON.stringify(A.ids)) { A.ids = next; A.prev = {}; if (A.textBox && !A.manual) loadText(A.textBox).catch(() => {}); }
+        return;
+      }
+    }
+  }
+  function refreshText(afterApply) { if (A.textBox) loadText(A.textBox).catch(() => {}); }
+  function onRoute(page) { document.body.dataset.page = page; renderArea(); }
+
+  window.OLS.panes = { openBeside, framePane, bar, onRoute, setTargetFromThread, refreshText };
+
 }());
