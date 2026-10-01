@@ -60,52 +60,148 @@ def to_mendeley(bib, doi, bib_path, group):
     return f"Mendeley: added to {group}." if r.returncode == 0 else "Mendeley FAILED: " + (r.stdout + r.stderr)[-200:]
 
 
-def log_added(bib_path, doi, key, source, mendeley, pushed=None):
+def log_added(bib_path, doi, key, source, mendeley, pushed=None, mendeley_state=None):
     """Metadata-only `doi_added` event in the paper's own log, so the web app's Monitor and References pages see additions
     made from Telegram, the CLI or the web. Optional and silent: the bot works without the writing package."""
     try:
         from writing_core import config, events
         name = common.project_for_bib(bib_path)
         _, proj = common.resolve(name, check=False)
-        events.log(config.paper_dir(proj), events.DOI_ADDED, paper=name, source=source, doi=doi, key=key, mendeley=bool(mendeley), pushed=pushed)
+        events.log(config.paper_dir(proj), events.DOI_ADDED, paper=name, source=source, doi=doi, key=key, mendeley=bool(mendeley), pushed=pushed,
+                   mendeley_state=mendeley_state)
     except Exception:  # noqa: BLE001
         pass
 
 
-def add(doi, bib_path, push=False, group=None, source="cli"):
-    """Returns a one-line status message. Never raises on user-level problems."""
+def _field(bib, name):
+    m = re.search(rf"\b{name}\s*=\s*[{{\"]+(.+?)[}}\"]+,?\s*(?:\n|$)", bib, re.S | re.I)
+    return re.sub(r"[{}]", "", re.sub(r"\s+", " ", m.group(1))).strip() if m else ""
+
+
+def _existing_key(text, doi):
+    """The cite key of the entry that already holds this DOI."""
+    i = text.lower().find(doi.lower())
+    if i < 0:
+        return None
+    keys = re.findall(r"@\w+\s*\{\s*([^,\s]+)\s*,", text[:i])
+    return keys[-1] if keys else None
+
+
+def _paper_of(bib_path):
+    """(name, proj) of the registered paper that owns this bib file, or (None, None)."""
+    try:
+        name = common.project_for_bib(bib_path)
+        return common.resolve(name, check=False)
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+def pending_path(proj):
+    from writing_core import config
+    return config.paper_dir(proj) / "pending_mendeley.json"
+
+
+def pending_list(proj):
+    try:
+        return json.loads(pending_path(proj).read_text())
+    except (FileNotFoundError, ValueError, KeyError):
+        return []
+
+
+def _save_pending(proj, items):
+    from writing_core import config
+    d = config.ensure_paper_dir(proj)  # git is told to ignore .overleaf-skill/ before anything is written there
+    tmp = d / ".pending_mendeley.tmp"
+    tmp.write_text(json.dumps(items, indent=1))
+    tmp.replace(d / "pending_mendeley.json")
+
+
+def mirror_settings(proj):
+    """(group name or None, wanted?) for a paper: linked to a Mendeley group, and the 'also add to Mendeley' preference."""
+    from writing_core import config
+    g = ((proj or {}).get("mendeley_group") or {}).get("name")
+    return g, bool(g) and config.paper_settings(proj).get("mirror_to_mendeley", True)
+
+
+def retry_pending(bib_path):
+    """Try again every reference that did not reach Mendeley. -> {tried, done, left}"""
+    name, proj = _paper_of(bib_path)
+    if proj is None:
+        return {"tried": 0, "done": 0, "left": 0}
+    items, left = pending_list(proj), []
+    for it in items:
+        if to_mendeley(it["bib"], it["doi"], bib_path, it["group"]).startswith("Mendeley: added"):
+            continue
+        left.append(it)
+    if len(left) != len(items):
+        _save_pending(proj, left)
+    return {"tried": len(items), "done": len(items) - len(left), "left": len(left)}
+
+
+def add_reference(doi, bib_path, source="cli", mirror="auto", push=False, push_message=None):
+    """DOI -> references.bib, and on to Mendeley when the paper is linked to a group. Never raises on user-level problems.
+    mirror: 'auto' = the paper's linked Mendeley group (if the author wants it), a group name, or None/False = not this time.
+    -> dict: status added|duplicate|error|invalid, message (one readable block), and for added/duplicate: doi, key, cite, title, authors, year,
+       journal, bibtex, mendeley {state: added|failed|not_linked|off, group, detail}, push {ok, text} | None"""
     m = DOI_RE.search(urllib.parse.unquote(doi))
     if not m:
-        return "No DOI found in that message."
+        return {"status": "invalid", "message": "No DOI found in that message."}
     doi = m.group(0).rstrip(".,;)")
     bib_path = Path(bib_path)
     text = bib_path.read_text()
     if doi.lower() in text.lower():
-        return f"Already in references.bib: {doi}"
+        key = _existing_key(text, doi)
+        return {"status": "duplicate", "doi": doi, "key": key, "cite": f"\\cite{{{key}}}" if key else None, "message": f"Already in references.bib: {doi}"}
     try:
         bib, key = restyle(fetch_bibtex(doi))
     except Exception as e:  # 404 = unknown DOI, else network
-        return f"Could not resolve {doi}: {e}"
+        return {"status": "error", "doi": doi, "message": f"Could not resolve {doi}: {e}"}
     n = 2
     base = key
     while re.search(r"\{" + re.escape(key) + ",", text):  # same author+year+word collision
         key = base + chr(96 + n); n += 1
     bib = bib.replace("{" + base + ",", "{" + key + ",", 1)
     bib_path.write_text(text.rstrip("\n") + "\n\n" + bib + "\n")
-    title = (re.search(r"title\s*=\s*[{\"]+(.+?)[}\"]+,?\s*\n", bib, re.S | re.I) or [0, "?"])[1]
-    msg = f"Added \\cite{{{key}}}\n{title}"
-    if group:
-        msg += "\n" + to_mendeley(bib, doi, bib_path, group)
-    log_added(bib_path, doi, key, source, group, None)
+    title, authors, year, journal = _field(bib, "title"), _field(bib, "author"), _field(bib, "year"), _field(bib, "journal") or _field(bib, "booktitle")
+    out = {"status": "added", "doi": doi, "key": key, "cite": f"\\cite{{{key}}}", "title": title or "?", "authors": authors.replace(" and ", "; "), "year": year,
+           "journal": journal, "bibtex": bib, "mendeley": {"state": "off", "group": None, "detail": ""}, "push": None}
+    msg = f"Added \\cite{{{key}}}\n{title or '?'}"
+    name, proj = _paper_of(bib_path)
+    if mirror == "auto":
+        group, wanted = mirror_settings(proj) if proj else (None, False)
+        idle_state = "off" if group else "not_linked"
+    else:  # a group named by the caller, or None/False for "not this time"
+        group, wanted, idle_state = (mirror or None), bool(mirror), "off"
+    if group and wanted:
+        res = to_mendeley(bib, doi, bib_path, group)
+        if res.startswith("Mendeley: added"):
+            out["mendeley"] = {"state": "added", "group": group, "detail": res}
+            msg += "\n" + res
+            if proj and pending_list(proj):  # the network clearly works now: catch up on anything that was waiting
+                retry_pending(bib_path)
+        else:
+            out["mendeley"] = {"state": "failed", "group": group, "detail": res}
+            if proj:
+                items = [i for i in pending_list(proj) if i["doi"].lower() != doi.lower()]
+                items.append({"doi": doi, "key": key, "group": group, "bib": bib, "title": title, "error": res[-200:], "ts": time.time()})
+                _save_pending(proj, items)
+            msg += "\n" + res + " It is kept in the waiting list and will be tried again."
+    else:
+        out["mendeley"] = {"state": idle_state, "group": group, "detail": "This paper is not linked to a Mendeley group." if idle_state == "not_linked" else
+                           "Adding to Mendeley is switched off."}
+    log_added(bib_path, doi, key, source, group if out["mendeley"]["state"] == "added" else None, None, mendeley_state=out["mendeley"]["state"])
     if push:
-        repo = str(bib_path.parent)
-        g = lambda *a: subprocess.run(["git", "-C", repo, *a], capture_output=True, text=True)
-        g("add", bib_path.name)
-        g("commit", "-m", f"Add reference {key} (doi bot)")
-        g("pull", "--rebase", "--autostash")
-        r = g("push")
-        msg += "\nPushed to Overleaf." if r.returncode == 0 else "\nPush FAILED: " + r.stderr[-200:]
-    return msg
+        ok, t = git_sync(bib_path, push_message or f"Add reference {key} (doi bot)")
+        out["push"] = {"ok": ok, "text": t}
+        msg += "\n" + t
+    out["message"] = msg
+    return out
+
+
+def add(doi, bib_path, push=False, group=None, source="cli"):
+    """The one-line status for the bot, the CLI and older callers. A group name mirrors to that group; otherwise the paper's own
+    linked Mendeley group is used, so a reference never reaches the bibliography without reaching Mendeley."""
+    return add_reference(doi, bib_path, source=source, mirror=group or "auto", push=push)["message"]
 
 
 def git_sync(bib_path, message):
@@ -150,7 +246,7 @@ def run():
         except (KeyError, RuntimeError) as e:
             return say(chat, f"Refusing: {e}")
         common.set_active(name, "telegram")
-        out = "\n\n".join(add(d, common.bib_path(proj), False, g, source="telegram") for d in dois)
+        out = "\n\n".join(add(d, common.bib_path(proj), False, None, source="telegram") for d in dois)
         btn = None
         if cfg.get("push", True):  # one push per message, not per DOI
             ok, t = git_sync(common.bib_path(proj), "Add references (doi bot)")

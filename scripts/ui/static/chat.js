@@ -193,6 +193,15 @@
       refresh();
     }
 
+    // ---- references
+    function refsBubble(m) {
+      const d = m.data, added = d.results.filter((r) => r.status === 'added').length;
+      const kids = d.results.map((r) => window.OLS.refCard(r, d.push));
+      if (d.push && d.push.friendly) kids.push(notice('warn', d.push.friendly, ' ', h('a', { href: '#/settings', text: 'Open Settings' })));
+      if (d.pending) kids.push(notice('warn', `${plural(d.pending, 'reference')} still waiting to reach Mendeley. `, h('a', { href: '#/references', text: 'Try again on the References page' })));
+      return assistant(h('p', { class: 'small secondary', text: added ? `Added ${plural(added, 'reference')}.` : 'Nothing new was added.' }), ...kids);
+    }
+
     // ---- the suggestion
     function resultBubble(m) {
       const holder = h('div', null, busy('Loading the suggestion...'));
@@ -380,6 +389,7 @@
         else if (m.kind === 'plan') threadEl.append(planBubble(m));
         else if (m.kind === 'ask') threadEl.append(askBubble(m));
         else if (m.kind === 'result') threadEl.append(resultBubble(m));
+        else if (m.kind === 'refs') threadEl.append(refsBubble(m));
         else if (m.kind === 'error') threadEl.append(assistant(notice('bad', m.text)));
         else threadEl.append(assistant(textBlock(m.text)));
       }

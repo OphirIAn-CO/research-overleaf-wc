@@ -85,7 +85,7 @@ def paper_settings(proj):
     except (FileNotFoundError, json.JSONDecodeError):
         s = {}
     # dry_run governs Claude Code and the terminal (they preview first until you turn it off); the chat uses confirm_before_send instead
-    return {"dry_run": True, "confirm_before_send": False, "send_refs_to_overleaf": True, **s}
+    return {"dry_run": True, "confirm_before_send": False, "send_refs_to_overleaf": True, "mirror_to_mendeley": True, **s}
 
 
 def ensure_paper_dir(proj):

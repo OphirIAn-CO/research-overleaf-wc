@@ -81,7 +81,7 @@ class Phase5(UiBase):
         self.assertEqual(r["refs"][0]["status"], "duplicate")
 
     def test_adding_a_doi_writes_the_bib_logs_the_source_and_shows_in_recent(self):
-        st, a = self.c.post("/api/refs/add", {"paper": "alpha", "dois": ["10.1234/abc"]})
+        st, a = self.c.post("/api/refs/add", {"paper": "alpha", "dois": ["10.1234/abc"], "push": False})
         self.assertIn("Added \\cite{Lee2021Soil}", a["messages"][0])
         self.assertIn("Lee2021Soil", (self.root / "references.bib").read_text())
         self.assertEqual(porcelain(self.root), "M references.bib")

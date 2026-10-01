@@ -36,8 +36,17 @@ def main():
     args = ap.parse_args()
     ui = load_ui_server()
     import doi_bot
-    doi_bot.fetch_bibtex = lambda d: ("@article{x,\n author={Lee, K.},\n title={Soil Water Dynamics Under Irrigation},\n year={2021},\n journal={Demo Journal}\n}"
-                                      if "bad" not in d else (_ for _ in ()).throw(RuntimeError("HTTP 404")))  # no network in the demo
+    seen = []
+
+    def fake_bibtex(d):  # no network in the demo: doi.org answers with a fixed entry that carries its own doi
+        if "bad" in d:
+            raise RuntimeError("HTTP 404")
+        seen.append(d)
+        return ("@article{x,\n author={%s},\n title={Soil Water Dynamics Under Irrigation},\n year={2021},\n journal={Demo Journal},\n doi={%s}\n}"
+                % ("Lee, K." if len(seen) == 1 else f"Other{len(seen)}, K.", d))
+    doi_bot.fetch_bibtex = fake_bibtex
+    doi_bot.to_mendeley = lambda bib, doi, bib_path, group: f"Mendeley: added to {group}."
+    doi_bot.git_sync = lambda bib_path, message: (True, "Pushed to Overleaf.")
     papers_dir = Path(home) / "papers"
     names = {}
     for name, tweak in (("soil-yield", lambda s: s), ("traffic-gnn", lambda s: s.replace("Soil Moisture Effects on Crop Yield", "Graph Networks for Traffic")
@@ -45,7 +54,7 @@ def main():
         root = make_paper(papers_dir, name, tweak(MAIN), bib=BIB, extra={"sections/methods.tex": tweak(METHODS)})
         git(root, "add", "-A")
         git(root, "commit", "-q", "-m", "init")
-        common.register(str(root), name)
+        common.register(str(root), name, group="Demo group" if name == "soil-yield" else None)
         names[name] = common.resolve(name)
 
     oa = FakeOpenAI("responses")

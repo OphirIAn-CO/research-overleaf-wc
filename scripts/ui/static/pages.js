@@ -1,7 +1,7 @@
 /* Paper index + card, and References. Same rules as app.js: text only, never innerHTML. */
 (function () {
   'use strict';
-  const { h, clear, api, notice, busy, guarded, registerPage, toast, fmtTok, ago, S } = window.OLS;
+  const { h, clear, api, notice, busy, guarded, registerPage, toast, fmtTok, ago, tile, S } = window.OLS;
   const hhmm = (ts) => { const d = new Date(ts * 1000); return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const enc = encodeURIComponent;
 
@@ -78,52 +78,88 @@
     viewer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }
 
-  // ------------------------------------------------------------------ References
+  // ------------------------------------------------------------------ References: paste a DOI, it is added everywhere
+  async function copyText(t, what) {
+    try { await navigator.clipboard.writeText(t); toast((what || 'Text') + ' copied'); } catch (e) { toast('Select it and copy by hand'); }
+  }
+
+  /* One finished DOI: what to cite, and where it went. Used by the chat and by this page. */
+  function refCard(res, push) {
+    if (res.status === 'invalid') return notice('warn', res.message);
+    if (res.status === 'error') return notice('bad', h('strong', { text: res.doi + ': ' }), 'I could not find it. Check the DOI and try again. ', h('span', { class: 'muted small', text: res.message }));
+    const head = res.status === 'duplicate'
+      ? h('p', { class: 'small secondary', text: 'This one was already in your bibliography. Cite it with:' })
+      : h('div', null, h('div', { class: 'strong', text: res.title }), h('div', { class: 'small secondary', text: [res.authors, res.year, res.journal].filter(Boolean).join(' · ') }));
+    const m = res.mendeley || {};
+    const tick = (ok, text) => h('li', { class: 'chk ' + (ok === true ? 'ok' : ok === false ? 'warn' : '') }, h('span', { class: 'mark', 'aria-hidden': 'true', text: ok === true ? '✓' : ok === false ? '!' : '–' }), h('span', { text }));
+    const where = res.status === 'duplicate' ? null : h('ul', { class: 'checks' },
+      tick(true, 'In your bibliography (references.bib)'),
+      m.state === 'added' ? tick(true, `In Mendeley, group “${m.group}”`) : m.state === 'failed' ? tick(false, `Not in Mendeley yet (group “${m.group}”). It is waiting and will be tried again.`) :
+        m.state === 'not_linked' ? tick(null, 'Not linked to a Mendeley group, so not added there') : tick(null, 'Adding to Mendeley is switched off'),
+      push ? (push.ok ? tick(true, 'Sent to Overleaf') : tick(false, push.friendly || 'Not sent to Overleaf yet: ' + push.text.slice(0, 120))) : tick(null, 'Not sent to Overleaf yet (the bibliography changed on this computer)'));
+    return h('div', { class: 'refcard' }, head,
+      res.cite ? h('div', { class: 'cite-row' }, h('span', { class: 'small secondary', text: 'Cite it in Overleaf with' }), h('code', { class: 'cite', text: res.cite }),
+        h('button', { type: 'button', class: 'primary small', text: 'Copy', onclick: () => copyText(res.cite, 'Citation') })) : null,
+      where, res.bibtex ? h('details', null, h('summary', { text: 'BibTeX entry' }), h('pre', { class: 'payload mono small', text: res.bibtex })) : null);
+  }
+  window.OLS.refCard = refCard;
+
   registerPage('references', 'References', async (box) => {
     await window.OLS.loadState();
-    if (!S.paper) { box.append(notice('warn', 'Register a paper first (Papers page).')); return; }
+    if (!S.paper) { box.append(notice('warn', 'Add a paper first (Settings).')); return; }
     const name = S.paper;
     const proj = window.OLS.paperObj(name);
     box.append(h('div', { class: 'page-head' }, h('h1', { text: 'References: ' + name }),
-      h('span', { class: 'muted small', text: 'Add by DOI here or from your phone with the Telegram bot; both end up in the same bibliography.' })));
+      h('span', { class: 'muted small', text: 'Paste a DOI and it goes into your bibliography, your Mendeley group and Overleaf. You get the \\cite{...} to paste into your text.' })));
     const ta = h('textarea', { 'aria-label': 'DOIs', placeholder: 'Paste one or more DOIs or doi.org links', rows: '3' });
-    const results = h('div');
+    const results = h('div', { class: 'stack' });
+    const waiting = h('div');
     const recent = h('div');
-    const mend = h('input', { type: 'checkbox', checked: !!proj.group });
-    const push = h('input', { type: 'checkbox' });
-    let found = [];
+    const group = h('div');
+
+    const showWaiting = async () => {
+      const r = await api.get(`/api/refs/pending?paper=${enc(name)}`);
+      clear(waiting);
+      if (!r.pending.length) return;
+      waiting.append(notice('warn', h('strong', { text: `${r.pending.length} reference${r.pending.length === 1 ? ' is' : 's are'} in your bibliography but not in Mendeley yet. ` }),
+        r.pending.map((x) => x.key || x.doi).join(', ') + '. ',
+        guarded(h('button', { type: 'button', text: 'Try again now' }), async () => { const t = await api.post('/api/refs/retry', { paper: name }); toast(`${t.done} sent to Mendeley, ${t.left} still waiting`); await showWaiting(); })));
+    };
+    const showGroup = () => {
+      clear(group).append(proj.group ? h('p', { class: 'small secondary' }, `New references are also added to the Mendeley group “${proj.group}”. `, h('button', { type: 'button', class: 'ghost small', text: 'Change', onclick: () => pickGroup() })) :
+        notice('warn', 'This paper is not linked to a Mendeley group, so references only go into the bibliography. ', h('button', { type: 'button', class: 'small', text: 'Link a group', onclick: () => pickGroup() })));
+    };
+    const pickGroup = async () => {
+      try {
+        const g = await api.get('/api/refs/groups');
+        const sel = h('select', { 'aria-label': 'Mendeley group' }, g.groups.map((x) => h('option', { value: x.id, text: x.name })));
+        clear(group).append(h('div', { class: 'row' }, sel, guarded(h('button', { type: 'button', class: 'primary', text: 'Use this group' }), async () => {
+          const opt = sel.options[sel.selectedIndex];
+          await api.post('/api/refs/link', { paper: name, group_id: sel.value, group_name: opt.text }); toast('Linked'); await window.OLS.loadState(); window.OLS.route();
+        })));
+      } catch (e) { toast(e.message); }
+    };
 
     const refresh = async () => {
       const r = await api.get(`/api/refs/recent?paper=${enc(name)}`);
       clear(recent).append(r.recent.length ? h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['When', 'Added from', 'Cite key', 'DOI'].map((t) => h('th', { text: t })))),
-        h('tbody', null, r.recent.map((e) => h('tr', null, h('td', { text: hhmm(e.ts) }), h('td', null, h('span', { class: 'badge', text: e.source }), e.mendeley ? ' + Mendeley' : ''), h('td', { class: 'mono small', text: e.key }), h('td', { class: 'mono small', text: e.doi })))))) :
+        h('tbody', null, r.recent.map((e) => h('tr', null, h('td', { text: hhmm(e.ts) }), h('td', null, h('span', { class: 'badge', text: { telegram: 'your phone', web: 'this app' }[e.source] || e.source }), e.mendeley ? ' + Mendeley' : ''), h('td', { class: 'mono small', text: e.key }), h('td', { class: 'mono small', text: e.doi })))))) :
         h('p', { class: 'muted small', text: `Nothing added through the tools yet. The bibliography has ${r.bib_entries} entries.` }));
     };
-    const look = guarded(h('button', { type: 'button', class: 'primary', text: 'Look up' }), async () => {
-      clear(results).append(busy('Asking doi.org...'));
+    const add = guarded(h('button', { type: 'button', class: 'primary', text: 'Add' }), async () => {
+      const dois = [...new Set((ta.value.match(/10\.\d{4,9}\/[^\s"<>]+/g) || []).map((d) => d.replace(/[.,;)]+$/, '')))];
+      if (!dois.length) throw new Error('I did not find a DOI in that text.');
+      clear(results).append(busy('Looking up and adding...'));
       try {
-        const r = await api.post('/api/refs/preview', { paper: name, text: ta.value });
-        found = r.refs;
-        const addable = r.refs.filter((x) => x.status === 'new');
-        clear(results).append(h('section', { class: 'card', 'aria-label': 'Found' },
-          r.refs.map((x) => h('div', { class: 'stack' },
-            h('div', { class: 'row' }, h('span', { class: 'badge ' + (x.status === 'new' ? 'ok' : x.status === 'duplicate' ? 'warn' : 'bad'), text: x.status === 'new' ? 'new' : x.status === 'duplicate' ? 'already in your bibliography' : 'not found' }),
-              h('span', { class: 'mono small', text: x.doi }), x.key ? h('strong', { text: '\\cite{' + x.key + '}' }) : null),
-            x.title ? h('div', { class: 'small', text: x.title }) : null, x.error ? h('div', { class: 'small muted', text: x.error }) : null,
-            x.bibtex ? h('details', null, h('summary', { text: 'BibTeX' }), h('pre', { class: 'payload mono', text: x.bibtex })) : null)),
-          addable.length ? h('div', { class: 'stack' },
-            r.group ? h('label', { class: 'check small' }, mend, `Also add to the Mendeley group "${r.group}"`) : null,
-            h('label', { class: 'check small' }, push, 'Commit and push the bibliography to Overleaf now'),
-            h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: `Add ${addable.length} reference(s)` }), async () => {
-              const a = await api.post('/api/refs/add', { paper: name, dois: addable.map((x) => x.doi), mendeley: mend.checked, push: push.checked });
-              clear(results).append(h('section', { class: 'card' }, h('h2', { text: 'Done' }), a.messages.map((m) => h('pre', { class: 'small', text: m })), a.push ? notice(a.push.ok ? 'ok' : 'bad', a.push.text) : null));
-              ta.value = ''; await refresh();
-            }))) : null));
+        const r = await api.post('/api/refs/add', { paper: name, dois });
+        clear(results).append(...[...r.results.map((x) => refCard(x, r.push)), r.push && r.push.friendly ? notice('warn', r.push.friendly, ' ', h('a', { href: '#/settings', text: 'Open Settings' })) : null].filter(Boolean));
+        ta.value = '';
+        await Promise.all([refresh(), showWaiting(), window.OLS.loadState()]);
       } catch (e) { clear(results).append(notice('bad', e.message)); throw e; }
     });
-    box.append(h('section', { class: 'card', 'aria-label': 'Add by DOI' }, h('h2', { text: 'Add by DOI' }), ta, h('div', { class: 'row' }, look)), results);
+    box.append(h('section', { class: 'card', 'aria-label': 'Add by DOI' }, h('h2', { text: 'Add a reference' }), ta, h('div', { class: 'row' }, add)), results, waiting, group);
     box.append(h('section', { class: 'card', 'aria-label': 'Mendeley' }, h('h2', { text: 'From Mendeley' }),
-      h('p', { class: 'small secondary', text: proj.group ? `Pull references already in the Mendeley group "${proj.group}" into the bibliography (only new ones are appended).` : 'No Mendeley group is linked to this paper. Register it with: python3 scripts/common.py add <path> --group "Group name".' }),
+      h('p', { class: 'small secondary', text: proj.group ? `Pull references that are already in the Mendeley group “${proj.group}” into the bibliography (only new ones are added).` : 'Link a Mendeley group to pull references from it.' }),
       proj.group ? guarded(h('button', { type: 'button', text: 'Pull new references from Mendeley' }), async () => {
         const o = await api.post('/api/refs/mendeley', { paper: name });
         clear(mendOut).append(h('pre', { class: 'small payload', text: o.output })); await refresh();
@@ -131,6 +167,34 @@
     const mendOut = h('div');
     box.lastChild.append(mendOut);
     box.append(h('section', { class: 'card', 'aria-label': 'Recent additions' }, h('h2', { text: 'Recent additions' }), recent));
-    await refresh();
+    showGroup();
+    await Promise.all([refresh(), showWaiting()]);
+  });
+
+  // ------------------------------------------------------------------ Activity: what happened, in sentences
+  registerPage('activity', 'Activity', async (box) => {
+    await window.OLS.loadState();
+    const paper = S.activityAll ? '' : (S.paper || '');
+    const days = 30;
+    const a = await api.get(`/api/activity?days=${days}` + (paper ? `&paper=${enc(paper)}` : ''));
+    const scope = h('select', { 'aria-label': 'Which papers' }, h('option', { value: 'one', text: S.paper ? `Only ${S.paper}` : 'This paper' }), h('option', { value: 'all', text: 'All my papers' }));
+    scope.value = S.activityAll ? 'all' : 'one';
+    scope.addEventListener('change', () => { S.activityAll = scope.value === 'all'; window.OLS.route(); });
+    box.append(h('div', { class: 'page-head' }, h('h1', { text: 'Activity' }), h('div', { class: 'row' }, S.paper ? scope : null, h('a', { class: 'small', href: '#/monitor', text: 'Charts and diagnostics' }))));
+    const s = a.summary;
+    box.append(h('div', { class: 'grid tiles' },
+      tile('Requests to OpenAI', String(s.requests), `last ${days} days`), tile('Words sent', fmtTok(s.tokens_in * 0.75), `${fmtTok(s.tokens_out * 0.75)} words came back`),
+      tile('Changes kept', String(s.accepted), `${s.rejected} set aside`), tile('References added', String(s.references)),
+      s.cost != null ? tile('Cost so far', String(s.cost), 'in your price units') : null));
+    if (a.waiting && (a.waiting.suggestions || a.waiting.handed_to_claude || a.waiting.mendeley)) {
+      box.append(notice('warn', h('strong', { text: 'Waiting for you: ' }), [a.waiting.suggestions ? `${a.waiting.suggestions} suggestion${a.waiting.suggestions === 1 ? '' : 's'} not decided yet` : null,
+        a.waiting.handed_to_claude ? `${a.waiting.handed_to_claude} handed to Claude` : null, a.waiting.mendeley ? `${a.waiting.mendeley} reference${a.waiting.mendeley === 1 ? '' : 's'} not in Mendeley yet` : null].filter(Boolean).join(' · ') + '.'));
+    }
+    if (!a.items.length) { box.append(notice('ok', 'Nothing has happened yet. Ask for a change in the chat and it shows up here.')); return; }
+    let day = null, card = null;
+    for (const it of a.items) {
+      if (it.day !== day) { day = it.day; box.append(h('h2', { class: 'section-h', text: day })); card = h('section', { class: 'card feed-card' }); box.append(card); }
+      card.append(h('div', { class: 'feed-row' }, h('span', { class: 'mono small muted', text: it.time }), S.activityAll ? h('span', { class: 'badge', text: it.paper }) : null, h('span', { class: 'grow', text: it.text })));
+    }
   });
 }());

@@ -30,7 +30,7 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (book_index, chat, chunk_book, config, events, health, openai_client, panes, paper_index, preferences,  # noqa: E402
+from writing_core import (activity, book_index, chat, chunk_book, config, events, health, openai_client, panes, paper_index, preferences,  # noqa: E402
                           retrieve, revise, rule_cards, stats, taxonomy, watermark)
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -691,7 +691,7 @@ def api_chat_send(r):
     if kind == "help":
         out.append(chat.append(p, cid, "assistant", "text", HELP_TEXT))
     elif kind == "refs":
-        out.append(chat.append(p, cid, "assistant", "text", "Adding references from the chat arrives in the next update. For now, use References in the menu."))
+        job = _start_refs(r.app, n, p, cid, chat.find_dois(text)[:20])
     elif kind == "review":
         out.append(chat.append(p, cid, "assistant", "text", "Peer review from the chat arrives in an upcoming update."))
     else:
@@ -725,6 +725,16 @@ def api_chat_send(r):
                 job = _start_pass(r.app, n, p, cid, m["id"])
                 out[-1] = chat.get_message(p, cid, m["id"])
     return {"messages": out, "job": job}
+
+
+def _start_refs(app, n, p, cid, dois):
+    """Pasted DOIs: add them to the bibliography (and Mendeley, and Overleaf) in the background; the cards land in the chat."""
+    def work(progress, set_steps):
+        common.set_active(n, "ui")
+        res = add_references(n, p, dois, mirror="auto", progress=set_steps)
+        chat.append(p, cid, "assistant", "refs", "", results=res["results"], push=res["push"], steps=res["steps"], pending=len(doi_bot.pending_list(p)))
+        return {"added": sum(1 for x in res["results"] if x["status"] == "added")}
+    return app.jobs.submit(f"Adding references to {n}", work, with_steps=True, meta={"paper": n, "chat": cid})
 
 
 def api_chat_run(r):
@@ -1064,20 +1074,100 @@ def api_refs_preview(r):
     return {"paper": n, "group": (p.get("mendeley_group") or {}).get("name"), "refs": out}
 
 
+def _bib_push(n, p, message):
+    """Commit and push only the bibliography (like the phone bot does). -> {ok, text, friendly?}"""
+    ok, text = doi_bot.git_sync(common.bib_path(p), message)
+    out = {"ok": ok, "text": text}
+    if not ok and any(m in text.lower() for m in _AUTH_MARKERS):
+        have = (config.data_dir() / "overleaf_git.json").exists()
+        out["friendly"] = "Overleaf did not accept the sign-in. Check the token in Settings." if have else "This app is not signed in to Overleaf yet. In Settings, paste your Overleaf Git token once."
+    elif not ok and "rejected" in text.lower():
+        out["friendly"] = "Overleaf has newer changes. Press \"Get latest from Overleaf\", then send the bibliography again."
+    return out
+
+
+def add_references(n, p, dois, source="web", mirror="auto", push=None, progress=None):
+    """Every DOI through the one shared function, then one bibliography-only push. -> {results, messages, push}"""
+    steps = revise.Steps(progress)
+    bib = common.bib_path(p)
+    results, msgs = [], []
+    for i, d in enumerate(dois, 1):
+        steps.start(f"doi{i}", f"Adding {d}")
+        res = doi_bot.add_reference(d, bib, source=source, mirror=mirror)
+        results.append(res)
+        msgs.append(res["message"])
+        mend = res.get("mendeley") or {}
+        detail = {"added": "added" if res["status"] == "added" else res["status"], "duplicate": "already in your bibliography", "error": "could not be found", "invalid": "not a DOI"}.get(res["status"], "")
+        if res["status"] == "added":
+            detail = f"{res['cite']}; " + {"added": f"Mendeley group “{mend.get('group')}” has it", "failed": "Mendeley will be tried again", "not_linked": "not linked to Mendeley", "off": "Mendeley is switched off"}.get(mend.get("state"), "")
+        steps.finish(f"doi{i}", detail, state="done" if res["status"] in ("added", "duplicate") else "failed")
+    added = [r for r in results if r["status"] == "added"]
+    out_push = None
+    if added:
+        paper_index.refresh(n, p, trigger="after_edit", source=source)
+        if push is None:
+            push = config.paper_settings(p).get("send_refs_to_overleaf", True)
+        if push:
+            steps.start("push", "Sending the bibliography to Overleaf")
+            out_push = _bib_push(n, p, "Add references (web app)")
+            steps.finish("push", state="done" if out_push["ok"] else "failed", detail=out_push.get("friendly") or ("sent" if out_push["ok"] else out_push["text"][:120]))
+    return {"results": results, "messages": msgs, "push": out_push, "steps": steps.items}
+
+
 def api_refs_add(r):
     n, p = paper_ref(r.body.get("paper", ""))
     dois = [d for d in (r.body.get("dois") or []) if isinstance(d, str)][:20]
     if not dois:
         raise ApiError(400, "no DOIs to add")
-    group = (p.get("mendeley_group") or {}).get("name") if r.body.get("mendeley") else None
     common.set_active(n, "ui")
-    msgs = [doi_bot.add(d, common.bib_path(p), False, group, source="web") for d in dois]
-    out = {"messages": msgs}
-    if r.body.get("push"):
-        ok, text = doi_bot.git_sync(common.bib_path(p), "Add references (web app)")
-        out["push"] = {"ok": ok, "text": text}
-    paper_index.refresh(n, p, trigger="after_edit", source="web")
+    mirror = None if r.body.get("mendeley") is False else "auto"
+    out = add_references(n, p, dois, mirror=mirror, push=r.body.get("push"))
+    out.pop("steps", None)
+    out["pending"] = len(doi_bot.pending_list(p))
     return out
+
+
+def api_refs_pending(r):
+    n, p = paper_ref(r.arg("paper", ""))
+    items = doi_bot.pending_list(p)
+    return {"pending": [{"doi": i["doi"], "key": i.get("key"), "title": i.get("title"), "group": i.get("group"), "since": i.get("ts")} for i in items]}
+
+
+def api_refs_retry(r):
+    n, p = paper_ref(r.body.get("paper", ""))
+    return doi_bot.retry_pending(common.bib_path(p))
+
+
+def api_refs_groups(r):
+    """The Mendeley groups of the signed-in account, so a paper can be linked to one."""
+    out = overleaf_mcp.tool_mendeley_list_groups({})
+    groups = []
+    for ln in out.splitlines():
+        m = re.match(r"^([0-9a-f-]{8,})\s+(.+)$", ln.strip())
+        if m:
+            groups.append({"id": m.group(1), "name": m.group(2).strip()})
+    if not groups:
+        raise ApiError(409, "I could not list your Mendeley groups. " + ("Connect Mendeley first (Settings)." if "credentials" in out.lower() or "tokens" in out.lower() or "authorize" in out.lower() else out[:200]))
+    return {"groups": groups}
+
+
+def api_refs_link(r):
+    n, p = paper_ref(r.body.get("paper", ""))
+    gid, name = str(r.body.get("group_id", ""))[:80], str(r.body.get("group_name", ""))[:120]
+    if not gid or not name:
+        raise ApiError(400, "choose a group")
+    common.register(p["path"], n, group={"id": gid, "name": name})
+    return {"ok": True, "group": name}
+
+
+def api_activity(r):
+    paper = r.arg("paper") or None
+    days = max(1, min(int(r.arg("days", 30)), 365))
+    waiting = None
+    if paper:
+        n, p = paper_ref(paper)
+        waiting = activity.waiting(n, p)
+    return {"paper": paper, "days": days, "summary": activity.summary(paper=paper, days=days), "items": activity.timeline(paper=paper, days=days), "waiting": waiting}
 
 
 def api_refs_recent(r):
@@ -1120,6 +1210,8 @@ ROUTES = [
     ("POST", r"^/api/paper/([^/]+)/forget$", api_forget),
     ("POST", r"^/api/refs/preview$", api_refs_preview), ("POST", r"^/api/refs/add$", api_refs_add), ("GET", r"^/api/refs/recent$", api_refs_recent),
     ("POST", r"^/api/refs/mendeley$", api_refs_mendeley), ("POST", r"^/api/proposal/handoff$", api_handoff),
+    ("GET", r"^/api/refs/pending$", api_refs_pending), ("POST", r"^/api/refs/retry$", api_refs_retry), ("GET", r"^/api/refs/groups$", api_refs_groups),
+    ("POST", r"^/api/refs/link$", api_refs_link), ("GET", r"^/api/activity$", api_activity),
     ("POST", r"^/api/secrets/openai$", api_secret_openai), ("POST", r"^/api/secrets/git$", api_secret_git),
     ("GET", r"^/api/panes$", api_panes), ("POST", r"^/api/test/frames$", api_test_frames),
     ("GET", r"^/api/overview$", api_overview), ("GET", r"^/api/connections$", api_connections), ("POST", r"^/api/test/openai$", api_test_openai),

@@ -226,3 +226,8 @@ label.field input[type="password"] { width: 100%; }
 .section-h { font-size: 14px; color: var(--ink-2); margin: 20px 0 8px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; }
 input[type="password"] { background: var(--surface-1); border: 1px solid var(--axis); border-radius: 8px; padding: 6px 10px; min-height: 34px; max-width: 100%; }
 input[type="number"] { width: 90px; }
+
+/* references and activity */
+.refcard { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--surface-1); } .refcard + .refcard { margin-top: 10px; } .strong { font-weight: 600; }
+.cite-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; } code.cite { font-size: 17px; padding: 4px 10px; background: var(--surface-2); border-radius: 8px; border: 1px solid var(--border); }
+.feed-card { padding: 6px 14px; } .feed-row { display: flex; gap: 10px; align-items: baseline; padding: 6px 0; border-bottom: 1px solid var(--grid); } .feed-row:last-child { border-bottom: 0; } .feed-row .mono { min-width: 44px; }

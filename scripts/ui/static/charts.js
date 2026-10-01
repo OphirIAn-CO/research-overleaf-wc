@@ -175,7 +175,7 @@
 
   // ---- the Monitor page
   const M = { paper: '', days: 30, live: true, since: 0, timer: null };
-  registerPage('monitor', 'Monitor', async (box) => {
+  registerPage('monitor', 'Charts and diagnostics', async (box) => {
     await window.OLS.loadState();
     const st = S.st;
     const content = h('div', { class: 'stack' });
@@ -194,7 +194,7 @@
     paperSel.addEventListener('change', () => { M.paper = paperSel.value; load(); });
     daysSel.addEventListener('change', () => { M.days = Number(daysSel.value); load(); });
     liveBox.addEventListener('change', () => { M.live = liveBox.checked; });
-    box.append(h('div', { class: 'page-head' }, h('h1', { text: 'Monitor' }), h('span', { class: 'muted small', text: 'What the system did, from the local event logs. Metadata only: no manuscript or book text.' })),
+    box.append(h('div', { class: 'page-head' }, h('h1', { text: 'Charts and diagnostics' }), h('span', { class: 'muted small', text: 'For debugging: what the system did, from the local event logs. Metadata only: no manuscript or book text. (The plain story is on the Activity page.)' })),
       h('div', { class: 'row' }, h('label', { class: 'row tight small secondary' }, 'Paper', paperSel), daysSel, h('button', { type: 'button', text: 'Reload', onclick: load })), content,
       card('Live activity', 'New events appear here as the app, Claude or the Telegram bot work.', h('label', { class: 'check small' }, liveBox, 'Follow live'), feed));
     clear(content).append(busy('Loading...'));

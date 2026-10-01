@@ -127,7 +127,7 @@
     }
   }
 
-  const NAV = [['chat', 'Chat'], ['references', 'References'], ['monitor', 'Activity'], ['settings', 'Settings']];
+  const NAV = [['chat', 'Chat'], ['references', 'References'], ['activity', 'Activity'], ['settings', 'Settings']];
   const HIDDEN_PAGES = { write: 'chat', papers: 'chat' };  // old addresses still land somewhere sensible
   function buildNav() {
     const nav = clear(document.getElementById('nav'));
