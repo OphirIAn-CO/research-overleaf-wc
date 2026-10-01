@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overleaf skill</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="shell">
+  <header class="top">
+    <span class="brand">Overleaf skill</span>
+    <label class="row tight small secondary" for="active-paper">Paper <select id="active-paper" aria-label="Active paper"></select></label>
+    <span class="badge-local" id="local-badge">Local only</span>
+    <span class="grow"></span>
+    <button class="ghost small" id="theme-btn" type="button" aria-label="Switch light and dark theme">Theme</button>
+  </header>
+  <nav class="side" id="nav" aria-label="Pages"></nav>
+  <main id="main" tabindex="-1"><p class="muted">Loading...</p></main>
+</div>
+<div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+<script src="/app.js"></script>
+<script src="/charts.js"></script>
+</body>
+</html>

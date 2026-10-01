@@ -214,6 +214,23 @@ def _chunk(r, with_text=True):
     return d
 
 
+def peek(proj):
+    """Index status without side effects (does not create the index or touch git). None if there is no index yet."""
+    p = index_path(proj)
+    if not p.exists():
+        return None
+    try:
+        con = store.connect(p, readonly=True)
+        try:
+            counts = {r[0]: r[1] for r in con.execute("SELECT kind, COUNT(*) FROM chunks GROUP BY kind")}
+            return {"counts": counts, "chunks": sum(counts.values()), "manuscript_tokens": store.meta_get(con, "manuscript_tokens", 0),
+                    "indexed_at": store.meta_get(con, "indexed_at"), "main": store.meta_get(con, "main")}
+        finally:
+            con.close()
+    except Exception:  # noqa: BLE001  (damaged or mid-write: report as unknown, it rebuilds itself on next use)
+        return {"counts": {}, "chunks": 0, "manuscript_tokens": 0, "indexed_at": None, "main": None, "unreadable": True}
+
+
 def outline(name, proj, refresh_first=True, source="cli"):
     if refresh_first:
         refresh(name, proj, trigger="outline", source=source)

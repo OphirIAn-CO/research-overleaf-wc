@@ -45,3 +45,12 @@ class IsolatedHome(unittest.TestCase):
     def tearDown(self):
         common.HOME = self._old_home
         self._tmp.cleanup()
+
+
+def load_ui_server():
+    """scripts/ui/server.py as a module (a file path import: a top-level `ui` name would clash with the repo's ui/ folder)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ols_ui_server", SCRIPTS / "ui" / "server.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod

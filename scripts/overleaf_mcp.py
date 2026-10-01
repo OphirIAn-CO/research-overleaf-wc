@@ -29,7 +29,7 @@ def resolve_paper(args):
         name, proj = common.resolve(DEFAULT_REPO)
     except RuntimeError as e:
         return None, None, f"refusing to act: {e}"
-    common.set_active(name, "claude")  # the Telegram bot follows the paper Claude is working on
+    common.set_active(name, args.get("_source", "claude"))  # the Telegram bot follows the paper being worked on
     if not os.path.isdir(os.path.join(proj["path"], ".git")):
         return None, None, f"not a git repo: {proj['path']}"
     return name, proj, None

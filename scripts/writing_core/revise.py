@@ -365,6 +365,13 @@ def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source=
                 raise ReviseError(f"the step-6b cleaner failed ({e}); nothing was written") from None
             if not isinstance(cleaned, str) or not cleaned.strip():
                 raise ReviseError("the step-6b cleaner returned nothing usable; nothing was written")
+            before_m, before_map = latex_mask.mask(new_text)
+            after_m, after_map = latex_mask.mask(cleaned)
+            if Counter(before_map.values()) != Counter(after_map.values()):
+                raise ReviseError("the step-6b cleaner changed protected LaTeX (citations, math, headings); nothing was written")
+            post = latex_mask.errors(latex_mask.validate(before_m, after_m))
+            if post:
+                raise ReviseError("the step-6b cleaner's output failed validation (" + latex_mask.summarize(post) + "); nothing was written")
             new_text = cleaned
         plan.setdefault(u["file"], []).append((u, new_text, ids))
     if stale or refused:

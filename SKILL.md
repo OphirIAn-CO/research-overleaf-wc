@@ -247,6 +247,11 @@ validated proposal; never edits files), `revise_record` (logs accept/reject).
 6. `revise_record` with the accepted/rejected hunk ids (`applied: true`), then
    `overleaf_status` / `overleaf_sync` as usual and step 9 (session memory).
 
+The same flow is available to the user in the local web app (`<skill>/ui.sh up`, Docker, loopback
+only): a readable side-by-side diff, the book browser, and a Monitor page of everything the
+system did. When the user asks to "open the UI / dashboard / monitor", run `ui.sh up` and give
+them the printed URL (it carries a one-time access token; do not repeat it anywhere else).
+
 What leaves the machine: only the selected passage (LaTeX masked), the paper card, and a
 few capped book rule snippets; never the whole manuscript, credentials, or another paper.
 Setup (the user does these themselves): `python3 <skill>/scripts/writing.py book-ingest

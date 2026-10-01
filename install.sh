@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ./install.sh              create the data dir + register the MCP server with Claude Code
 # ./install.sh bot-service  also run the Telegram DOI bot at login (macOS launchd)
+# ./install.sh ui           also build the web app's Docker image (then: ./ui.sh up)
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 export OVERLEAF_SKILL_HOME="${OVERLEAF_SKILL_HOME:-$HOME/.config/overleaf-skill}"
@@ -32,5 +33,8 @@ PLIST
   launchctl unload "$PL" 2>/dev/null || true
   launchctl load "$PL"
   echo "bot running under launchd (log: $OVERLEAF_SKILL_HOME/bot.log)"
+fi
+if [ "${1:-}" = "ui" ]; then
+  "$DIR/ui.sh" build
 fi
 echo "done. Next: python3 $DIR/scripts/common.py add /path/to/overleaf/clone --group \"Mendeley group\""

@@ -10,6 +10,7 @@ CLI:
   common.py add <path> [--name N] [--group G]   register (or update) a paper
   common.py add <path> --name N --relink        after moving/re-cloning a paper
   common.py doctor                              check every paper (folder, remote, bib, group)
+  common.py paths                               print every registered paper folder (used by ui.sh to build the container mounts)
   common.py rm <name>
   common.py default <name>
 """
@@ -191,6 +192,9 @@ def main(a):
             print(("OK   " if not env else "INFO ") + "writing coach (global)", *env, sep="\n     " if env else "")
         except Exception as e:  # noqa: BLE001
             print(f"INFO writing coach (global)\n     checks failed ({e})")
+    elif a[:1] == ["paths"]:
+        for p in reg["projects"].values():
+            print(p["path"])
     elif a[:1] == ["rm"] and len(a) > 1:
         reg["projects"].pop(a[1], None)
         reg["default"] = reg["default"] if reg["default"] in reg["projects"] else next(iter(reg["projects"]), None)
