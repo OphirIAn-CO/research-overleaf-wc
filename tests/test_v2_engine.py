@@ -1,5 +1,6 @@
 """v2 engine: plain-language steps, the model's explanation, the cost guard, cut-down passages, and the author's own version."""
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -44,6 +45,53 @@ class ForgivingTags(unittest.TestCase):
         self.assertTrue(latex_mask.errors(results))
 
 
+class Frame(unittest.TestCase):
+    def test_headings_at_the_ends_are_cut_out_and_rejoin_exactly(self):
+        for text in ("[[LX001]]\n[[LX002]]\nProse here.\n\nMore prose.\n", "Prose only.", "\n\n[[LX001]] [[LX002]]\nBody line.\n[[LX003]]\n\n",
+                     "[[LX001]]\nBody.\n[[LX002]]\nMiddle heading kept.\n[[LX003]]", "[[LX001]]\n[[LX002]]\n", ""):
+            head, body, tail = latex_mask.split_frame(text)
+            self.assertEqual(head + body + tail, text, repr(text))
+        head, body, tail = latex_mask.split_frame("[[LX001]]\n[[LX002]]\nProse here.\n\nMore prose.\n")
+        self.assertEqual((head, body, tail), ("[[LX001]]\n[[LX002]]\n", "Prose here.\n\nMore prose.", "\n"))
+        self.assertEqual(latex_mask.split_frame("[[LX001]]\nBody.\n[[LX002]]\nMiddle.\n[[LX003]]")[1], "Body.\n[[LX002]]\nMiddle.")   # a heading in the middle stays
+        self.assertEqual(latex_mask.split_frame("[[LX001]]\n[[LX002]]\n")[1], "[[LX001]]\n[[LX002]]\n")                                   # nothing to edit: untouched
+
+
+class Repair(unittest.TestCase):
+    def test_intact_text_is_left_alone(self):
+        t = "Intro [[LX001]] text.\n\n[[LX002]]\nMore."
+        self.assertEqual(latex_mask.repair(t, t), (t, []))
+
+    def test_a_heading_on_its_own_line_goes_back_before_its_paragraph_even_when_the_paragraph_was_reworded(self):
+        original = "Opening paragraph about sampling.\n\n[[LX001]]\nWe fitted a mixed-effects regression of yield.\n"
+        for revised in ("Opening paragraph about sampling.\n\nWe fitted a mixed-effects regression of yield.\n",
+                        "Opening paragraph about sampling.\n\nWe estimated a mixed-effects model of yield.\n"):
+            fixed, restored = latex_mask.repair(original, revised)
+            self.assertEqual([r["tag"] for r in restored], ["LX001"], revised)
+            self.assertTrue(restored[0]["own_line"])
+            self.assertEqual(latex_mask.placeholders(fixed), ["LX001"])
+            self.assertLess(fixed.index("[[LX001]]"), fixed.index("mixed-effects"))
+            self.assertGreater(fixed.index("[[LX001]]"), fixed.index("sampling."))
+
+    def test_inline_pieces_go_back_after_the_words_they_followed(self):
+        original = "We sampled farms [[LX001]] in 2019. The model [[LX002]] fits well."
+        fixed, restored = latex_mask.repair(original, "We sampled farms in 2019. The model fits well.")
+        self.assertEqual(fixed, original)
+        self.assertEqual([(r["tag"], r["own_line"]) for r in restored], [("LX001", False), ("LX002", False)])
+        fixed, _ = latex_mask.repair(original, "In 2019 we sampled farms. The model fits well.")      # words rearranged: the nearest anchor still works
+        self.assertEqual(sorted(latex_mask.placeholders(fixed)), ["LX001", "LX002"])
+
+    def test_what_cannot_be_placed_stays_missing_so_the_normal_check_rejects_it(self):
+        original = "We sampled farms [[LX001]] in 2019."
+        fixed, restored = latex_mask.repair(original, "Completely different words here.")
+        self.assertEqual((fixed, restored), ("Completely different words here.", []))
+        self.assertTrue(latex_mask.errors(latex_mask.validate(original, fixed)))
+
+    def test_a_piece_that_closed_the_passage_goes_back_at_the_end(self):
+        fixed, restored = latex_mask.repair("Some prose.\n[[LX001]]", "Some prose, revised.")
+        self.assertTrue(fixed.rstrip().endswith("[[LX001]]"))
+
+
 class StepsAndApproach(ReviseBase):
     def setUp(self):
         super().setUp()
@@ -84,6 +132,78 @@ class StepsAndApproach(ReviseBase):
         p = self.go("improve the sampling", part="methods.data")["proposal"]
         self.assertEqual(p["status"], "failed")
         self.assertEqual([i["state"] for i in p["steps"] if i["key"] in ("ask1", "check1")], ["failed", "failed"])
+
+
+class ProtectedPieces(ReviseBase):
+    """What the model is not shown, what it drops, and what is put back."""
+
+    def setUp(self):
+        super().setUp()
+        from tests.test_v2_chat import MAIN
+        self.live()
+        (Path(self.proj["path"]) / "main.tex").write_text(MAIN)
+        paper_index.refresh(self.name, self.proj)
+
+    def test_headings_at_the_top_are_never_sent_and_still_in_the_result(self):
+        seen = []
+
+        def model(body):
+            seen.append(passage_of(body))
+            return {"approach": "x", "revised_text": passage_of(body).replace("Each region has a distinct climate and soil.", "Each region has its own climate and soil."),
+                    "changes": [], "questions": []}
+        self.srv.script = [model]
+        ids = [c["id"] for c in paper_index.list_chunks(self.name, self.proj)["chunks"] if c["section_path"].endswith("Study area")]
+        p = self.go("improve the study area section", chunk_ids=ids)["proposal"]
+        self.assertEqual(p["status"], "proposed", p["units"][0].get("error"))
+        self.assertNotIn("[[LX001]]", seen[0])                                      # the \\subsection line was not shown
+        u = p["units"][0]
+        self.assertIn("[[LX001]]", u["masked_original"])
+        self.assertEqual(len(u["hunks"]), 1)                                        # only the sentence changed
+        revise.apply(self.name, self.proj, p["id"], accept="all", cleaner=lambda t: t)
+        written = (Path(self.proj["path"]) / "main.tex").read_text()
+        self.assertIn("\\subsection{Study area}", written)
+        self.assertIn("Each region has its own climate and soil.", written)
+
+    def test_an_inline_citation_the_model_dropped_is_put_back_and_flagged(self):
+        def model(body):
+            t = re.sub(r"\s*\[\[LX\d+\]\]", "", passage_of(body))             # the model forgot every citation
+            return {"approach": "x", "revised_text": t.replace("Farmers need guidance on irrigation", "Farmers need guidance about irrigation"), "changes": [], "questions": []}
+        self.srv.script = [model]
+        ids = [c["id"] for c in paper_index.list_chunks(self.name, self.proj)["chunks"] if c["section_path"] == "Introduction"]
+        p = self.go("improve the introduction", chunk_ids=ids)["proposal"]
+        u = p["units"][0]
+        self.assertEqual(p["status"], "proposed", u.get("error"))
+        self.assertEqual([(r["kind"], r["own_line"]) for r in u["restored"]], [("citation", False)])
+        self.assertIn("\\cite{smith2020}", u["restored"][0]["latex"])
+        self.assertEqual(len(self.srv.requests), 1)                                  # repaired on the spot: no second request was needed
+        self.assertEqual([i["detail"] for i in p["steps"] if i["key"] == "check1"], ["1 dropped piece put back; all intact"])
+
+    def test_a_mid_passage_heading_the_model_dropped_is_put_back_quietly(self):
+        def model(body):
+            t = passage_of(body)
+            t = "\n".join(ln for ln in t.split("\n") if not ln.startswith("[[LX"))
+            return {"approach": "x", "revised_text": t.replace("We fitted", "We estimated"), "changes": [], "questions": []}
+        self.srv.script = [model]
+        ids = [c["id"] for c in paper_index.list_chunks(self.name, self.proj)["chunks"] if c["section_path"].startswith("Materials and Methods")]
+        p = self.go("improve the methods", chunk_ids=ids)["proposal"]
+        u = p["units"][0]
+        self.assertEqual(p["status"], "proposed", u.get("error"))
+        self.assertTrue(u["restored"] and all(r["own_line"] for r in u["restored"]))
+        self.assertEqual(len(self.srv.requests), 1)
+
+    def test_an_answer_that_cannot_be_repaired_is_refused_in_plain_words(self):
+        bad = lambda body: {"approach": "x", "revised_text": "Entirely new text with [[LX099]] invented.", "changes": [], "questions": []}
+        self.srv.script = [bad, bad]
+        ids = [c["id"] for c in paper_index.list_chunks(self.name, self.proj)["chunks"] if c["section_path"] == "Introduction"]
+        p = self.go("improve the introduction", chunk_ids=ids)["proposal"]
+        u = p["units"][0]
+        self.assertEqual((p["status"], u["error_kind"]), ("failed", "validation"))
+        self.assertIn("dropped or changed", u["error_plain"])
+        self.assertIn("citation", u["error_plain"])
+        self.assertIn("Nothing was changed", u["error_plain"])
+        self.assertNotIn("LX0", u["error_plain"])                                    # no internal tag names in what a person reads
+        check = [i for i in p["steps"] if i["key"] == "check1"][0]
+        self.assertIn("dropped or changed", check["detail"])
 
 
 class Guard(ReviseBase):

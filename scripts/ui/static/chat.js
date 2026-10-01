@@ -307,16 +307,18 @@
       if (m.data.steps && m.data.steps.length) holder.append(h('details', null, h('summary', { text: 'What I did' }), stepList(m.data.steps)));
       (p.warnings || []).forEach((w) => holder.append(notice('warn', w)));
       if (p.status === 'failed') {
-        holder.append(notice('bad', 'I could not get a usable answer, so nothing is offered. ', p.units.map((u) => u.error).filter(Boolean).join(' ')));
+        holder.append(notice('bad', h('strong', { text: 'I could not use OpenAI\'s answer. ' }), p.units.map((u) => u.error_plain || u.error).filter(Boolean).join(' '), h('div', { class: 'small' }, h('a', { href: '#/settings', text: 'Change the model in Settings' }), ' or just ask again.')));
         return;
       }
       if (p.status === 'no_changes') holder.append(notice('ok', 'OpenAI found nothing it would change in this text.'));
 
       // each passage: the explanation, then the changes
       p.units.forEach((u) => {
-        if (u.status === 'failed') { holder.append(notice('bad', `${u.section_path}: ${u.error || 'failed'}`)); return; }
+        if (u.status === 'failed') { holder.append(notice('bad', `${u.section_path}: ${u.error_plain || u.error || 'failed'}`)); return; }
         const box = h('section', { class: 'unit' }, h('h3', { text: `${u.section_path.split(' > ').slice(-1)[0]} · lines ${u.line_start} to ${u.line_end}` }));
         if (u.approach) box.append(h('p', { class: 'approach', text: u.approach }));
+        const back = (u.restored || []).filter((x) => !x.own_line);
+        if (back.length) box.append(notice('warn', `OpenAI left out ${plural(back.length, 'citation or formula', 'citations or formulas')} (${back.map((x) => x.latex).join(', ')}). I put ${back.length === 1 ? 'it' : 'them'} back where ${back.length === 1 ? 'it' : 'they'} stood; check ${back.length === 1 ? 'it still sits' : 'they still sit'} next to the claim ${back.length === 1 ? 'it supports' : 'they support'}.`));
         (u.questions || []).forEach((q) => box.append(notice('warn', h('strong', { text: 'A question for you: ' }), q)));
         const bad = (u.validators || []).filter((v) => !v.ok);
         if (bad.length) box.append(notice('warn', 'Heads up: ', bad.map((v) => v.detail || v.name).join('; ')));

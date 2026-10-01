@@ -354,3 +354,98 @@ def check_author_text(original, text, mapping):
     Same validators as for the model's answer, run on the text after forgiving tag spellings."""
     fixed = restore_literals(normalize_tags(text), mapping, original)
     return fixed, validate(original, fixed), missing_details(original, fixed, mapping)
+
+
+# ------------------------------------------------------------------------------------------- headings the model does not need to see
+
+_TAG_LINE = re.compile(r"^(?:\[\[LX\d{3,5}\]\]\s*)+$")
+
+
+def split_frame(masked):
+    """Lines that hold nothing but protected pieces at the very start or end of a passage (the section headings, a label, a float) are
+    not sent to the model at all: it has nothing to edit there, and small models tend to drop them. -> (head, body, tail) with
+    head + body + tail == masked. Tag-only lines in the middle stay where they are."""
+    lines = masked.split("\n")
+    skip = lambda ln: not ln.strip() or bool(_TAG_LINE.match(ln.strip()))  # noqa: E731
+    i, j = 0, len(lines)
+    while i < j and skip(lines[i]):
+        i += 1
+    while j > i and skip(lines[j - 1]):
+        j -= 1
+    if i >= j:  # nothing but tags: leave it alone
+        return "", masked, ""
+    head = "\n".join(lines[:i]) + "\n" if i else ""
+    tail = "\n" + "\n".join(lines[j:]) if j < len(lines) else ""
+    return head, "\n".join(lines[i:j]), tail
+
+
+def _words_around(text, n=4):
+    return re.findall(r"\S+", PH.sub(" ", text))[-n:] if n > 0 else []
+
+
+def _find_seq(hay, words, from_end=False):
+    """Position of the word sequence in hay (case-insensitive, whitespace-tolerant) -> (start, end) or None."""
+    if not words:
+        return None
+    pat = re.compile(r"\s+".join(re.escape(w) for w in words), re.I)
+    ms = list(pat.finditer(hay))
+    return (ms[-1] if from_end else ms[0]).span() if ms else None
+
+
+def repair(original, revised):
+    """Put back protected pieces the model dropped, where they sat in the original: a heading or a float on its own line goes before the
+    paragraph that followed it, an inline citation or formula right after the words that preceded it. Only restores; never invents.
+    -> (text, [{tag, own_line}])  A tag that cannot be placed with confidence is left missing, so the usual check still rejects the answer."""
+    need = Counter(placeholders(original)) - Counter(placeholders(revised))
+    restored = []
+    if not need:
+        return revised, restored
+    seen = Counter()
+    for m in PH.finditer(original):
+        key = "LX" + m.group(1)
+        seen[key] += 1
+        if need.get(key, 0) <= 0:
+            continue
+        before, after = original[:m.start()], original[m.end():]
+        eol = after.find("\n")
+        own_line = not before[before.rfind("\n") + 1:].strip() and not (after if eol < 0 else after[:eol]).strip()
+        tag = f"[[{key}]]"
+        b_words, a_words = _words_around(before), (re.findall(r"\S+", PH.sub(" ", after))[:4])
+        placed = False
+        if own_line:  # a heading or float on its own line: before the paragraph that followed it, else after the paragraph that preceded it
+            for ws in (a_words[:4], a_words[:2]):
+                hit = _find_seq(revised, ws)
+                if hit:
+                    revised = revised[:hit[0]] + tag + "\n" + revised[hit[0]:]
+                    placed = True
+                    break
+            if not placed and not a_words:  # nothing follows it: it closed the passage
+                revised = revised.rstrip("\n") + "\n" + tag
+                placed = True
+            if not placed:
+                for ws in (b_words, b_words[-2:]):
+                    hit = _find_seq(revised, ws, from_end=True)
+                    if hit:
+                        nl = revised.find("\n", hit[1])
+                        pos = nl if nl >= 0 else len(revised)
+                        revised = revised[:pos] + "\n" + tag + revised[pos:]
+                        placed = True
+                        break
+        else:  # inline: right after the words that came before it, else right before the words that came after it
+            for ws in (b_words, b_words[-2:]):
+                hit = _find_seq(revised, ws, from_end=True)
+                if hit:
+                    revised = revised[:hit[1]] + (" " if before[-1:].isspace() else "") + tag + revised[hit[1]:]
+                    placed = True
+                    break
+            if not placed:
+                for ws in (a_words, a_words[:2]):
+                    hit = _find_seq(revised, ws)
+                    if hit:
+                        revised = revised[:hit[0]] + tag + (" " if after[:1].isspace() else "") + revised[hit[0]:]
+                        placed = True
+                        break
+        if placed:
+            need[key] -= 1
+            restored.append({"tag": key, "own_line": own_line})
+    return revised, restored

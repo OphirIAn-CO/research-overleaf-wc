@@ -283,9 +283,10 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
     prepared = []
     for u in units:
         masked, mapping = latex_mask.mask(u["text"])
-        user = build_user(instruction, card, rules_text, u, masked, prefs)
+        head, send, tail = latex_mask.split_frame(masked)  # headings at the top or bottom are not sent: nothing to edit there, and they cannot be lost
+        user = build_user(instruction, card, rules_text, u, send, prefs)
         _, body = openai_client.build_request(cfg, SYSTEM_PROMPT, user)
-        prepared.append({"unit": u, "masked": masked, "mapping": mapping, "user": user, "body": body})
+        prepared.append({"unit": u, "masked": masked, "mapping": mapping, "frame": (head, tail), "user": user, "body": body})
     payload_hash = store.sha256_text(json.dumps([p["body"] for p in prepared], sort_keys=True))
     est_tokens = sum(store.approx_tokens(SYSTEM_PROMPT + p["user"]) for p in prepared)
     est_out = sum(store.approx_tokens(p["masked"]) for p in prepared) * 2  # revised text plus the notes
@@ -329,11 +330,13 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
         steps.start(f"ask{i}", f"Asking {cfg['model']}{where}")
         unit = _run_unit(cfg, p, rule_ids, totals)
         proposal["units"].append(unit)
+        why = unit.get("error_plain") or unit.get("error")
         steps.finish(f"ask{i}", state="failed" if unit["status"] == "failed" else "done",
-                     detail=unit.get("error") if unit["status"] == "failed" else None)
+                     detail=why if unit["status"] == "failed" else None)
+        restored = len(unit.get("restored") or [])
         steps.add(f"check{i}", f"Checking citations, numbers and formulas are untouched{where}",
-                  detail=("it was rejected: " + unit.get("error", "")) if unit["status"] == "failed" else
-                  ("asked again once, then passed" if unit.get("retries") else "all intact"),
+                  detail=("it was rejected: " + (why or "")) if unit["status"] == "failed" else
+                  (f"{restored} dropped piece{'s' if restored != 1 else ''} put back; " if restored else "") + ("asked again once, then passed" if unit.get("retries") else "all intact"),
                   state="failed" if unit["status"] == "failed" else "done")
         for r in unit.get("validators", []):
             validators_all[r["name"]] = validators_all.get(r["name"], True) and r["ok"]
@@ -372,6 +375,19 @@ def _hunks(unit_id, masked, revised, mapping, changes, rule_ids, default_reason=
     return segs, hunks
 
 
+def _plain_validation(bad, mapping):
+    """Why an answer was thrown away, for a person."""
+    names = {r["name"] for r in bad}
+    if "placeholders_intact" in names:
+        lost = re.findall(r"LX\d+", next(r["detail"] for r in bad if r["name"] == "placeholders_intact"))
+        kinds = sorted({_kind(mapping.get(k, "")) for k in lost if k in mapping}) or ["protected piece"]
+        what = ", ".join(kinds)
+        return (f"OpenAI's answer dropped or changed {len(set(lost)) or 'some'} protected part(s) of your text ({what}), even after a second try, so I did not use it. "
+                "Nothing was changed. Asking again can work; a stronger model follows these rules more reliably (Settings, OpenAI).")
+    return ("OpenAI's answer broke a safety rule (" + ", ".join(sorted(n.replace("_", " ") for n in names)) + ") even after a second try, so I did not use it. "
+            "Nothing was changed. Asking again can work; a stronger model follows the rules more reliably.")
+
+
 def _run_unit(cfg, p, rule_ids, totals):
     u, masked, mapping = p["unit"], p["masked"], p["mapping"]
     unit = {"unit_id": u["unit_id"], "file": u["file"], "line_start": u["line_start"], "line_end": u["line_end"],
@@ -385,6 +401,8 @@ def _run_unit(cfg, p, rule_ids, totals):
             revised = obj["revised_text"]
             if not isinstance(revised, str) or not revised.strip():
                 raise openai_client.OpenAIError("empty revised_text", "parse")
+            head, tail = p["frame"]
+            revised, restored = latex_mask.repair(masked, head + revised.strip("\n") + tail)  # what the model left out is put back where it was
         except openai_client.OpenAIError as e:
             if e.kind in ("parse", "truncated") and attempt == 0:
                 totals["retries"] += 1
@@ -411,8 +429,10 @@ def _run_unit(cfg, p, rule_ids, totals):
             continue
         unit["validators"] = results
         if bad:
-            unit.update(status="failed", error="validation failed after one retry: " + latex_mask.summarize(results), error_kind="validation")
+            unit.update(status="failed", error="validation failed after one retry: " + latex_mask.summarize(results), error_kind="validation",
+                        error_plain=_plain_validation(bad, mapping))
             return unit
+        unit["restored"] = [{**x, "latex": mapping.get(x["tag"], "")[:80], "kind": _kind(mapping.get(x["tag"], ""))} for x in restored]
         segs, hunks = _hunks(u["unit_id"], masked, revised, mapping, obj.get("changes"), rule_ids)
         unit["segments"] = segs
         unit["hunks"] = hunks
