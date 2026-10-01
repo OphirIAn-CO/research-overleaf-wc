@@ -22,6 +22,22 @@ mount_arg() {  # mount_arg SOURCE TARGET [readonly]
   printf 'type=bind,"source=%s","target=%s"%s' "$s" "$d" "${3:+,readonly}"
 }
 running() { [ -n "$(docker ps -q -f "name=^/${NAME}$" 2>/dev/null)" ]; }
+running_port() { docker inspect -f '{{index .Config.Labels "ols.port"}}' "$NAME" 2>/dev/null || true; }
+port_free() {  # port_free PORT: true when nothing on this computer is listening there (another program or another container)
+  python3 - "$1" <<'PY'
+import socket, sys
+s = socket.socket()
+try:
+    s.bind(("127.0.0.1", int(sys.argv[1])))
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()
+PY
+}
+who_holds() {  # who_holds PORT: name of the Docker container publishing that port, if any
+  docker ps --filter "publish=$1" --format '{{.Names}}' 2>/dev/null | head -1
+}
 cfg_port() {
   if [ -n "${OVERLEAF_UI_PORT:-}" ]; then echo "$OVERLEAF_UI_PORT"; return; fi
   python3 - "$DATA/ui.json" <<'PY'
@@ -61,11 +77,13 @@ case "$cmd" in
     ;;
   up)
     need_docker
-    PORT="$(cfg_port)"
+    WANT="$(cfg_port)"
     if running; then
+      P="$(running_port)"; P="${P:-$WANT}"
       echo "Already running."
-      URL="http://127.0.0.1:${PORT}/?token=$(cat "$DATA/.ui_token")"; echo "$URL"; open_url "$URL" "${2:-}"; exit 0
+      URL="http://127.0.0.1:${P}/?token=$(cat "$DATA/.ui_token")"; echo "$URL"; open_url "$URL" "${2:-}"; exit 0
     fi
+    docker rm -f "$NAME" >/dev/null 2>&1 || true   # a half-started leftover of our own, if any
     docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "First run: building the image (a minute or two)..."; docker build -q -t "$IMAGE" -f "$DIR/ui/Dockerfile" "$DIR/ui" >/dev/null; }
     mkdir -p "$DATA/inbox"; chmod 700 "$DATA" 2>/dev/null || true
     ( umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > "$DATA/.ui_token" )
@@ -74,18 +92,43 @@ case "$cmd" in
       [ -n "$p" ] && [ -d "$p" ] && mounts+=(--mount "$(mount_arg "$p" "$p")") && n=$((n + 1))
     done < <(python3 "$DIR/scripts/common.py" paths)
     GN="$(git config user.name 2>/dev/null || true)"; GE="$(git config user.email 2>/dev/null || true)"
-    docker run -d --rm --init --name "$NAME" \
-      --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp:rw,mode=1777,size=128m \
-      --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
-      -p "127.0.0.1:${PORT}:${PORT}" \
-      -e OVERLEAF_UI_BIND=0.0.0.0 -e OVERLEAF_UI_PORT="$PORT" -e OVERLEAF_UI_PUBLIC_PORT="$PORT" \
-      -e OVERLEAF_UI_TOKEN_FILE="$DATA/.ui_token" -e OVERLEAF_SKILL_HOME="$DATA" -e HOME=/tmp/home \
-      -e GIT_AUTHOR_NAME="${GN:-Overleaf skill}" -e GIT_COMMITTER_NAME="${GN:-Overleaf skill}" \
-      -e GIT_AUTHOR_EMAIL="${GE:-overleaf-skill@localhost}" -e GIT_COMMITTER_EMAIL="${GE:-overleaf-skill@localhost}" \
-      -e GIT_CONFIG_COUNT=2 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
-      -e GIT_CONFIG_KEY_1=credential.https://git.overleaf.com.helper -e "GIT_CONFIG_VALUE_1=!python3 /app/git_cred.py" \
-      --mount "$(mount_arg "$DATA" "$DATA")" --mount "$(mount_arg "$DIR/scripts" /app readonly)" ${mounts[@]+"${mounts[@]}"} \
-      "$IMAGE" >/dev/null
+    start_container() {  # start_container PORT -> 0 started | 98 port taken | 1 other failure (message printed)
+      local out
+      if out="$(docker run -d --rm --init --name "$NAME" --label "ols.port=$1" \
+        --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp:rw,mode=1777,size=128m \
+        --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+        -p "127.0.0.1:${1}:${1}" \
+        -e OVERLEAF_UI_BIND=0.0.0.0 -e OVERLEAF_UI_PORT="$1" -e OVERLEAF_UI_PUBLIC_PORT="$1" \
+        -e OVERLEAF_UI_TOKEN_FILE="$DATA/.ui_token" -e OVERLEAF_SKILL_HOME="$DATA" -e HOME=/tmp/home \
+        -e GIT_AUTHOR_NAME="${GN:-Overleaf skill}" -e GIT_COMMITTER_NAME="${GN:-Overleaf skill}" \
+        -e GIT_AUTHOR_EMAIL="${GE:-overleaf-skill@localhost}" -e GIT_COMMITTER_EMAIL="${GE:-overleaf-skill@localhost}" \
+        -e GIT_CONFIG_COUNT=2 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
+        -e GIT_CONFIG_KEY_1=credential.https://git.overleaf.com.helper -e "GIT_CONFIG_VALUE_1=!python3 /app/git_cred.py" \
+        --mount "$(mount_arg "$DATA" "$DATA")" --mount "$(mount_arg "$DIR/scripts" /app readonly)" ${mounts[@]+"${mounts[@]}"} \
+        "$IMAGE" 2>&1)"; then return 0; fi
+      docker rm -f "$NAME" >/dev/null 2>&1 || true
+      case "$out" in
+        *"port is already allocated"*|*"address already in use"*|*"ports are not available"*) return 98 ;;
+      esac
+      echo "$out" >&2; return 1
+    }
+    PORT=""; rc=1
+    for i in $(seq 0 29); do   # the wanted port, else the next free one
+      cand=$((WANT + i))
+      if ! port_free "$cand"; then
+        holder="$(who_holds "$cand")"
+        if [ "$i" -eq 0 ]; then
+          if [ -n "$holder" ]; then by="by the Docker container \"$holder\""; else by="by another program on this computer"; fi
+          echo "Port ${cand} is already in use ${by}; looking for a free one."
+        fi
+        continue
+      fi
+      rc=0; start_container "$cand" || rc=$?
+      if [ "$rc" -eq 0 ]; then PORT="$cand"; break; fi
+      [ "$rc" -eq 98 ] || exit 1   # a real error was already printed
+    done
+    [ -n "$PORT" ] || { echo "Could not find a free port between ${WANT} and $((WANT + 29)). Free one, or set another start: OVERLEAF_UI_PORT=9000 ./ui.sh up"; exit 1; }
+    [ "$PORT" != "$WANT" ] && echo "Using port ${PORT} instead of ${WANT}."
     if ! wait_ready "$PORT"; then echo "It did not start. Last log lines:"; docker logs --tail 20 "$NAME" 2>&1 || true; exit 1; fi
     URL="http://127.0.0.1:${PORT}/?token=$(cat "$DATA/.ui_token")"
     echo "Running. Only this computer can reach it (127.0.0.1:${PORT}); it closes itself when idle."
@@ -99,7 +142,7 @@ case "$cmd" in
     ;;
   status)
     need_docker
-    if running; then echo "Running: http://127.0.0.1:$(cfg_port)/ (token in $DATA/.ui_token)"; else echo "Not running. Start it with ./ui.sh up"; fi
+    if running; then echo "Running: http://127.0.0.1:$(running_port || cfg_port)/ (token in $DATA/.ui_token)"; else echo "Not running. Start it with ./ui.sh up"; fi
     ;;
   logs)
     need_docker

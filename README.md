@@ -171,6 +171,7 @@ tell Claude "apply the proposal I handed you".
 | Push rejected | Someone edited on Overleaf. Ask Claude to pull first, or tap **Pull & push** in Telegram. |
 | Bot silent | Is it running? `pgrep -fl doi_bot`. Is your chat id in `allowed_chat_ids`? |
 | DOI not found | The bot only accepts DOIs that resolve at doi.org. Preprints without one need Claude's web-search route instead. |
+| `ui.sh up` says a port is already in use | Nothing to do: it tells you what holds the port (another container or program) and starts on the next free one, printing the right address. Pick a start port with `OVERLEAF_UI_PORT=9000 ./ui.sh up`. |
 | `ui.sh up` says Docker is not running | Start Docker Desktop, wait until it says it is running, try again. |
 | The web app does not list a paper | It only sees papers registered when it started: `ui.sh down`, then `ui.sh up`. |
 | Pull/Sync buttons are disabled or fail in the web app | Create `~/.config/overleaf-skill/overleaf_git.json` (the Docker app cannot use your Mac keychain). |
