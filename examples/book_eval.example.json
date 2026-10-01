@@ -1,0 +1,267 @@
+[
+  {
+    "query": "how do I start the introduction",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "introduc",
+        "open"
+      ]
+    }
+  },
+  {
+    "query": "how to state the research gap",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "gap",
+        "introduc",
+        "literature"
+      ]
+    }
+  },
+  {
+    "query": "how long should the introduction be",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "introduc"
+      ]
+    }
+  },
+  {
+    "query": "writing a literature review",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "literature",
+        "review",
+        "background",
+        "related"
+      ]
+    }
+  },
+  {
+    "query": "how to write the methods section",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "method"
+      ]
+    }
+  },
+  {
+    "query": "describing participants and sampling",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "sampl",
+        "participant",
+        "subject",
+        "method"
+      ]
+    }
+  },
+  {
+    "query": "how to describe the procedure so it can be repeated",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "procedure",
+        "method",
+        "replicat"
+      ]
+    }
+  },
+  {
+    "query": "reporting the statistical analysis",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "statistic",
+        "analysis",
+        "method"
+      ]
+    }
+  },
+  {
+    "query": "how to present results",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "result"
+      ]
+    }
+  },
+  {
+    "query": "reporting numbers and precision",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "number",
+        "result",
+        "statistic"
+      ]
+    }
+  },
+  {
+    "query": "designing tables",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "table",
+        "figure",
+        "display"
+      ]
+    }
+  },
+  {
+    "query": "designing figures and captions",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "figure",
+        "caption",
+        "graph",
+        "display"
+      ]
+    }
+  },
+  {
+    "query": "how to write the discussion",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "discussion"
+      ]
+    }
+  },
+  {
+    "query": "interpreting the findings",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "interpret",
+        "discussion"
+      ]
+    }
+  },
+  {
+    "query": "how to write the limitations",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "limitation",
+        "discussion"
+      ]
+    }
+  },
+  {
+    "query": "writing the conclusion",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "conclusion"
+      ]
+    }
+  },
+  {
+    "query": "how to write the abstract",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "abstract"
+      ]
+    }
+  },
+  {
+    "query": "choosing a good title",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "title"
+      ]
+    }
+  },
+  {
+    "query": "choosing keywords",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "keyword",
+        "title",
+        "abstract"
+      ]
+    }
+  },
+  {
+    "query": "citing sources and avoiding plagiarism",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "cit",
+        "reference",
+        "plagiar",
+        "attribut"
+      ]
+    }
+  },
+  {
+    "query": "active versus passive voice",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "active",
+        "passive",
+        "voice",
+        "style"
+      ]
+    }
+  },
+  {
+    "query": "which tense to use",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "tense",
+        "style"
+      ]
+    }
+  },
+  {
+    "query": "making sentences concise",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "concis",
+        "wordi",
+        "clear",
+        "sentence",
+        "style"
+      ]
+    }
+  },
+  {
+    "query": "writing clear paragraphs",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "paragraph",
+        "clear",
+        "style",
+        "organi"
+      ]
+    }
+  },
+  {
+    "query": "responding to reviewer comments",
+    "part": null,
+    "expect": {
+      "title_contains": [
+        "review",
+        "response",
+        "revis"
+      ]
+    }
+  }
+]
