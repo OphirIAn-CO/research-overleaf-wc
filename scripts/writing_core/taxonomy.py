@@ -113,3 +113,32 @@ def parents(tags):
 
 def label(part):
     return part.replace("_", " ").replace(".", " / ")
+
+
+# ------------------------------------------------------------------------------------------- what a passage is about
+
+CONTENT_SKIP = {"style", "references", "figures_tables", "notation"}  # words a writing handbook uses on nearly every page
+
+
+def counts(text):
+    """{part: how many times its synonyms occur}. Unlike scores(), this counts every occurrence."""
+    ws = words(text)
+    out = {}
+    for part, syns in PARTS.items():
+        n = 0
+        for phrase in (tuple(words(x)) for x in syns):
+            k = len(phrase)
+            if k:
+                n += sum(1 for i in range(len(ws) - k + 1) if tuple(ws[i:i + k]) == phrase)
+        if n:
+            out[part] = n
+    return out
+
+
+def content_tags(text, min_hits=4, per_100_words=1.2, max_tags=2):
+    """Parts a passage is mostly ABOUT, judged by how densely it uses their vocabulary: for a book whose headings do not name the
+    sections of a paper, so that "how to write the methods" can still find the pages that are about methods."""
+    n = max(len(words(text)), 1)
+    c = counts(text)
+    ranked = sorted(((p, k) for p, k in c.items() if p not in CONTENT_SKIP and k >= min_hits and k * 100.0 / n >= per_100_words), key=lambda x: -x[1])
+    return [p for p, _ in ranked[:max_tags]]

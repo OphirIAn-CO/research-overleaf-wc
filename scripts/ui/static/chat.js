@@ -484,6 +484,7 @@
     function welcome() {
       const setup = [];
       if (st.data.openai !== 'ok') setup.push(notice('warn', h('strong', { text: 'One thing first: ' }), 'OpenAI is not set up yet. ', h('a', { href: '#/settings', text: 'Add your key and model in Settings' }), '.'));
+      if (!(S.st.books || []).length) setup.push(notice('ok', h('strong', { text: 'Optional: ' }), 'your writing book is not prepared yet, so requests will not carry its advice. ', h('a', { href: '#/settings', text: 'Prepare it in Settings' }), '.'));
       return h('div', { class: 'welcome' }, h('h2', { text: `What would you like to do with ${paper}?` }), ...setup,
         h('ol', { class: 'how' },
           h('li', null, h('strong', { text: 'Say what you want. ' }), 'For example "improve the flow of the text before Figure 1 in the methods", "fix the grammar in the introduction", "peer review my paper", or paste a DOI.'),

@@ -182,6 +182,7 @@
     });
     q.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryBtn.click(); });
     box.append(await ruleCardPanel(B.id));
+    box.append(bookCheckCard(B.id));
     box.append(h('div', { class: 'row' }, h('label', { class: 'row tight small secondary' }, 'Book', bookSel)),
       h('section', { class: 'card' }, h('div', { class: 'row' }, q, partSel, tryBtn)), results);
     const treeBox = h('div', { class: 'tree' }, busy('Loading...'));
@@ -195,6 +196,19 @@
     });
     box.append(notice('ok', `${t.info.n_chunks} chunks, ${fmtTok(t.info.tokens)} tokens in total; outline found by ${t.info.method}. Use "Review the outline" above if chapters look wrong.`));
   });
+
+  function bookCheckCard(id) {
+    const out = h('div');
+    return h('section', { class: 'card', 'aria-label': 'Book check' }, h('h2', { text: 'Book check' }),
+      h('p', { class: 'small secondary', text: 'For each part of a paper, the pages of the book that would be used when you ask about it. If a part shows pages that are clearly about something else, the matching needs tuning: tell Claude which part and what you expected.' }),
+      guarded(h('button', { type: 'button', text: 'Run the check' }), async () => {
+        const r = await api.get(`/api/book/${encodeURIComponent(id)}/check`);
+        clear(out).append(h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['Part', 'Pages that would be used'].map((t) => h('th', { text: t })))),
+          h('tbody', null, r.rows.map((row) => h('tr', null, h('td', { text: row.label }),
+            h('td', null, row.chunks.length ? row.chunks.map((c) => h('div', { class: 'small', text: `${c.label}${c.has_card ? ' (summary ready)' : ''}` })) : h('span', { class: 'muted small', text: 'nothing matched' }),
+              row.fallback ? h('div', { class: 'muted small', text: 'No page is tagged for this part, so the whole book was searched.' }) : null)))))));
+      }), out);
+  }
 
   async function ruleCardPanel(id) {
     const st = await api.get(`/api/book/${encodeURIComponent(id)}/rules`);

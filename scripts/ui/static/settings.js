@@ -2,11 +2,73 @@
    Secrets are written to private files by the server and never shown again. */
 (function () {
   'use strict';
-  const { h, clear, api, notice, busy, guarded, registerPage, toast, S } = window.OLS;
+  const { h, clear, api, notice, busy, guarded, registerPage, toast, waitJob, S } = window.OLS;
   const enc = encodeURIComponent;
 
   const badge = (ok, yes, no) => h('span', { class: 'badge ' + (ok ? 'ok' : 'warn'), text: ok ? yes : no });
   function result(box, r) { clear(box).append(notice(r.ok ? 'ok' : 'bad', r.message)); }
+
+  const slug = (name) => (name.replace(/\.pdf$/i, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'handbook');
+
+  async function bookCard(st) {
+    const card = h('section', { class: 'card', 'aria-label': 'Writing book' });
+    const book = (st.books || [])[0];
+    const out = h('div', { class: 'stack' });
+    const prepare = (pdf, id, mode, label) => guarded(h('button', { type: 'button', class: 'primary', text: label }), async () => {
+      clear(out).append(busy('Reading the book. A long one takes about a minute...'));
+      try {
+        const r = await api.post('/api/book/ingest', { pdf, id, mode });
+        const res = await waitJob(r.job);
+        toast(res.status === 'skipped' ? 'It was already prepared' : 'The book is ready');
+        await window.OLS.loadState(); window.OLS.route();
+      } catch (e) { clear(out).append(notice('bad', e.message)); throw e; }
+    });
+    if (!book) {
+      card.append(h('p', { class: 'small secondary', text: 'The book is read once and cut into pieces of advice; each request then uses only the few pieces that apply. You never have to look at them.' }));
+      if (!st.inbox.length) {
+        card.append(notice('warn', 'No book yet. Put the PDF in this folder on your computer: ', h('code', { text: '~/.config/overleaf-skill/inbox/' }), ' (drag it in with Finder), then come back here. The PDF must have selectable text.'));
+      } else {
+        const sel = h('select', { 'aria-label': 'Book PDF' }, st.inbox.map((f) => h('option', { value: f, text: f })));
+        card.append(h('div', { class: 'row' }, sel, guarded(h('button', { type: 'button', class: 'primary', text: 'Prepare the book' }), async () => {
+          clear(out).append(busy('Reading the book. A long one takes about a minute...'));
+          try {
+            const r = await api.post('/api/book/ingest', { pdf: sel.value, id: slug(sel.value), mode: 'build' });
+            await waitJob(r.job); toast('The book is ready'); await window.OLS.loadState(); window.OLS.route();
+          } catch (e) { clear(out).append(notice('bad', e.message)); throw e; }
+        })));
+      }
+      card.append(out);
+      return card;
+    }
+    card.append(h('p', null, badge(true, 'ready', ''), ` ${book.source || book.id}: ${book.chunks} pieces of advice from ${book.pages} pages.`));
+    if (book.exercises) card.append(h('p', { class: 'small muted', text: `${book.exercises} pages of discussion questions were set aside; they are not advice.` }));
+    if (book.outdated) {
+      const here = st.inbox.includes(book.source);
+      card.append(notice('warn', h('strong', { text: 'The way advice is matched has improved. ' }), 'Preparing the book again takes about a minute and keeps any advice summaries already made. ',
+        here ? prepare(book.source, book.id, 'rebuild', 'Prepare again') : h('span', { class: 'small', text: `Put ${book.source} back in the inbox folder first.` })));
+    }
+    // advice summaries: one-time, costs a little, makes every later request cheaper and sharper
+    const rules = await api.get(`/api/book/${enc(book.id)}/rules`);
+    const rulesBox = h('div');
+    if (rules.todo === 0) {
+      rulesBox.append(h('p', { class: 'small secondary', text: `Short advice summaries are ready for all ${rules.chunks} pieces. Requests carry these instead of raw book text.` }));
+    } else {
+      rulesBox.append(h('p', { class: 'small secondary', text: `${rules.with_cards} of ${rules.chunks} pieces have a short advice summary. Making them is a one-time step that costs a little; afterwards every request is cheaper, sends less of the book out, and finds the right advice more easily.` }),
+        guarded(h('button', { type: 'button', text: 'See the cost' }), async () => {
+          const pl = await api.post(`/api/book/${enc(book.id)}/rules/preview`, {});
+          const bar = h('progress', { max: '1', value: '0', class: 'grow', hidden: true });
+          const go = guarded(h('button', { type: 'button', class: 'primary', text: 'Make the summaries once' }), async () => {
+            bar.hidden = false;
+            const r = await api.post(`/api/book/${enc(book.id)}/rules/run`, { confirm: pl.payload_hash });
+            try { const res = await waitJob(r.job, (j) => { if (j.progress) bar.value = j.progress[0] / j.progress[1]; }); toast(res.status === 'done' ? 'Summaries ready' : 'Stopped: ' + (res.error || res.status)); } catch (e) { toast(e.message); }
+            window.OLS.route();
+          });
+          clear(out).append(notice('warn', h('strong', { text: 'This sends the book text to OpenAI once. ' }), `${pl.chunks} pieces in ${pl.calls} requests to ${pl.model}, about ${Math.round(pl.est_tokens_in / 1000)}k tokens in and ${Math.round(pl.est_tokens_out / 1000)}k out${pl.est_cost != null ? ', roughly ' + pl.est_cost + ' in your price units' : ''}. It can resume if interrupted.`), h('div', { class: 'row' }, go, bar));
+        }));
+    }
+    card.append(rulesBox, out, h('p', { class: 'small' }, h('a', { href: '#/book', text: 'Open the book library (advanced)' })));
+    return card;
+  }
 
   registerPage('settings', 'Settings', async (box) => {
     await window.OLS.loadState();
@@ -94,12 +156,9 @@
       }
     } catch (e) { found.append(notice('warn', e.message)); }
 
-    // ---- writing book + advanced
-    const book = (st.books || [])[0];
-    box.append(h('h2', { class: 'section-h', text: 'Writing book' }), h('section', { class: 'card', 'aria-label': 'Writing book' },
-      book ? h('p', null, badge(true, 'ready', ''), ` ${book.source || book.id}: ${book.chunks} sections of advice, ${book.pages} pages. It is read once; each request uses only the few pieces that apply.`) :
-        notice('warn', 'No writing book is prepared yet. Put the PDF in your inbox folder (~/.config/overleaf-skill/inbox/) and prepare it in the book library.'),
-      h('p', { class: 'small' }, h('a', { href: '#/book', text: 'Open the book library' }))));
+    // ---- writing book: prepared once, from the PDF in the inbox
+    box.append(h('h2', { class: 'section-h', text: 'Writing book' }), await bookCard(st));
+
     const health = await api.get('/api/health').catch(() => ({ issues: [] }));
     box.append(h('h2', { class: 'section-h', text: 'Advanced' }), h('section', { class: 'card', 'aria-label': 'Advanced' },
       h('p', { class: 'small secondary', text: 'You do not need these for daily work. They show what happens behind the scenes.' }),

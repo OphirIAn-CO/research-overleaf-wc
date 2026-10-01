@@ -24,13 +24,13 @@ SCHEMA = {"type": "object", "additionalProperties": False, "required": ["cards"]
 
 
 def status(book_id):
-    chunks = book_index.read_chunks(book_id)
+    chunks = [c for c in book_index.read_chunks(book_id) if c.get("kind") != "exercise"]   # question pages are not advice
     done = sum(1 for c in chunks if c.get("rule_card"))
     return {"chunks": len(chunks), "with_cards": done, "todo": len(chunks) - done, "tokens": sum(c["tokens"] for c in chunks if not c.get("rule_card"))}
 
 
 def _batches(book_id, batch, limit=None):
-    todo = [c for c in book_index.read_chunks(book_id) if not c.get("rule_card")]
+    todo = [c for c in book_index.read_chunks(book_id) if not c.get("rule_card") and c.get("kind") != "exercise"]
     if limit:
         todo = todo[:limit]
     return [todo[i:i + batch] for i in range(0, len(todo), batch)]

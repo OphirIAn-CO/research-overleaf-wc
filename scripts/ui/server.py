@@ -184,7 +184,8 @@ def api_state(r):
     for b in config.list_books():
         m = book_index.manifest(b) or {}
         books.append({"id": b, "chunks": m.get("n_chunks"), "pages": m.get("n_pdf_pages"), "source": m.get("source_name"), "method": m.get("method"),
-                      "built_at": m.get("built_at")})
+                      "built_at": m.get("built_at"), "rule_cards": m.get("rule_cards", 0), "exercises": m.get("exercises", 0),
+                      "outdated": (m.get("logic_version") or 1) < chunk_book.LOGIC_VERSION})
     ui = config.ui_cfg()
     ostate, omsg = config.openai_status()
     token_present = (config.data_dir() / "overleaf_git.json").exists()
@@ -359,6 +360,20 @@ def api_ingest(r):
             out.update(entries=len(res["outline"]["entries"]), method=res["outline"]["method"], warnings=res["outline"].get("warnings", []))
         return out
     return {"job": r.app.jobs.submit(f"book import {bid} ({mode})", job)}
+
+
+BOOK_CHECK_PARTS = ("title", "abstract", "introduction", "background", "methods", "results", "discussion", "conclusion")
+
+
+def api_book_check(r):
+    """For each part of a paper, the book pages that would be used. Nothing is logged: this is a look, not a lookup on behalf of a paper."""
+    b = book_id(r)
+    rows = []
+    for part in BOOK_CHECK_PARTS:
+        res = retrieve.book_query(b, f"how to write the {taxonomy.label(part)}", part=part, budget=2000, max_chunks=4, style_cap=0, log=False)
+        rows.append({"part": part, "label": taxonomy.label(part), "fallback": res["fallback"],
+                     "chunks": [{"label": c["label"], "pages": c["pages"], "tokens": c["tokens"], "has_card": bool(c["rule_card"])} for c in res["chunks"]]})
+    return {"book": b, "rows": rows, "logic_version": (book_index.manifest(b) or {}).get("logic_version") or 1, "current_version": chunk_book.LOGIC_VERSION}
 
 
 def api_rules_status(r):
@@ -1229,7 +1244,7 @@ ROUTES = [
     ("GET", r"^/api/books$", api_books), ("GET", r"^/api/book/([A-Za-z0-9_-]+)/tree$", api_book_tree),
     ("GET", r"^/api/book/([A-Za-z0-9_-]+)/chunk$", api_book_chunk), ("GET", r"^/api/book/([A-Za-z0-9_-]+)/query$", api_book_query),
     ("GET", r"^/api/book/([A-Za-z0-9_-]+)/outline$", api_book_outline_get), ("POST", r"^/api/book/([A-Za-z0-9_-]+)/outline$", api_book_outline_save),
-    ("GET", r"^/api/book/([A-Za-z0-9_-]+)/rules$", api_rules_status), ("POST", r"^/api/book/([A-Za-z0-9_-]+)/rules/preview$", api_rules_preview),
+    ("GET", r"^/api/book/([A-Za-z0-9_-]+)/check$", api_book_check), ("GET", r"^/api/book/([A-Za-z0-9_-]+)/rules$", api_rules_status), ("POST", r"^/api/book/([A-Za-z0-9_-]+)/rules/preview$", api_rules_preview),
     ("POST", r"^/api/book/([A-Za-z0-9_-]+)/rules/run$", api_rules_run), ("POST", r"^/api/book/ingest$", api_ingest), ("GET", r"^/api/jobs/([0-9a-f]{12})$", api_job),
     ("POST", r"^/api/revise/preview$", api_revise_preview), ("POST", r"^/api/revise/run$", api_revise_run),
     ("GET", r"^/api/proposals$", api_proposals), ("GET", r"^/api/proposal$", api_proposal),

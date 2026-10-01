@@ -18,6 +18,7 @@ from collections import Counter
 from . import store, taxonomy
 
 TARGET_TOKENS, MAX_TOKENS, MIN_TOKENS, DROP_BELOW_TOKENS = 550, 700, 120, 25
+LOGIC_VERSION = 2   # 2: passages are also tagged by what they are about, and exercise questions are set aside
 SKIP_TITLES = {"index", "subject index", "author index", "name index", "bibliography", "colophon"}
 NOT_HEADINGS = {"contents", "table of contents", "list of figures", "list of tables"}
 
@@ -395,6 +396,16 @@ def _locate_entries(entries, pages):
     return out
 
 
+_NUMBERED_Q = re.compile(r"(?:^|\s)\d{1,2}[.)]\s+[A-Z][^?]{8,}?\?")
+
+
+def is_exercise(text):
+    """A page of discussion questions or tasks ("3. Do you think...? 4. How is it organized?") is not advice: it must not be sent as a rule."""
+    words = max(len(text.split()), 1)
+    q = text.count("?")
+    return len(_NUMBERED_Q.findall(text)) >= 3 or (q >= 4 and q * 100.0 / words >= 1.5)
+
+
 def build_chunks(pages, outline, book_id, target=TARGET_TOKENS, maximum=MAX_TOKENS, minimum=MIN_TOKENS):
     """pages: clean_pages() output. outline: dict with entries. -> (chunks, stats). Reading order, section-bounded."""
     entries = sorted(outline["entries"], key=lambda e: e["pdf_page"])
@@ -449,6 +460,11 @@ def build_chunks(pages, outline, book_id, target=TARGET_TOKENS, maximum=MAX_TOKE
             tags = [t for t in taxonomy.classify(" ".join(p["text"] for p in paras)[:1500], min_ratio=0.8)][:2]
         for k, piece in enumerate(pack_chunks(paras, target, maximum, minimum), 1):
             seq += 1
+            exercise = is_exercise(piece["text"])
+            piece_tags = [] if exercise else list(tags)
+            for extra in ([] if exercise else taxonomy.content_tags(piece["text"])):
+                if extra not in piece_tags:
+                    piece_tags.append(extra)
             ps, pe = piece["p0"] - offset, piece["p1"] - offset
             if ps < 1:
                 ps, pe = piece["p0"], piece["p1"]  # front-matter pages: fall back to PDF numbering
@@ -463,7 +479,7 @@ def build_chunks(pages, outline, book_id, target=TARGET_TOKENS, maximum=MAX_TOKE
                 "pdf_start": piece["p0"], "pdf_end": piece["p1"], "page_start": ps, "page_end": pe,
                 "label": f"{chap_lbl} {where} · {pages_txt}",
                 "text": piece["text"], "tokens": store.approx_tokens(piece["text"]),
-                "parts": tags, "rule_card": "",
+                "parts": piece_tags, "rule_card": "", "kind": "exercise" if exercise else "",
             })
     stats["chunks"] = len(chunks)
     return chunks, stats

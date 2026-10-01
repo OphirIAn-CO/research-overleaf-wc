@@ -49,7 +49,7 @@ def short_tokens(n):
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
-def book_query(book_id, query, part=None, budget=2000, max_chunks=6, style_cap=2, paper=None, paper_scope=None, source="cli"):
+def book_query(book_id, query, part=None, budget=2000, max_chunks=6, style_cap=2, paper=None, paper_scope=None, source="cli", log=True):
     """-> dict(chunks=[...], parts, terms, tokens, budget, candidates, fallback, trace, latency_ms).
 
     paper/paper_scope: when the lookup is made on behalf of a paper, the event is also written to that paper's own log
@@ -100,9 +100,10 @@ def book_query(book_id, query, part=None, budget=2000, max_chunks=6, style_cap=2
     ev = dict(kind="book", book=book_id, query=query, parts=routed, explicit_part=bool(explicit), terms=terms,
               candidates=candidates, ids=[c["id"] for c in chosen], scores=[round(c["score"], 3) for c in chosen],
               tokens=used, budget=budget, fallback=fallback, latency_ms=res["latency_ms"], source=source)
-    events.log(book_index.paths(book_id)["dir"], events.RETRIEVE, **ev)
-    if paper_scope:
-        events.log(paper_scope, events.RETRIEVE, paper=paper, **ev)
+    if log:
+        events.log(book_index.paths(book_id)["dir"], events.RETRIEVE, **ev)
+        if paper_scope:
+            events.log(paper_scope, events.RETRIEVE, paper=paper, **ev)
     return res
 
 
@@ -120,7 +121,7 @@ def _rank(con, terms, parents, subs, limit):
     if not terms:
         return [], None
     sql = ("SELECT c.*, bm25(chunks_fts, 0.0, ?, ?, ?) AS s FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.chunk_id "
-           "WHERE chunks_fts MATCH ?")
+           "WHERE chunks_fts MATCH ? AND COALESCE(c.kind, '') != 'exercise'")
     args = [HEAD_W, TEXT_W, CARD_W, fts_match(terms)]
     if parents:
         sql += " AND c.id IN (SELECT chunk_id FROM chunk_parts WHERE part IN (%s))" % ",".join("?" * len(parents))
@@ -141,7 +142,7 @@ def _rank(con, terms, parents, subs, limit):
 
 
 def _reading_order(con, parents, limit):
-    rows = con.execute("SELECT c.* FROM chunks c WHERE c.id IN (SELECT chunk_id FROM chunk_parts WHERE part IN (%s)) "
+    rows = con.execute("SELECT c.* FROM chunks c WHERE COALESCE(c.kind, '') != 'exercise' AND c.id IN (SELECT chunk_id FROM chunk_parts WHERE part IN (%s)) "
                        "ORDER BY c.seq LIMIT ?" % ",".join("?" * len(parents)), [*parents, limit]).fetchall()
     return [_row(r, 0.0) for r in rows]
 

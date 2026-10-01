@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import chunk_book, config, events, store, taxonomy
 
-SCHEMA = 1
+SCHEMA = 2
 
 
 class BookError(Exception):
@@ -82,7 +82,7 @@ def build_sqlite(chunks, db_path, meta=None):
         CREATE TABLE chunks(id TEXT PRIMARY KEY, seq INTEGER, chapter INTEGER, section INTEGER, k INTEGER,
             chapter_number TEXT, section_number TEXT, chapter_title TEXT, section_title TEXT, heading_path TEXT,
             pdf_start INTEGER, pdf_end INTEGER, page_start INTEGER, page_end INTEGER, label TEXT,
-            text TEXT, tokens INTEGER, rule_card TEXT);
+            text TEXT, tokens INTEGER, rule_card TEXT, kind TEXT);
         CREATE TABLE chunk_parts(chunk_id TEXT, part TEXT);
         CREATE INDEX idx_parts ON chunk_parts(part);
         CREATE INDEX idx_seq ON chunks(seq);
@@ -90,7 +90,7 @@ def build_sqlite(chunks, db_path, meta=None):
             tokenize='porter unicode61');
     """)
     cols = ["id", "seq", "chapter", "section", "k", "chapter_number", "section_number", "chapter_title",
-            "section_title", "heading_path", "pdf_start", "pdf_end", "page_start", "page_end", "label", "text", "tokens", "rule_card"]
+            "section_title", "heading_path", "pdf_start", "pdf_end", "page_start", "page_end", "label", "text", "tokens", "rule_card", "kind"]
     for c in chunks:
         con.execute(f"INSERT INTO chunks({','.join(cols)}) VALUES({','.join('?' * len(cols))})", [c.get(k, "") for k in cols])
         con.executemany("INSERT INTO chunk_parts VALUES(?, ?)", [(c["id"], p) for p in c.get("parts", [])])
@@ -109,7 +109,13 @@ def open_book(book_id):
     p = paths(book_id)
     if not p["manifest"].exists():
         raise BookError(f"book {book_id!r} is not imported. Run: writing.py book-ingest <pdf> --id {book_id}")
-    return store.open_checked(p["db"], lambda: build_sqlite(read_chunks(book_id), p["db"], {"book_id": book_id}))
+    rebuild = lambda: build_sqlite(read_chunks(book_id), p["db"], {"book_id": book_id})  # noqa: E731
+    con = store.open_checked(p["db"], rebuild)
+    if store.meta_get(con, "schema") != SCHEMA:  # an index built by an older version of this code: it is only a cache, so make it again
+        con.close()
+        rebuild()
+        con = store.connect(p["db"])
+    return con
 
 
 # ------------------------------------------------------------------------------ import
@@ -132,13 +138,22 @@ def build(pdf, book_id, target=chunk_book.TARGET_TOKENS, maximum=chunk_book.MAX_
     chunks, stats = chunk_book.build_chunks(pages, outline, book_id, target, maximum, minimum)
     if not chunks:
         raise BookError("no text chunks were produced. Is the PDF scanned (images only)? It needs selectable text.")
+    try:  # advice summaries cost money to make: keep the ones whose passage did not change
+        old = {c["id"]: c for c in read_chunks(book_id)}
+    except BookError:
+        old = {}
+    for c in chunks:
+        prev = old.get(c["id"])
+        if prev and prev.get("rule_card") and prev.get("text") == c["text"]:
+            c["rule_card"] = prev["rule_card"]
     _atomic_write(p["chunks"], "".join(json.dumps(c, ensure_ascii=False) + "\n" for c in chunks))
     build_sqlite(chunks, p["db"], {"book_id": book_id})
     man = {"book_id": book_id, "schema": SCHEMA, "source_name": Path(pdf).name, "source_path": str(Path(pdf).resolve()),
            "source_sha256": store.sha256_file(pdf), "outline_sha256": store.sha256_file(p["outline"]),
            "method": outline.get("method"), "n_pdf_pages": len(pages), "n_chunks": len(chunks),
            "n_chapters": len({c["chapter"] for c in chunks}), "tokens": sum(c["tokens"] for c in chunks),
-           "built_at": time.time(), "stats": stats}
+           "built_at": time.time(), "stats": stats, "logic_version": chunk_book.LOGIC_VERSION,
+           "rule_cards": sum(1 for c in chunks if c.get("rule_card")), "exercises": sum(1 for c in chunks if c.get("kind") == "exercise")}
     _atomic_write(p["manifest"], json.dumps(man, indent=2))
     return man
 
