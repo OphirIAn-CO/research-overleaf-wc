@@ -15,6 +15,12 @@ need_docker() {
   command -v docker >/dev/null 2>&1 || { echo "Docker is not installed. Install Docker Desktop (or Docker Engine), then run this again."; exit 1; }
   docker info >/dev/null 2>&1 || { echo "Docker is installed but not running. Start Docker Desktop, wait until it says running, then run this again."; exit 1; }
 }
+# Bind mounts use --mount, never -v: "-v source:target" breaks on any path that contains a colon (a folder like ".../2026:27/..."
+# is perfectly legal on macOS), and --mount with quoted fields also copes with spaces, commas and quotes.
+mount_arg() {  # mount_arg SOURCE TARGET [readonly]
+  local s="${1//\"/\"\"}" d="${2//\"/\"\"}"
+  printf 'type=bind,"source=%s","target=%s"%s' "$s" "$d" "${3:+,readonly}"
+}
 running() { [ -n "$(docker ps -q -f "name=^/${NAME}$" 2>/dev/null)" ]; }
 cfg_port() {
   if [ -n "${OVERLEAF_UI_PORT:-}" ]; then echo "$OVERLEAF_UI_PORT"; return; fi
@@ -46,6 +52,7 @@ PY
   return 1
 }
 
+[ "${UI_SH_SOURCE_ONLY:-}" = 1 ] && return 0 2>/dev/null  # lets the tests load the helper functions without running anything
 cmd="${1:-help}"
 case "$cmd" in
   build)
@@ -64,7 +71,7 @@ case "$cmd" in
     ( umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > "$DATA/.ui_token" )
     mounts=(); n=0
     while IFS= read -r p; do
-      [ -n "$p" ] && [ -d "$p" ] && mounts+=(-v "$p:$p") && n=$((n + 1))
+      [ -n "$p" ] && [ -d "$p" ] && mounts+=(--mount "$(mount_arg "$p" "$p")") && n=$((n + 1))
     done < <(python3 "$DIR/scripts/common.py" paths)
     GN="$(git config user.name 2>/dev/null || true)"; GE="$(git config user.email 2>/dev/null || true)"
     docker run -d --rm --init --name "$NAME" \
@@ -77,7 +84,7 @@ case "$cmd" in
       -e GIT_AUTHOR_EMAIL="${GE:-overleaf-skill@localhost}" -e GIT_COMMITTER_EMAIL="${GE:-overleaf-skill@localhost}" \
       -e GIT_CONFIG_COUNT=2 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
       -e GIT_CONFIG_KEY_1=credential.https://git.overleaf.com.helper -e "GIT_CONFIG_VALUE_1=!python3 /app/git_cred.py" \
-      -v "$DATA:$DATA" -v "$DIR/scripts:/app:ro" ${mounts[@]+"${mounts[@]}"} \
+      --mount "$(mount_arg "$DATA" "$DATA")" --mount "$(mount_arg "$DIR/scripts" /app readonly)" ${mounts[@]+"${mounts[@]}"} \
       "$IMAGE" >/dev/null
     if ! wait_ready "$PORT"; then echo "It did not start. Last log lines:"; docker logs --tail 20 "$NAME" 2>&1 || true; exit 1; fi
     URL="http://127.0.0.1:${PORT}/?token=$(cat "$DATA/.ui_token")"
