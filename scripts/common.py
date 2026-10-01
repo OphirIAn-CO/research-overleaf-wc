@@ -175,9 +175,10 @@ def main(a):
             issues = [verify(n, p)] if verify(n, p) else []
             if not p.get("mendeley_group"):
                 issues.append(f"{n}: no Mendeley group (DOIs will not reach Mendeley)")
-            gi = Path(p["path"]) / ".gitignore"
-            if not (gi.exists() and ".overleaf-skill" in gi.read_text()):
-                issues.append(f"{n}: .overleaf-skill/ not in .gitignore (session memory could be pushed)")
+            ignored = subprocess.run(["git", "-C", p["path"], "check-ignore", "-q", ".overleaf-skill/memory.md"],
+                                     capture_output=True).returncode == 0  # .gitignore or the clone-local .git/info/exclude
+            if not ignored:
+                issues.append(f"{n}: .overleaf-skill/ is not git-ignored (session memory and indexes could be pushed)")
             try:  # writing coach checks (optional package; a bug there must not break doctor)
                 from writing_core import health
                 issues += health.paper_issues(n, p)

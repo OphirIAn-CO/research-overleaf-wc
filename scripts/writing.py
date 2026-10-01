@@ -8,6 +8,10 @@
   writing.py book-query "<request>" [--id ID] [--part P] [--budget N] [--max N] [--no-text] [--json]
   writing.py book-chunk <chunk-id> [--id ID]
   writing.py eval [--id ID] [--file F] [-k 3] [--init]
+  writing.py index [--paper P] [--force]            refresh one paper's index now (it also refreshes itself on every query/pass)
+  writing.py query "<request>" [--paper P] [--part P] [--kind K] [--budget N] [--no-text] [--json]
+        Find the relevant chunks of ONE paper (empty request = outline). --paper: registered name or path; default = the
+        current directory's paper, else the paper last worked on.
   writing.py doctor
 
 --id may be omitted when exactly one book is imported. Data lives in ~/.config/overleaf-skill/ (never in git).
@@ -19,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common  # noqa: E402
-from writing_core import book_eval, book_index, chunk_book, config, retrieve  # noqa: E402
+from writing_core import book_eval, book_index, chunk_book, config, paper_index, retrieve  # noqa: E402
 
 COMMANDS = {}
 
@@ -110,6 +114,33 @@ def cmd_eval(args):
             print("  MISS:", r["query"], "->", "; ".join(r["top"]) or "(nothing)")
 
 
+def resolve_paper(args):
+    try:
+        return common.resolve(getattr(args, "paper", None))
+    except (KeyError, RuntimeError) as e:
+        raise SystemExit(f"error: {e}")
+
+
+@command("index")
+def cmd_index(args):
+    name, proj = resolve_paper(args)
+    r = paper_index.refresh(name, proj, trigger="manual", force=args.force, source="cli")
+    print(f"{name}: {r['added']} added, {r['changed']} changed, {r['removed']} removed, {r['unchanged']} unchanged "
+          f"({r['total']} chunks, ~{r['tex_tokens']} manuscript tokens){' [no file changed]' if r['skipped_scan'] else ''}")
+    for w in r.get("warnings", []):
+        print("warning:", w)
+
+
+@command("query")
+def cmd_query(args):
+    name, proj = resolve_paper(args)
+    res = paper_index.query(name, proj, args.query, part=args.part, kind=args.kind, budget=args.budget, source="cli")
+    if args.json:
+        emit(res)
+    else:
+        print(paper_index.format_paper_result(res, with_text=not args.no_text))
+
+
 @command("doctor")
 def cmd_doctor(args):
     common.main(["doctor"])
@@ -143,6 +174,16 @@ def build_parser():
     p.add_argument("--file")
     p.add_argument("-k", type=int, default=3)
     p.add_argument("--init", action="store_true")
+    p = add("index")
+    p.add_argument("--paper")
+    p.add_argument("--force", action="store_true")
+    p = add("query", (["query"], {"nargs": "?", "default": ""}))
+    p.add_argument("--paper")
+    p.add_argument("--part")
+    p.add_argument("--kind")
+    p.add_argument("--budget", type=int, default=2500)
+    p.add_argument("--no-text", action="store_true")
+    p.add_argument("--json", action="store_true")
     add("doctor")
     return ap
 
@@ -151,7 +192,8 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         COMMANDS[args.cmd](args)
-    except (book_index.BookError, config.ConfigError, chunk_book.ToolMissing, FileNotFoundError, ValueError) as e:
+    except (book_index.BookError, config.ConfigError, chunk_book.ToolMissing, paper_index.IsolationError,
+            FileNotFoundError, ValueError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     return 0
