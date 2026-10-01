@@ -553,18 +553,66 @@ def api_secret_git(r):
     return {"ok": True}
 
 
+_PROBES = {}   # url -> (when, result): the sites' headers hardly ever change, and asking costs a few seconds
+
+
+def _probe_many(urls):
+    out, threads = {}, []
+
+    def one(u):
+        hit = _PROBES.get(u)
+        if hit and time.time() - hit[0] < 600:
+            out[u] = hit[1]
+            return
+        try:
+            res = panes.probe(u)
+        except ValueError as e:
+            res = {"url": u, "error": str(e)}
+        _PROBES[u] = (time.time(), res)
+        out[u] = res
+    for u in urls:
+        t = threading.Thread(target=one, args=(u,), daemon=True)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join(timeout=12)
+    return out
+
+
+def _pane_addresses(n, p):
+    ui = config.ui_cfg()
+    return ui, panes.quillbot_url(ui), panes.overleaf_url(p, config.paper_settings(p).get("overleaf_url"))
+
+
 def api_panes(r):
-    """The two addresses the side panes load. Overleaf is the author's own project (its id is in the paper's Git address)."""
+    """What the two side panes show and how: inside the app (when the site allows it) or in a window beside it. ?check=1 asks the sites."""
     n, p = paper_ref(r.arg("paper", ""))
-    return {"paper": n, "quillbot": panes.QUILLBOT_URL, "overleaf": panes.overleaf_url(p)}
+    ui, q, o = _pane_addresses(n, p)
+    mode = ui.get("pane_mode") if ui.get("pane_mode") in ("auto", "window", "inside") else "auto"
+    urls = [u for u in (q, o) if u]
+    probes = _probe_many(urls) if r.arg("check") and mode == "auto" else {}
+    out = {"paper": n, "mode": mode}
+    for key, url in (("quillbot", q), ("overleaf", o)):
+        if not url:
+            out[key] = {"url": None, "inside": False, "reason": "There is no address for this paper's Overleaf project yet. Add it in Settings."}
+            continue
+        inside, reason = panes.decide_inside(mode, probes.get(url), url)
+        if mode == "auto" and not r.arg("check"):
+            inside, reason = False, ""   # not asked yet
+        out[key] = {"url": url, "inside": inside, "reason": reason}
+    return out
 
 
 def api_test_frames(r):
     """Ask the two sites, from here, whether they allow being shown inside another page. Headers only; nothing about the paper is sent."""
     n, p = paper_ref(r.body.get("paper", ""))
-    out = {"quillbot": panes.probe(panes.QUILLBOT_URL)}
-    url = panes.overleaf_url(p)
-    out["overleaf"] = panes.probe(url) if url else {"url": None, "error": "this paper's Overleaf address has no project id"}
+    ui, q, o = _pane_addresses(n, p)
+    out = {"quillbot": panes.probe(q)}
+    out["overleaf"] = panes.probe(o) if o else {"url": None, "error": "this paper's Overleaf address has no project id"}
+    for key, url in (("quillbot", q), ("overleaf", o)):
+        if url:
+            _PROBES[url] = (time.time(), out[key])
+    out["mode"] = ui.get("pane_mode") or "auto"
     return out
 
 
@@ -895,6 +943,18 @@ def api_overview(r):
     return {"paper": n, "pending": rows[:30], "pending_count": len(rows), "sentence": sentence, "last_checked": last, "index": paper_index.peek(p)}
 
 
+def _panes_settings(r):
+    ui = config.ui_cfg()
+    out = {"mode": ui.get("pane_mode") if ui.get("pane_mode") in ("auto", "window", "inside") else "auto", "quillbot_url": panes.quillbot_url(ui), "quillbot_default": panes.QUILLBOT_URL,
+           "overleaf_url": None, "overleaf_derived": False, "overleaf_override": ""}
+    paper = r.arg("paper")
+    if paper:
+        n, p = paper_ref(paper)
+        override = config.paper_settings(p).get("overleaf_url") or ""
+        out.update(overleaf_url=panes.overleaf_url(p, override), overleaf_override=override, overleaf_derived=bool(not (override and panes.valid_overleaf(override)) and panes.overleaf_url(p)))
+    return out
+
+
 def api_connections(r):
     d = config.data_dir()
     tg = common.load("telegram.json", {}) or {}
@@ -911,7 +971,8 @@ def api_connections(r):
             "mendeley": {"state": "connected" if mend_creds and mend_tokens else "needs_sign_in" if mend_creds else "not_set_up",
                          "command": f'python3 "{here}/scripts/mendeley_sync.py" authorize'},
             "telegram": {"state": "set_up" if tg.get("token") else "not_set_up", "allowed": len(tg.get("allowed_chat_ids") or [])},
-            "limits": {k: config.ui_cfg()[k] for k in ("guard_passages", "max_passages", "idle_minutes")}, "in_docker": os.environ.get("OVERLEAF_UI_IN_DOCKER") == "1"}
+            "limits": {k: config.ui_cfg()[k] for k in ("guard_passages", "max_passages", "idle_minutes")},
+            "panes": _panes_settings(r), "in_docker": os.environ.get("OVERLEAF_UI_IN_DOCKER") == "1"}
 
 
 def api_test_openai(r):
@@ -984,6 +1045,11 @@ def api_settings(r):
         for key in ("dry_run", "confirm_before_send", "send_refs_to_overleaf", "mirror_to_mendeley"):
             if key in body:
                 config.set_paper_setting(p, key, bool(body[key]))
+        if "overleaf_url" in body:
+            v = str(body["overleaf_url"] or "").strip()
+            if v and not panes.valid_overleaf(v):
+                raise ApiError(400, "the Overleaf address must look like https://www.overleaf.com/project/<project id>")
+            config.set_paper_setting(p, "overleaf_url", v)
     ui = body.get("ui")
     if isinstance(ui, dict):
         cur = common.load("ui.json", {}) or {}
@@ -992,6 +1058,15 @@ def api_settings(r):
                 cur["idle_minutes"] = max(5, min(int(ui["idle_minutes"]), 24 * 60))
             except (TypeError, ValueError):
                 raise ApiError(400, "idle_minutes must be a number") from None
+        if "quillbot_url" in ui:
+            v = str(ui["quillbot_url"] or "").strip()
+            if v and not panes.valid_quillbot(v):
+                raise ApiError(400, "the QuillBot address must be an https address on quillbot.com")
+            cur["quillbot_url"] = v or None
+        if "pane_mode" in ui:
+            if ui["pane_mode"] not in ("auto", "window", "inside"):
+                raise ApiError(400, "pane_mode must be auto, window or inside")
+            cur["pane_mode"] = ui["pane_mode"]
         for key, lo, hi in (("guard_passages", 1, 100), ("max_passages", 1, 100)):
             if key in ui:
                 try:

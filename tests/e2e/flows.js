@@ -111,6 +111,7 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   await page.waitForSelector('section[aria-label="OpenAI"]');
   const settings = await text(page, '#main');
   ok(/OpenAI/.test(settings) && /Overleaf/.test(settings) && /Text-cleaning service/.test(settings) && /Mendeley/.test(settings), 'Settings has every key and connection in one place');
+  ok(/QuillBot and Overleaf beside the chat/.test(settings) && /never sees it/.test(settings), 'Settings says where QuillBot and Overleaf are and that no password is typed there');
   ok(!/sk-demo/.test(await page.content()), 'the saved API key is never in the page');
   ok(!JARGON.test(settings.split('Advanced')[0]), 'Settings (before Advanced) uses no jargon: ' + (JARGON.exec(settings.split('Advanced')[0]) || [''])[0]);
   await page.click('section[aria-label="OpenAI"] button:has-text("Test")');
@@ -126,6 +127,7 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   await page.click('.pane-bar button:has-text("QuillBot")');
   await page.waitForSelector('#panes-area .pane h2:has-text("QuillBot")');
   ok((await page.$$eval('#panes-area .pane h2', (a) => a.map((x) => x.textContent))).join() === 'Paper text,QuillBot', 'the panes sit beside the chat');
+  ok(await page.isVisible('#panes-area button:has-text("Open QuillBot beside the app")'), 'a site that cannot be framed offers one clear button to open it beside the app');
   await shot(page, '08-panes');
   await page.close();
 

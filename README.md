@@ -148,12 +148,15 @@ Everything else is set up **inside the app**, in **Settings** (nothing to edit b
 
 Then just talk to it. The pages are **Chat**, **References**, **Activity** and **Settings**; the papers and your chats are in the sidebar.
 
-**QuillBot and Overleaf beside the chat.** QuillBot has no public API, so the paste stays yours, but you can switch on
-**QuillBot**, **Overleaf** and **Paper text** above the chat to see them side by side. Some sites refuse to be shown inside another
-page, and Safari can block their sign-in; each pane has **Open beside the app**, which opens the site in a window on the free half of
-your screen. **Settings, Advanced, Test the side panes** tells you what works in your browser. **Copy for QuillBot** copies the
-suggestion with your citations and formulas as tags (`[[LX001]]`) so QuillBot cannot damage them; paste QuillBot's result into
-"Your final version" and the app checks every tag is still there before you can approve.
+**QuillBot and Overleaf beside the chat.** Switch on **QuillBot**, **Overleaf** and **Paper text** above the chat. QuillBot has no public API,
+so the paste stays yours. Many sites refuse to be shown inside another page (and Safari can block their sign-in), so by default the app
+asks each site once: if it allows it, the page appears inside the app; if not, that pane becomes one clear button, **Open QuillBot beside
+the app**, which opens the site in its own window on the free half of your screen (put the app on the left half; on a Mac hold the green
+button and choose "Tile Window to Left of Screen"). You sign in once in that window; the app never sees your QuillBot or Overleaf
+password. In **Settings > QuillBot and Overleaf beside the chat** you can change the QuillBot address, give a paper's Overleaf project
+address if it differs from the one built from its Git address, force "always in a window", and press **Ask the sites if they allow it**.
+**Copy for QuillBot** copies the suggestion with your citations and formulas as tags (`[[LX001]]`) so QuillBot cannot damage them; paste
+QuillBot's result into "Your final version" and the app checks every tag is still there before you can approve.
 
 **Peer review** needs the `academic-paper` skill installed under `~/.claude/skills/` (`ui.sh` shares its rubric folder read-only).
 
@@ -198,7 +201,7 @@ your book), or use **Book check** in the book library (Settings, Advanced).
 | The book gives odd advice | **Settings > Advanced > Book library > Book check** shows, for each part of a paper, which pages would be used. If the wrong chapter shows up, tell Claude which part and what you expected. A scanned (image-only) PDF needs OCR first. |
 | "Approve and save" is missing | The text-cleaning service is not set in Settings, so the button is **Let Claude apply it**. |
 | The model was not found / the key was rejected | Use **Test** in **Settings > OpenAI**. It says which one it is, and never shows the key. |
-| QuillBot or Overleaf stays blank next to the chat | The site refuses to be framed (or Safari blocked its sign-in). Use **Open beside the app**; **Settings > Advanced > Test the side panes** explains what your browser allows. |
+| QuillBot or Overleaf does not appear next to the chat | The site refuses to be shown inside another page (or Safari blocked its sign-in). Choose **Always in a window** in **Settings > QuillBot and Overleaf beside the chat**, or just use **Open QuillBot beside the app**. No password goes in Settings. If the Overleaf address is missing, type the project address there. |
 | A reference is "waiting for Mendeley" | The bibliography already has it. Mendeley was unreachable or not signed in; the entry is retried after the next success, or press **Try again now** on the References page. |
 | Anything else | `common.py doctor` lists per-paper problems; `writing.py stats` prints what the system has been doing. |
 

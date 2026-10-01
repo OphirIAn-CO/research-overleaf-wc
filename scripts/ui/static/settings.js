@@ -72,7 +72,7 @@
 
   registerPage('settings', 'Settings', async (box) => {
     await window.OLS.loadState();
-    const c = await api.get('/api/connections');
+    const c = await api.get('/api/connections' + (S.paper ? '?paper=' + enc(S.paper) : ''));
     const st = S.st;
     const paper = S.paper;
     box.append(h('div', { class: 'page-head' }, h('h1', { text: 'Settings' }), h('span', { class: 'muted small', text: 'Keys and tokens are saved in private files on this computer. They are never shown again, only replaced.' })));
@@ -114,7 +114,33 @@
     const tg = h('section', { class: 'card', 'aria-label': 'Telegram' }, h('div', { class: 'row' }, h('h2', { text: 'Telegram (phone)' }), badge(c.telegram.state === 'set_up', 'set up', 'not set up')),
       h('p', { class: 'small secondary', text: c.telegram.state === 'set_up' ? `Send a DOI to your bot from your phone and it is added to the active paper (${c.telegram.allowed} chat allowed).` :
         'Optional. A Telegram bot lets you add a DOI from your phone. See the README for the one-time setup.' }));
-    box.append(h('h2', { class: 'section-h', text: 'Connections' }), h('div', { class: 'grid two' }, openai, overleaf, cleaner, mend, tg));
+    // ---- QuillBot and Overleaf beside the chat: their addresses, and inside the app or in a window
+    const pn = c.panes;
+    const qUrl = h('input', { type: 'text', value: pn.quillbot_url === pn.quillbot_default ? '' : pn.quillbot_url, placeholder: pn.quillbot_default, 'aria-label': 'QuillBot address', class: 'grow' });
+    const oUrl = h('input', { type: 'text', value: pn.overleaf_override || '', placeholder: pn.overleaf_url || 'https://www.overleaf.com/project/<project id>', 'aria-label': 'Overleaf project address', class: 'grow' });
+    const modeSel = h('select', { 'aria-label': 'Where to show them' },
+      [['auto', 'Automatic: inside the app when the site allows it, otherwise in a window'], ['window', 'Always in a window beside the app (works everywhere)'], ['inside', 'Always try inside the app (may stay blank)']].map(([v, t]) => h('option', { value: v, text: t, selected: pn.mode === v })));
+    const paneOut = h('div', { class: 'stack' });
+    const sitesCard = h('section', { class: 'card', 'aria-label': 'Side panes' }, h('div', { class: 'row' }, h('h2', { text: 'QuillBot and Overleaf beside the chat' })),
+      h('p', { class: 'small secondary', text: 'You do not enter your QuillBot or Overleaf password here. You sign in once, in the window; the app never sees it. Here you only say where the pages are and how to show them.' }),
+      h('label', { class: 'field' }, h('span', { text: 'QuillBot address (leave empty for the usual one)' }), qUrl),
+      S.paper ? h('label', { class: 'field' }, h('span', { text: `Overleaf project address for ${S.paper}` + (pn.overleaf_derived ? ' (taken from the paper\'s Git address; type another to override)' : '') }), oUrl) : null,
+      h('label', { class: 'field' }, h('span', { text: 'Where to show them' }), modeSel),
+      h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Save' }), async () => {
+        await api.post('/api/settings', Object.assign({ ui: { quillbot_url: qUrl.value.trim(), pane_mode: modeSel.value } }, S.paper ? { paper: S.paper, overleaf_url: oUrl.value.trim() } : {}));
+        toast('Saved'); window.OLS.route();
+      }), S.paper ? guarded(h('button', { type: 'button', text: 'Ask the sites if they allow it' }), async () => {
+        clear(paneOut).append(busy('Asking QuillBot and Overleaf...'));
+        const r = await api.post('/api/test/frames', { paper: S.paper });
+        const line = (name, x) => {
+          if (x.error) return notice('warn', h('strong', { text: name + ': ' }), 'the app could not ask (' + (/no project id/.test(x.error) ? 'there is no project address yet; type one above' : 'it could not reach the site from here') + '). It will open in a window beside the app, which always works.');
+          return x.embeddable === true ? notice('ok', h('strong', { text: name + ': ' }), 'allows being shown inside the app.') :
+            notice('warn', h('strong', { text: name + ': ' }), 'does not allow being shown inside another page (' + x.why + '). It will open in a window beside the app, which always works.');
+        };
+        clear(paneOut).append(line('QuillBot', r.quillbot), line('Overleaf', r.overleaf));
+      }) : null,
+      h('a', { class: 'small', href: '#/panes', text: 'Try them in your browser' })), paneOut);
+    box.append(h('h2', { class: 'section-h', text: 'Connections' }), h('div', { class: 'grid two' }, openai, overleaf, cleaner, mend, tg, sitesCard));
 
     // ---- preferences
     const p = paper && window.OLS.paperObj(paper);

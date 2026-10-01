@@ -66,8 +66,8 @@
         const a = answers(); a[key] = t; window.OLS.store.set(REPORT, JSON.stringify(a)); toast('Noted'); refreshReport();
       } })));
 
-    const qb = framePane('QuillBot', info.quillbot);
-    const ol = framePane('Overleaf', info.overleaf);
+    const qb = framePane('QuillBot', info.quillbot.url);
+    const ol = framePane('Overleaf', info.overleaf.url);
     box.append(h('div', { class: 'page-head' }, h('h1', { text: 'Test the side panes' }),
       h('span', { class: 'muted small', text: 'Checks, on your computer, whether QuillBot and Overleaf can sit next to the chat.' })),
       notice('ok', 'Some sites refuse to be shown inside another page, and Safari can stop the sign-in cookies of a framed page. This page finds out which of the three ways works for you: shown here, in a window beside the app, or only in a normal tab.'));
@@ -94,8 +94,8 @@
     const clip = h('textarea', { 'aria-label': 'Pasted text', placeholder: 'The pasted text will appear here', rows: '2' });
     box.append(h('section', { class: 'card', 'aria-label': 'Window and clipboard' }, h('h2', { text: '3. Window beside the app, and the paste button' }),
       h('p', { class: 'small secondary', text: 'Put this window on the left half of your screen (on a Mac: hold the green button and choose "Tile Window to Left of Screen"), then press the button. QuillBot should open on the right half.' }),
-      h('div', { class: 'row' }, h('button', { type: 'button', text: 'Open QuillBot beside the app', onclick: () => openBeside(info.quillbot, 'ols-quillbot') }),
-        info.overleaf ? h('button', { type: 'button', text: 'Open Overleaf beside the app', onclick: () => openBeside(info.overleaf, 'ols-overleaf') }) : null),
+      h('div', { class: 'row' }, h('button', { type: 'button', text: 'Open QuillBot beside the app', onclick: () => openBeside(info.quillbot.url, 'ols-quillbot') }),
+        info.overleaf.url ? h('button', { type: 'button', text: 'Open Overleaf beside the app', onclick: () => openBeside(info.overleaf.url, 'ols-overleaf') }) : null),
       ask('window', 'The window opened beside the app:'),
       h('p', { class: 'small secondary', text: 'Copy any text, then press this to see if the browser lets the app read your clipboard (it asks once).' }),
       clip, h('div', { class: 'row' }, h('button', { type: 'button', text: 'Paste what I copied', onclick: async () => {
@@ -120,8 +120,26 @@
   const save = () => { window.OLS.store.set(KEY, JSON.stringify(A.enabled)); };
 
   async function addressesFor(paper) {
-    if (A.urls.paper !== paper) A.urls = Object.assign({ paper }, await api.get('/api/panes?paper=' + enc(paper)));
+    // asks the sites (once in a while) whether they allow being shown inside another page
+    if (A.urls.paper !== paper || Date.now() - (A.urls.at || 0) > 120000) A.urls = Object.assign({ paper, at: Date.now() }, await api.get('/api/panes?check=1&paper=' + enc(paper)));
     return A.urls;
+  }
+
+  /* A site that cannot (or should not) sit inside the app: one clear button that opens it in a window on the free half of the screen. */
+  function windowPane(label, d) {
+    const key = label.toLowerCase();
+    return h('section', { class: 'card pane fill', 'aria-label': label },
+      h('div', { class: 'row' }, h('h2', { text: label }), h('span', { class: 'grow' }), h('a', { class: 'small', href: '#/settings', text: 'Settings' })),
+      d.url ? h('div', { class: 'stack' },
+        h('p', { class: 'small secondary', text: d.reason || 'It opens in a window next to the app.' }),
+        h('button', { type: 'button', class: 'primary', text: `Open ${label} beside the app`, onclick: () => openBeside(d.url, 'ols-' + key) }),
+        h('ol', { class: 'small secondary' },
+          h('li', { text: 'It opens in its own window on the right half of your screen.' }),
+          h('li', { text: 'Sign in there once; the app never sees your ' + label + ' password.' }),
+          h('li', { text: 'Put this app on the left half (on a Mac: hold the green button, then choose "Tile Window to Left of Screen").' }),
+          label === 'QuillBot' ? h('li', { text: 'Use "Copy for QuillBot" under a suggestion, paste it there, then bring the result back with "Paste what I copied".' }) : h('li', { text: 'After "Send to Overleaf", reload that window to see the update.' })),
+        h('p', { class: 'small muted', text: d.url })) :
+        notice('warn', d.reason || 'There is no address yet.', ' ', h('a', { href: '#/settings', text: 'Open Settings' })));
   }
 
   function stripRange(id) { return id.replace(/@\d+-\d+$/, ''); }
@@ -174,15 +192,16 @@
       window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
     });
     host.append(grip);
-    const urls = await addressesFor(S.paper).catch(() => ({}));
+    const info = await addressesFor(S.paper).catch(() => ({}));
     for (const key of A.enabled) {
-      const card = h('div', { class: 'card pane fill' });
-      host.append(card);
-      if (key === 'text') { await mountText(card); continue; }
-      const pane = framePane(TITLES[key], urls[key]);
-      card.replaceWith(pane.el); pane.el.classList.add('fill');
-      if (urls[key]) pane.load();
-      if (key === 'quillbot') pane.el.append(h('p', { class: 'small muted', text: 'Only what you paste here goes to QuillBot. If it stays blank or will not sign in, use "Open beside the app".' }));
+      if (key === 'text') { const card = h('div', { class: 'card pane fill' }); host.append(card); await mountText(card); continue; }
+      const d = info[key] || { url: null, inside: false, reason: 'Could not read the settings.' };
+      if (!d.inside) { host.append(windowPane(TITLES[key], d)); continue; }
+      const pane = framePane(TITLES[key], d.url);
+      pane.el.classList.add('fill');
+      host.append(pane.el);
+      pane.load();
+      pane.el.append(h('p', { class: 'small muted', text: 'If it stays blank or will not sign in, use "Open beside the app" (or choose "Always in a window" in Settings).' }));
     }
   }
 

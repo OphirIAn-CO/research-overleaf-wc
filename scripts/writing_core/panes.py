@@ -1,13 +1,15 @@
 """Side panes (QuillBot, Overleaf) next to the chat: which addresses they use and whether the sites allow being shown in a frame.
 
-Only fixed addresses are ever used (no user-supplied URL reaches the network), and the probe sends nothing about the author or
-the paper: a plain request to the public page, with no cookies.
+The addresses are the author's own (QuillBot's paraphraser, the paper's Overleaf project) and are checked before use: https only, the right
+kind of host and path. The probe sends nothing about the author or the paper: a plain request to the public page, with no cookies.
 """
+import ipaddress
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 
-QUILLBOT_URL = "https://quillbot.com/"
+QUILLBOT_URL = "https://quillbot.com/paraphrasing-tool"
 FRAME_HOSTS = ("https://quillbot.com", "https://*.quillbot.com", "https://www.overleaf.com")  # the CSP frame-src allow-list
 UA = "Mozilla/5.0 (compatible; overleaf-skill pane check)"
 _ID = re.compile(r"^[0-9a-f]{20,40}$")
@@ -19,9 +21,47 @@ def overleaf_project_id(proj):
     return last if _ID.match(last) else None
 
 
-def overleaf_url(proj):
+def _parts(url):
+    try:
+        u = urllib.parse.urlsplit(str(url))
+        return u if u.scheme == "https" and u.hostname and not u.username and not u.password and len(str(url)) <= 300 else None
+    except ValueError:
+        return None
+
+
+def valid_quillbot(url):
+    u = _parts(url)
+    return bool(u) and (u.hostname == "quillbot.com" or u.hostname.endswith(".quillbot.com"))
+
+
+def valid_overleaf(url):
+    """https://<host>/project/<id>: Overleaf's own site or a university installation; never an IP address or a local name."""
+    u = _parts(url)
+    if not u or not re.match(r"^/project/[0-9A-Za-z]{10,40}/?$", u.path) or u.query or "." not in u.hostname or u.hostname.endswith((".local", ".internal", ".localhost")):
+        return False
+    try:
+        ipaddress.ip_address(u.hostname)
+        return False
+    except ValueError:
+        return True
+
+
+def quillbot_url(ui):
+    return ui.get("quillbot_url") if valid_quillbot(ui.get("quillbot_url")) else QUILLBOT_URL
+
+
+def overleaf_url(proj, override=None):
+    """The paper's Overleaf project: the address the author gave, else built from the project id in the paper's Git address."""
+    if override and valid_overleaf(override):
+        return override
     pid = overleaf_project_id(proj)
     return f"https://www.overleaf.com/project/{pid}" if pid else None
+
+
+def frameable_host(url):
+    """The Content-Security-Policy of the app lets only these hosts appear inside a frame."""
+    u = _parts(url)
+    return bool(u) and (u.hostname == "quillbot.com" or u.hostname.endswith(".quillbot.com") or u.hostname == "www.overleaf.com")
 
 
 def frame_ancestors(csp_headers):
@@ -58,10 +98,26 @@ def decide(xfo, fa):
 
 
 def probe(url, timeout=8):
-    """probe_any() for the two fixed addresses only: no other URL can be made to touch the network from the web app."""
-    if url != QUILLBOT_URL and not re.match(r"^https://www\.overleaf\.com/project/[0-9a-f]{20,40}$", str(url)):
+    """probe_any() for a QuillBot or Overleaf project address only: no other URL can be made to touch the network from the web app."""
+    if not (valid_quillbot(url) or valid_overleaf(url)):
         raise ValueError("only the QuillBot and Overleaf addresses can be checked")
     return probe_any(url, timeout)
+
+
+def decide_inside(mode, probe_result, url):
+    """Show the site inside the app (True) or in a window beside it (False), and why. mode: auto | window | inside."""
+    if mode == "window":
+        return False, "You chose to open it in a window beside the app."
+    if not frameable_host(url):
+        return False, "This address is not one the app may show inside itself, so it opens in a window beside the app."
+    if mode == "inside":
+        return True, ""
+    r = probe_result or {}
+    if r.get("error"):
+        return False, "The app could not reach this site to check whether it allows being shown inside another page, so it opens in a window beside the app."
+    if r.get("embeddable") is True:
+        return True, ""
+    return False, "This site does not allow being shown inside another page" + (f" ({r['why']})" if r.get("why") else "") + ", so it opens in a window beside the app."
 
 
 def probe_any(url, timeout=8):

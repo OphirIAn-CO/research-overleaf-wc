@@ -19,7 +19,9 @@ OPENAI_DEFAULTS = {
 }
 UI_DEFAULTS = {"port": 8765, "idle_minutes": 60, "watermark_url": None,
                "guard_passages": 8,   # above this many passages in one request the chat asks before sending
-               "max_passages": 25}    # a hard ceiling for one request
+               "max_passages": 25,    # a hard ceiling for one request
+               "pane_mode": "auto",   # QuillBot / Overleaf beside the chat: auto (inside when the site allows it, else a window) | window | inside
+               "quillbot_url": None}
 
 
 class ConfigError(Exception):
