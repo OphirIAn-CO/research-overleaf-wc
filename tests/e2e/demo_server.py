@@ -18,7 +18,8 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 home = tempfile.mkdtemp(prefix="ols-demo-")
 os.environ["OVERLEAF_SKILL_HOME"] = home
-WITH_BROWSER = "--browser" in sys.argv   # --browser: a real Chromium behind the side panes, pointed at a stand-in site that refuses framing
+WITH_REAL = "--real" in sys.argv         # --real: the panes show an ordinary, unautomated browser on a virtual screen (the mode used for QuillBot)
+WITH_BROWSER = "--browser" in sys.argv or WITH_REAL   # --browser: a real Chromium behind the side panes, pointed at a stand-in site that refuses framing
 if not WITH_BROWSER:
     os.environ["OLS_BROWSER"] = "off"
 
@@ -37,6 +38,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8799)
     ap.add_argument("--browser", action="store_true")
+    ap.add_argument("--real", action="store_true")
     args = ap.parse_args()
     ui = load_ui_server()
     import doi_bot
@@ -134,7 +136,9 @@ def main():
         site_url = f"http://127.0.0.1:{site.server_address[1]}/"
         panes.quillbot_url = lambda _ui: site_url                      # the stand-in site plays both QuillBot and Overleaf
         panes.overleaf_url = lambda proj, override=None: site_url + "login"
-        srv.app._browser = webview.Browsers(Path(home) / "browser", exe=chromium(), allow_private=True)
+        if WITH_REAL:
+            os.environ["OLS_REAL_CHROMIUM"] = chromium()
+        srv.app._browser = webview.Browsers(Path(home) / "browser", exe=chromium(), allow_private=True, real_sites=("quillbot", "overleaf") if WITH_REAL else ())
         print(f"SITE {site_url}", flush=True)
     threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True).start()
     print(f"URL http://127.0.0.1:{args.port}/?token={TOKEN}", flush=True)

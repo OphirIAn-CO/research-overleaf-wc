@@ -551,7 +551,7 @@ class _Session:
 
     def state(self):
         return {"running": self.running(), "url": self.info.get("url", ""), "title": self.info.get("title", ""), "notice": self.info.get("notice", ""),
-                "challenge": bool(self.info.get("challenge")), "w": self.size[0], "h": self.size[1], "seq": self.seq}
+                "challenge": bool(self.info.get("challenge")), "kind": "scripted", "w": self.size[0], "h": self.size[1], "seq": self.seq}
 
 
 SELECTION_JS = """() => {
@@ -647,9 +647,12 @@ class Browsers:
     """Chromium started here. One profile folder per site under `profile_root`, so signing in once lasts."""
     kind = "local"
 
-    def __init__(self, profile_root, exe=None, allow_private=False):
+    def __init__(self, profile_root, exe=None, allow_private=False, real_sites=()):
+        """real_sites: sites shown in an ordinary, unautomated browser on a virtual screen (see xsession.py) instead of a scripted one; used for a site
+        whose human check does not let a scripted browser through."""
         self.root = Path(profile_root)
         self.exe, self.allow_private = exe, allow_private
+        self.real_sites = tuple(real_sites)
         self.lock = threading.Lock()
         self.sessions = {}
 
@@ -664,7 +667,12 @@ class Browsers:
         with self.lock:
             s = self.sessions.get(site)
             if s is None or not s.running():
-                s = self.sessions[site] = _Session(site, self.root / site, self.exe, self.allow_private)
+                cls = _Session
+                if site in self.real_sites:
+                    from . import xsession
+                    if xsession.available()[0]:
+                        cls = xsession.XSession
+                s = self.sessions[site] = cls(site, self.root / site, self.exe, self.allow_private)
                 s.start()
             return s
 

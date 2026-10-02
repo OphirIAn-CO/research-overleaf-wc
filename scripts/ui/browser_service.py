@@ -135,7 +135,12 @@ def main(argv=None):
     ok, why = webview.available()
     if not ok:
         raise SystemExit(why)
-    browsers = webview.Browsers(Path(args.profiles) if args.profiles else config.data_dir() / "browser")
+    real = tuple(x for x in os.environ.get("OLS_BROWSER_REAL", "").replace(" ", "").split(",") if x in webview.SITES)
+    if real:
+        from writing_core import xsession
+        ok_real, why_real = xsession.available()
+        print(("real browser for: " + ", ".join(real)) if ok_real else f"real browser not available ({why_real}); using the scripted one", file=sys.stderr, flush=True)
+    browsers = webview.Browsers(Path(args.profiles) if args.profiles else config.data_dir() / "browser", real_sites=real)
     srv = make_service(args.bind, args.port, Path(args.token_file).read_text().strip(), browsers)
     print(f"browser service listening on {args.bind}:{srv.server_address[1]}", file=sys.stderr, flush=True)
 

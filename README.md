@@ -160,12 +160,15 @@ You sign in once and it stays signed in (the sign-in is kept in `~/.config/overl
   readable only by you and **not encrypted**; the app never shows a saved password again. Google, Apple or university sign-in cannot be
   filled (and Google refuses embedded browsers): for these two sites use an email and password (Overleaf: Account settings, set a
   password; QuillBot: "Forgot password" lets you set one).
-- **"Verify you are human" checks.** QuillBot (Cloudflare) and Overleaf (reCAPTCHA) check visitors. The built-in browser does not label
-  itself as a robot (the one automation flag a remote-controlled browser would otherwise set is off, and it uses your computer's time
-  zone), but a site can still decide not to trust it. When a pane shows such a check, a note appears above it: click the checkbox in the
-  picture, and if it keeps coming back press **Open QuillBot in a window instead**. That sends the site to a window of your own browser,
-  which passes these checks, and remembers it (**Settings > QuillBot and Overleaf inside the app**, "Use the built-in browser for ..."; you
-  can switch it back there). Nothing in the app tries to solve or get around a check.
+- **"Verify you are human" checks.** QuillBot (Cloudflare) and Overleaf (reCAPTCHA) check visitors, and a browser that a program drives
+  carries marks those checks can see. So the built-in browser comes in two kinds. **Overleaf** uses a scripted one (it passes). **QuillBot**
+  uses an *ordinary* Chromium window on a virtual screen, started with a normal command line and no automation at all: the app takes a
+  picture of that screen and passes your mouse and keyboard on as keyboard and mouse events, the way a remote-desktop viewer does. You will
+  see the browser's own tab strip and address bar inside the pane. Its address bar works, but it can only open public websites. It is
+  Linux Chromium on your own internet connection, not your Mac's Chrome, so a site can still decide not to trust it; nothing here tries to
+  solve or get around a check. When a pane shows one, a note appears above it: click the checkbox in the picture, and if it keeps coming
+  back press **Open QuillBot in a window instead**. That sends the site to a window of your own browser, which passes these checks, and
+  remembers it (**Settings > QuillBot and Overleaf inside the app**, "Use the built-in browser for ..."; you can switch it back there).
 - **Layout:** one pane uses the whole side area; **Both at once** (strip at the top of the area) stacks QuillBot above Overleaf; **Wider**
   gives the area more room; drag its left edge to resize. The page is drawn at least 1100 pixels wide and shrunk to fit, so the sites keep
   their desktop layout; **Aa** in the pane draws it narrower for bigger text. Back, forward, reload, stop and home are in the pane's toolbar.

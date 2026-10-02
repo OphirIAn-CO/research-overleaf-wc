@@ -125,7 +125,7 @@ case "$cmd" in
       if bout="$(docker run -d --rm --init --name "$BROWSER" --network "$NET" \
         --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp:rw,mode=1777,size=512m --shm-size=512m \
         --cap-drop ALL --security-opt no-new-privileges --pids-limit 1024 --memory 3g \
-        ${tz_env[@]+"${tz_env[@]}"} -e HOME=/tmp/home -e OLS_BROWSER_BIND=0.0.0.0 -e OLS_BROWSER_PORT=9233 -e OLS_BROWSER_TOKEN_FILE=/run/browser_token -e OLS_BROWSER_PROFILES=/profiles \
+        --tmpfs /var/lib/xkb:rw,mode=1777,size=8m ${tz_env[@]+"${tz_env[@]}"} -e OLS_BROWSER_REAL=quillbot -e HOME=/tmp/home -e OLS_BROWSER_BIND=0.0.0.0 -e OLS_BROWSER_PORT=9233 -e OLS_BROWSER_TOKEN_FILE=/run/browser_token -e OLS_BROWSER_PROFILES=/profiles \
         --mount "$(mount_arg "$DATA/browser" /profiles)" --mount "$(mount_arg "$DATA/.browser_token" /run/browser_token readonly)" --mount "$(mount_arg "$DIR/scripts" /app readonly)" \
         "$IMAGE" python3 /app/ui/browser_service.py 2>&1)"; then
         browser_env=(--network "$NET" -e "OLS_BROWSER_URL=http://${BROWSER}:9233" -e "OLS_BROWSER_TOKEN_FILE=$DATA/.browser_token")

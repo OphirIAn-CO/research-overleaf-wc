@@ -1,7 +1,7 @@
 // End-to-end flows of the built-in browser panes in a real browser, against the demo server started with --browser.
 // The "QuillBot" and "Overleaf" here are a stand-in site that refuses to be framed (X-Frame-Options: DENY), like the real ones.
-// usage: python3 tests/e2e/demo_server.py --port 8798 --browser &      (prints SITE, URL and HOME)
-//        node tests/e2e/browser_flows.js <url-with-token> <home-folder> <site-url> [screenshot-dir]
+// usage: python3 tests/e2e/demo_server.py --port 8798 --browser &      (prints SITE, URL and HOME; --real shows an ordinary browser on a virtual screen instead)
+//        node tests/e2e/browser_flows.js <url-with-token> <home-folder> <site-url> [screenshot-dir] [toolbar-height]   (toolbar-height 87 with --real: the page starts below the browser's own toolbar)
 const { chromium } = require('/opt/node-tools/node_modules/playwright');
 const fs = require('fs');
 const http = require('http');
@@ -9,6 +9,7 @@ const url = process.argv[2];
 const home = process.argv[3];
 const site = process.argv[4];
 const out = process.argv[5] || '/tmp/claude-0/scratch/shots-browser';
+const TOP = Number(process.argv[6] || 0);
 fs.mkdirSync(out, { recursive: true });
 const errors = [];
 let failed = 0;
@@ -35,7 +36,7 @@ async function until(fn, ms) { const end = Date.now() + (ms || 12000); for (;;) 
     const rw = Math.min(1920, Math.max(r.width, 1100));
     const s = r.width / rw;
     return { x: r.left + x * s, y: r.top + y * s };
-  }, [rx, ry]);
+  }, [rx, ry + TOP]);
   const clickAt = async (rx, ry) => { const p = await onScreen(rx, ry); await page.mouse.click(p.x, p.y); };
   const shown = () => page.waitForFunction(() => { const i = document.querySelector('.bshot'); const o = document.querySelector('.bmsg'); return i && i.dataset.live === '1' && o && o.hidden; }, null, { timeout: 40000 });
 

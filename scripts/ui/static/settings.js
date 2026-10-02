@@ -128,7 +128,7 @@
     const sitesCard = h('section', { class: 'card', 'aria-label': 'Side panes' }, h('div', { class: 'row' }, h('h2', { text: 'QuillBot and Overleaf inside the app' }),
       badge(bi.available, 'built-in browser ready', 'built-in browser not available')),
       bi.available ?
-        h('p', { class: 'small secondary', text: 'QuillBot and Overleaf open in a browser that runs next to this app and is shown in the side panes. Sign in there once and it stays signed in; the sign-in is kept in a folder on this computer. Below you can save your email and password so one button fills the sign-in form.' }) :
+        h('p', { class: 'small secondary', text: 'QuillBot and Overleaf open in a browser that runs next to this app and is shown in the side panes. QuillBot is shown in an ordinary browser window on a virtual screen (it gets through human checks better than a scripted browser); Overleaf in a scripted one. Sign in there once and it stays signed in; the sign-in is kept in a folder on this computer. Below you can save your email and password so one button fills the sign-in form.' }) :
         notice('warn', bi.reason || 'The built-in browser is not available.', ' After updating the app, run ', h('code', { text: './ui.sh build' }), ' once, then ', h('code', { text: './ui.sh down && ./ui.sh up' }), '. Until then the sites open in a window beside the app.'),
       h('label', { class: 'field' }, h('span', { text: 'QuillBot address (leave empty for the usual one)' }), qUrl),
       S.paper ? h('label', { class: 'field' }, h('span', { text: `Overleaf project address for ${S.paper}` + (pn.overleaf_derived ? ' (taken from the paper\'s Git address; type another to override)' : '') }), oUrl) : null,

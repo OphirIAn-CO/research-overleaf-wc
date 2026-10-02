@@ -67,6 +67,8 @@ class Launcher(IsolatedHome):
         run = UI_SH[UI_SH.index("start_container() {"):UI_SH.index("PORT=\"\"; rc=1")]
         self.assertIn('browser_env[@]', run)
         self.assertIn("OLS_BROWSER_URL=http://${BROWSER}:9233", block)
+        self.assertIn("OLS_BROWSER_REAL=quillbot", block, "QuillBot is shown in an ordinary browser on a virtual screen")
+        self.assertIn("--tmpfs /var/lib/xkb", block, "the virtual screen compiles its keyboard map there; the root filesystem is read-only")
         self.assertIn('NET="overleaf-skill-net"', UI_SH)
         self.assertIn('docker rm -f "$BROWSER"', UI_SH[UI_SH.index("  down)"):])
 
@@ -75,6 +77,8 @@ class Launcher(IsolatedHome):
         self.assertRegex(d, r"playwright==\d+\.\d+\.\d+")
         self.assertIn("playwright install --with-deps chromium", d)
         self.assertIn("PLAYWRIGHT_BROWSERS_PATH", d)
+        for need in ("xvfb", "xclip", "chromium", "python-xlib", "pillow", "websocket-client"):
+            self.assertIn(need, d, need)
         self.assertIn("bookworm", d, "a Debian release Playwright supports")
         self.assertIn('IMAGE="overleaf-skill-ui:2"', UI_SH, "a new image tag, so an old image without the browser is rebuilt")
 

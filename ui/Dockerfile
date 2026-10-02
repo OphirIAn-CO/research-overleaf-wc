@@ -3,11 +3,12 @@
 # (only this file changing does). The same image runs two containers: the web app, and the built-in browser on its own (see ui.sh), so
 # that the pages of QuillBot and Overleaf never run next to the OpenAI key, the Overleaf token or the papers.
 FROM python:3.12-slim-bookworm
+# xvfb, xclip and chromium: the "real browser" mode (an ordinary Chromium on a virtual screen, used for QuillBot, whose human check turns away a scripted browser).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git poppler-utils ca-certificates \
+ && apt-get install -y --no-install-recommends git poppler-utils ca-certificates xvfb xclip chromium fonts-liberation fonts-noto-color-emoji \
  && rm -rf /var/lib/apt/lists/*
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN pip install --no-cache-dir "playwright==1.63.0" \
+RUN pip install --no-cache-dir "playwright==1.63.0" "python-xlib==0.33" "pillow>=10" "websocket-client>=1.7" \
  && playwright install --with-deps chromium \
  && chmod -R a+rX /ms-playwright \
  && rm -rf /var/lib/apt/lists/*
