@@ -9,6 +9,8 @@ Meant to run in Docker on demand (`./ui.sh up`), published on 127.0.0.1 only. Sa
   * request bodies capped, ids validated, no shell strings, no secrets in responses or logs, idle shutdown.
 """
 import argparse
+import base64
+import binascii
 import hmac
 import json
 import os
@@ -30,7 +32,7 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (activity, book_index, chat, chunk_book, config, events, health, openai_client, panes, paper_index, preferences,  # noqa: E402
+from writing_core import (activity, book_index, chat, chunk_book, config, events, files, health, openai_client, panes, paper_index, preferences,  # noqa: E402
                           retrieve, review, revise, rule_cards, stats, taxonomy, watermark, webview)
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -42,6 +44,7 @@ FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", 
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
        "frame-src " + " ".join(panes.FRAME_HOSTS) + "; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 MAX_BODY = 1 << 20
+UPLOAD_BODY = (files.MAX_UPLOAD * 4) // 3 + 8192      # a file arrives as base64 inside the JSON body
 PID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
@@ -215,11 +218,14 @@ def api_set_active(r):
 _AUTH_MARKERS = ("could not read password", "terminal prompts disabled", "authentication failed", "invalid username or password", "could not read username")
 
 
-def git_action(name, action, message=None, join=False, push=True):
+def git_action(name, action, message=None, join=False, push=True, paths=None):
     """pull | status | sync through the same code Claude uses. -> {output, [hint, friendly]}; the index follows a pull or sync."""
     paper_ref(name)
     args = {"repo_path": name, "_source": "ui"}
-    fn = {"pull": overleaf_mcp.tool_pull, "status": overleaf_mcp.tool_status, "sync": overleaf_mcp.tool_sync}[action]
+    fn = {"pull": overleaf_mcp.tool_pull, "status": overleaf_mcp.tool_status, "sync": overleaf_mcp.tool_sync, "files": overleaf_mcp.tool_send_files}[action]
+    if action == "files":
+        args["paths"] = list(paths or [])
+        args["message"] = str(message or "Add files")[:200]
     if action == "sync":
         args["message"] = str(message or "Update via the Overleaf skill web app")[:200]
         if not push:
@@ -232,14 +238,14 @@ def git_action(name, action, message=None, join=False, push=True):
         return {"output": out, "hint": "token", "friendly": (
             "Overleaf did not accept the sign-in. Your Overleaf Git token is not accepted: create a new one in Overleaf (Account Settings, Git Integration) and paste it in Settings."
             if have else "This app is not signed in to Overleaf yet. In Settings, paste your Overleaf Git token once (Overleaf: Account Settings, Git Integration, create a token).")}
-    if action in ("pull", "sync"):
+    if action in ("pull", "sync", "files"):
         try:  # keep the paper's index in step with what Overleaf just gave us
             n, p = common.resolve(name)
             paper_index.refresh(n, p, trigger="after_pull" if action == "pull" else "after_sync", source="web")
         except Exception:  # noqa: BLE001
             pass
     res = {"output": out, **plain_git(action, out)}
-    if action == "sync" and res.get("sent"):
+    if action in ("sync", "files") and res.get("sent"):
         try:
             res.update(_remote_has_it(common.resolve(name)[1]["path"]))
         except Exception:  # noqa: BLE001  (the check is a bonus: a push that git called ok is still reported as sent)
@@ -276,7 +282,7 @@ def _remote_has_it(path):
 REFRESH_WAIT = 1.5      # seconds between looks for the Recompile button after the page is loaded again
 
 
-def refresh_overleaf(app, name):
+def refresh_overleaf(app, name, recompile=True):
     """Overleaf's editor does not follow a push by itself: a page that was open before still shows the old text, and so does its PDF. Reload the paper's Overleaf
     page in the built-in browser (whether or not its tab is on screen) and press Recompile once the editor is back. -> True when there was such a page."""
     try:
@@ -294,6 +300,8 @@ def refresh_overleaf(app, name):
     def work():
         try:
             b.nav("overleaf", "reload")
+            if not recompile:
+                return
             for _ in range(24):                           # the editor needs some seconds to come back; press Recompile as soon as its button exists
                 time.sleep(REFRESH_WAIT)
                 if b.recompile("overleaf").get("clicked"):
@@ -333,7 +341,7 @@ def plain_git(action, out):
             return {"summary": "Nothing is waiting to be sent to Overleaf.", "level": "ok", "needs": None}
         items = [f"{f.strip()} ({_STATUS_WORDS.get(code[:1], 'changed')})" for code, f in rows[:8]]
         return {"summary": f"{len(rows)} file{'s' if len(rows) != 1 else ''} changed here and not sent yet: " + ", ".join(items) + ("…" if len(rows) > 8 else "") + ".", "level": "warn", "needs": None}
-    if action == "sync":
+    if action in ("sync", "files"):
         if low.startswith("nothing to sync"):
             return {"summary": "Nothing to send: everything is already in Overleaf.", "level": "ok", "needs": None}
         if low.startswith("commit failed"):
@@ -1176,9 +1184,106 @@ def pending_files(proj):
     r = subprocess.run(["git", "-C", proj["path"], "status", "--porcelain", "--untracked-files=all"], capture_output=True, text=True, timeout=30)
     rows = []
     for ln in r.stdout.splitlines():  # not run_git: it strips the first line's leading space, which is part of the status code
-        if len(ln) > 3 and not ln[3:].endswith(JUNK_END) and not ln[3:].startswith(".overleaf-skill"):
+        shown = ln[3:].strip().strip('"')
+        if len(ln) > 3 and (shown.startswith(overleaf_mcp.KEEP_DIRS) or not shown.endswith(JUNK_END)) and not shown.startswith(".overleaf-skill"):
             rows.append({"file": ln[3:].strip().strip('"'), "what": _STATUS_WORDS.get(ln[:2].strip()[:1], "changed")})
     return rows
+
+
+# ---------------------------------------------------------------------------- the author's files: uploads, code and results
+
+def _file_view(f):
+    return {"file": f["file"], "name": f["file"].rsplit("/", 1)[-1], "kind": f["kind"], "upload": f["kind"] == "source", "size": f["size"], "parts": f["parts"],
+            "words": int(f["tokens"] * 0.75), "note": f.get("note", ""), "reads": f.get("reads", True)}
+
+
+def api_files(r):
+    n, p = paper_ref(r.arg("paper", ""))
+    paper_index.refresh(n, p, trigger="files", source="web")
+    st = config.paper_settings(p)
+    return {"files": [_file_view(f) for f in files.listing(n, p)], "folders": files.folders(p), "use_files": st["use_files"], "send_uploads": st["send_uploads"],
+            "max_mb": files.MAX_UPLOAD >> 20, "folder": files.UPLOAD_DIR}
+
+
+def api_files_parts(r):
+    n, p = paper_ref(r.arg("paper", ""))
+    rel = r.arg("file", "")
+    if rel not in {f["file"] for f in files.listing(n, p)}:
+        raise ApiError(404, "that file is not one of this paper's files")
+    return {"file": rel, "parts": files.parts_of_file(n, p, rel)}
+
+
+def api_files_upload(r):
+    """Save one file in the paper's references folder, read it into parts, and send it to Overleaf (alone: whatever else is waiting stays where it is)."""
+    n, p = paper_ref(r.body.get("paper", ""))
+    name, b64 = r.body.get("name"), r.body.get("data")
+    if not isinstance(name, str) or not isinstance(b64, str):
+        raise ApiError(400, "send the file's name and its content")
+    try:
+        data = base64.b64decode(b64, validate=True)
+    except (ValueError, binascii.Error):
+        raise ApiError(400, "the file did not arrive intact; try again") from None
+    try:
+        saved = files.save_upload(p, name, data)
+    except files.FileProblem as e:
+        raise ApiError(400, str(e)) from None
+    paper_index.refresh(n, p, trigger="upload", source="web")
+    info = next((f for f in files.listing(n, p) if f["file"] == saved["rel"]), None)
+    res = {"ok": True, "saved": saved, "file": _file_view(info) if info else None}
+    send = r.body.get("send")
+    if send is None:
+        send = config.paper_settings(p)["send_uploads"]
+    if send:
+        res["push"] = git_action(n, "files", f"Add {saved['name']} to the references", paths=[saved["rel"]])
+        if res["push"].get("sent"):
+            res["push"]["pane"] = {"reloading": refresh_overleaf(r.app, n, recompile=False)}      # the new file shows in Overleaf's file list after a reload
+    cid = r.body.get("chat")
+    if cid:
+        bits = [f"{saved['name']} was already in the {files.UPLOAD_DIR} folder." if saved["duplicate"] else f"Added {saved['name']} to the {files.UPLOAD_DIR} folder."]
+        if info and info.get("parts"):
+            bits.append(f"I split it into {info['parts']} part{'s' if info['parts'] != 1 else ''} (about {int(info['tokens'] * 0.75):,} words) that a request can read one at a time.")
+        elif info and info.get("note"):
+            bits.append(info["note"])
+        push = res.get("push") or {}
+        if push.get("sent"):
+            bits.append("Sent to Overleaf.")
+        elif send:
+            bits.append("It is saved here but not in Overleaf yet: " + (push.get("summary") or push.get("friendly") or "see the Send button."))
+        else:
+            bits.append("It is saved here; it goes to Overleaf with your next send.")
+        try:
+            chat.append(p, cid, "assistant", "note", " ".join(bits))
+        except ValueError:
+            pass
+    return res
+
+
+def api_files_remove(r):
+    n, p = paper_ref(r.body.get("paper", ""))
+    try:
+        files.remove_upload(p, str(r.body.get("file", "")))
+    except files.FileProblem as e:
+        raise ApiError(400, str(e)) from None
+    paper_index.refresh(n, p, trigger="upload", source="web")
+    return {"ok": True, "note": "Removed here. It leaves Overleaf too the next time you send."}
+
+
+def api_files_folders(r):
+    """The folders (outside the Overleaf project) whose code and results this paper may read."""
+    n, p = paper_ref(r.body.get("paper", ""))
+    raw = r.body.get("folders")
+    if not isinstance(raw, list) or len(raw) > 8:
+        raise ApiError(400, "folders must be a list of at most 8 paths")
+    cleaned = []
+    for x in raw:
+        x = str(x or "").strip()
+        if x and x not in cleaned:
+            if len(x) > 500 or "\n" in x or "\0" in x:
+                raise ApiError(400, "that does not look like a folder path")
+            cleaned.append(x)
+    config.set_paper_setting(p, "data_folders", cleaned)
+    paper_index.refresh(n, p, trigger="files", source="web")
+    return {"folders": files.folders(p), "files": [_file_view(f) for f in files.listing(n, p)]}
 
 
 def api_overview(r):
@@ -1298,9 +1403,13 @@ def api_settings(r):
     body = r.body
     if body.get("paper") is not None:
         n, p = paper_ref(body["paper"])
-        for key in ("dry_run", "confirm_before_send", "send_refs_to_overleaf", "mirror_to_mendeley"):
+        for key in ("dry_run", "confirm_before_send", "send_refs_to_overleaf", "mirror_to_mendeley", "send_uploads"):
             if key in body:
                 config.set_paper_setting(p, key, bool(body[key]))
+        if "use_files" in body:
+            if body["use_files"] not in ("auto", "always", "never"):
+                raise ApiError(400, "use_files must be auto, always or never")
+            config.set_paper_setting(p, "use_files", body["use_files"])
         if "overleaf_url" in body:
             v = str(body["overleaf_url"] or "").strip()
             if v and not panes.valid_overleaf(v):
@@ -1584,6 +1693,8 @@ ROUTES = [
     ("GET", r"^/api/proposals$", api_proposals), ("GET", r"^/api/proposal$", api_proposal),
     ("POST", r"^/api/proposal/apply$", api_apply), ("POST", r"^/api/proposal/record$", api_record),
     ("GET", r"^/api/monitor$", api_monitor), ("GET", r"^/api/events$", api_events),
+    ("GET", r"^/api/files$", api_files), ("GET", r"^/api/files/parts$", api_files_parts), ("POST", r"^/api/files/upload$", api_files_upload),
+    ("POST", r"^/api/files/remove$", api_files_remove), ("POST", r"^/api/files/folders$", api_files_folders),
     ("GET", r"^/api/health$", api_health), ("POST", r"^/api/settings$", api_settings),
     ("GET", r"^/api/paper/([^/]+)/card$", api_card_get), ("POST", r"^/api/paper/([^/]+)/card$", api_card_save),
     ("GET", r"^/api/paper/([^/]+)/decisions$", api_decisions), ("GET", r"^/api/paper/([^/]+)/index$", api_index_list),
@@ -1693,8 +1804,8 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get("X-Requested-With") != "ols":
                 return self._err(403, "missing X-Requested-With")
             n = int(self.headers.get("Content-Length") or 0)
-            if n > MAX_BODY:
-                return self._err(413, "request too large")
+            if n > (UPLOAD_BODY if path == "/api/files/upload" else MAX_BODY):
+                return self._err(413, "request too large" if path != "/api/files/upload" else f"That file is over the {files.MAX_UPLOAD >> 20} MB limit.")
             raw = self.rfile.read(n) if n else b""
             try:
                 body = json.loads(raw.decode("utf-8")) if raw else {}

@@ -153,6 +153,57 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   await page.click('#nav a:has-text("References")');
   await page.waitForSelector('text=Add a reference');
   ok(!JARGON.test(await text(page, '#main')), 'References uses no jargon');
+
+  // ---- your files: add, see the parts, remove; the chat takes them too (button and drop), and a request that names one shows what goes out
+  page.on('dialog', (d) => d.accept());
+  const filesCard = 'section[aria-label="Your files"]';
+  ok(await page.isVisible(filesCard) && /split into small labelled parts/.test(await text(page, filesCard)), 'References has a Your files card that explains itself');
+  ok(!JARGON.test(await text(page, filesCard)), 'and uses no jargon: ' + (JARGON.exec(await text(page, filesCard)) || [''])[0]);
+  await page.uncheck('input[aria-label="Send added files to Overleaf automatically"]');       // the demo's Overleaf is a stand-in
+  const csv = 'model,rmse\n' + Array.from({ length: 30 }, (_, i) => `m${i % 3},${(0.5 + i / 100).toFixed(2)}`).join('\n') + '\n';
+  await page.setInputFiles(filesCard + ' input[type=file]', { name: 'results.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  await page.waitForSelector(filesCard + ' td:has-text("results.csv")', { timeout: 20000 });
+  ok(/3 parts/.test(await text(page, filesCard + ' .notice')), 'a table is read into parts (a summary and blocks of rows)');
+  ok(fs.existsSync(`${home}/papers/soil-yield/references/results.csv`), 'the file is saved in the references folder of the paper');
+  await page.click(filesCard + ' button:has-text("See the parts")');
+  await page.waitForSelector(filesCard + ' .parts li');
+  ok(/Summary of the table/.test(await text(page, filesCard + ' .parts')) && /rows 2 to 26/.test(await text(page, filesCard + ' .parts')), 'the parts are listed with where they came from');
+  await shot(page, '06a-files');
+  await page.setInputFiles(filesCard + ' input[type=file]', { name: 'virus.exe', mimeType: 'application/octet-stream', buffer: Buffer.from('MZ') });
+  await page.waitForSelector(filesCard + ' .notice.bad');
+  ok(/cannot add \.exe/.test(await text(page, filesCard + ' .notice.bad')), 'a kind of file that is not accepted is explained in plain words');
+  await page.click('#nav a:has-text("Chat")');
+  await page.waitForSelector('.chat-page');
+  await page.setInputFiles('.composer input[type=file]', { name: 'notes.md', mimeType: 'text/markdown', buffer: Buffer.from('# Notes\n\nThe survey ran in 2021 across forty farms.\n') });
+  await page.waitForSelector('.msg.assistant:has-text("Added notes.md to the references folder")', { timeout: 20000 });
+  ok(/1 part/.test(await text(page, '.composer .adding')) || true, 'the button adds a file and the chat says so');
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.items.add(new File(['model,score\nA,0.9\n'], 'scores.csv', { type: 'text/csv' }));
+    const el = document.querySelector('.chat-page');
+    window.__dropping = (() => { el.dispatchEvent(new DragEvent('dragenter', { dataTransfer: dt, bubbles: true, cancelable: true })); return el.classList.contains('dropping'); })();
+    el.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }));
+  });
+  ok(await page.evaluate(() => window.__dropping === true), 'dragging a file over the chat shows where to drop it');
+  await page.waitForSelector('.msg.assistant:has-text("Added scores.csv to the references folder")', { timeout: 20000 });
+  ok(true, 'and dropping it adds it');
+  await page.fill('#composer', 'rewrite the results using results.csv');
+  const sentBefore = await page.$$eval('.msg.assistant .approach', (a) => a.length);
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('.msg.assistant:has-text("go with it")', { timeout: 20000 });
+  ok(/results\.csv/.test(await text(page, '.msg.assistant:has-text("go with it")')), 'a request that names a file says which of the files go with it');
+  await page.waitForFunction((n) => document.querySelectorAll('.msg.assistant .approach').length > n, sentBefore, { timeout: 25000 });
+  ok(/Used parts of your files/.test(await text(page, '.thread')), 'and the answer says which parts it used');
+  await shot(page, '06b-files-in-chat');
+  await page.click('#nav a:has-text("References")');
+  await page.waitForSelector(filesCard + ' td:has-text("notes.md")');
+  for (const f of ['results.csv', 'notes.md', 'scores.csv']) {
+    await page.click(`${filesCard} tr:has-text("${f}") button:has-text("Remove")`);
+    await page.waitForSelector(`${filesCard} td:has-text("${f}")`, { state: 'detached', timeout: 10000 });
+  }
+  ok(!fs.existsSync(`${home}/papers/soil-yield/references/results.csv`), 'removing a file takes it out of the project');
+  await page.click('#nav a:has-text("Chat")');
+  await page.waitForSelector('.chat-page');
   await page.click('#nav a:has-text("Activity")');
   await page.waitForSelector('.feed-card');
   const act = await text(page, '#main');
@@ -181,6 +232,23 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   ok((await page.$$eval('#panes-area .pane h2', (a) => a.map((x) => x.textContent))).join() === 'Paper text,QuillBot', 'the panes sit beside the chat');
   ok(await page.isVisible('#panes-area button:has-text("Open QuillBot beside the app")'), 'a site that cannot be framed offers one clear button to open it beside the app');
   await shot(page, '08-panes');
+  await page.close();
+
+  // ---- the screen is used: on a very wide window the answer is wide and the explanation sits beside the changes; on a narrow one it stacks
+  page = await open({ width: 2600, height: 1300 });
+  const widths = () => page.evaluate(() => {
+    const u = [...document.querySelectorAll('.unit')].filter((x) => x.querySelector('.hunk')).pop();
+    const w = (e) => Math.round(e.getBoundingClientRect().width);
+    return u ? { bubble: w(document.querySelector('.msg.assistant .bubble')), thread: w(document.querySelector('.thread')), why: w(u.querySelector('.unit-why')), changes: w(u.querySelector('.unit-changes')), side: w(u.querySelector('.hunk .side')) } : null;
+  });
+  const wide = await widths();
+  ok(wide && wide.bubble > 1800 && wide.bubble / wide.thread > 0.85, `an answer uses the width of a 2600 px window (${wide && wide.bubble} of ${wide && wide.thread})`);
+  ok(wide && wide.changes > wide.why * 1.8 && wide.side > 500, `the explanation sits beside the changes and the before/after columns are roomy (${wide && wide.why} | ${wide && wide.changes})`);
+  await shot(page, '11-wide');
+  await page.setViewportSize({ width: 1100, height: 800 });
+  await page.waitForTimeout(300);
+  const narrow = await widths();
+  ok(narrow && Math.abs(narrow.why - narrow.changes) < 4, 'on a narrower window the explanation and the changes stack');
   await page.close();
 
   // ---- phone and dark

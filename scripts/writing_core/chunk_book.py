@@ -35,7 +35,7 @@ def _poppler(tool):
     return tool
 
 
-def extract_pages(pdf, layout=False, first=None, last=None):
+def extract_pages(pdf, layout=False, first=None, last=None, timeout=None):
     cmd = [_poppler("pdftotext"), "-enc", "UTF-8"]
     if layout:
         cmd.append("-layout")
@@ -43,7 +43,10 @@ def extract_pages(pdf, layout=False, first=None, last=None):
         cmd += ["-f", str(first)]
     if last:
         cmd += ["-l", str(last)]
-    r = subprocess.run(cmd + [str(pdf), "-"], capture_output=True, text=True)
+    try:
+        r = subprocess.run(cmd + [str(pdf), "-"], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("pdftotext took too long on this file") from None
     if r.returncode != 0:
         raise RuntimeError(f"pdftotext failed: {r.stderr.strip()[:300]}")
     pages = r.stdout.split("\f")

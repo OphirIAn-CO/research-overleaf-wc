@@ -100,6 +100,8 @@ def tool_status(args):
     return out or "clean, nothing pending"
 
 
+KEEP_DIRS = ("references/",)     # files the author added on purpose (articles as PDF, say) are never taken for LaTeX build output
+
 JUNK = (".aux", ".log", ".out", ".toc", ".fls", ".fdb_latexmk", ".bbl", ".bcf", ".blg", ".run.xml",
         ".synctex.gz", ".lof", ".lot", ".nav", ".snm", ".vrb", ".pdf")
 
@@ -126,7 +128,7 @@ def tool_sync(args):
         return only_push() if push and waiting else "nothing to sync"
     # never push LaTeX build output that is not already tracked (Overleaf compiles its own)
     _, new, _ = run_git(repo, "ls-files", "--others", "--exclude-standard")  # before staging
-    junk = [f for f in new.splitlines() if f.endswith(JUNK)]
+    junk = [f for f in new.splitlines() if f.endswith(JUNK) and not f.startswith(KEEP_DIRS)]
     run_git(repo, "add", "-A")
     for f in junk:
         run_git(repo, "reset", "-q", "--", f)
@@ -137,6 +139,39 @@ def tool_sync(args):
     if code != 0:
         return f"commit failed: {out or err}"
     result = f"committed: {out}{skipped}"
+    if push:
+        result += f"\npush: {_push(repo)}"
+    return result
+
+
+def tool_send_files(args):
+    """Save and send only the named files (an uploaded article, say), not whatever else is waiting in the project. The text it returns reads like tool_sync's."""
+    repo, err = resolve_repo(args)
+    if err:
+        return err
+    root = os.path.realpath(repo)
+    paths = []
+    for rel in args.get("paths") or []:
+        full = os.path.realpath(os.path.join(root, rel))
+        if not full.startswith(root + os.sep):
+            return f"commit failed: {rel} is outside the project"
+        paths.append(os.path.relpath(full, root))
+    if not paths:
+        return "nothing to sync"
+    message = args.get("message") or "Add files"
+    push = args.get("push", True)
+    code, out, err = run_git(repo, "add", "--", *paths)
+    if code != 0:
+        return f"commit failed: {err or out}"
+    waiting = unsent_commits(repo)
+    if run_git(repo, "diff", "--cached", "--quiet", "--", *paths)[0] == 0:
+        if push and waiting:
+            return f"nothing new to save; {waiting} earlier saved change{'s' if waiting != 1 else ''} had not been sent to Overleaf yet\npush: {_push(repo)}"
+        return "nothing to sync"
+    code, out, err = run_git(repo, "commit", "-m", message, "--", *paths)
+    if code != 0:
+        return f"commit failed: {out or err}"
+    result = f"committed: {out}"
     if push:
         result += f"\npush: {_push(repo)}"
     return result
@@ -330,7 +365,7 @@ TOOLS = {
         "description": (
             "Writing coach: find the relevant chunks of ONE paper (never reads the whole manuscript). Empty query = outline. "
             "'my methods' returns that whole part in document order with file and line ranges (use them with Read/Edit); other "
-            "requests do a full-text search. Args: query, part, kind (tex|memory|review|bib), budget, repo_path. The paper's index "
+            "requests do a full-text search. Args: query, part, kind (tex|memory|review|bib|source|project: source = files the author added to references/, project = data, code and notes around the paper), budget, repo_path. The paper's index "
             "refreshes itself on every call; only changed chunks are rewritten."),
         "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "part": {"type": "string"}, "kind": {"type": "string"},
                                                           "budget": {"type": "integer"}, **REPO_PATH_PROP}},

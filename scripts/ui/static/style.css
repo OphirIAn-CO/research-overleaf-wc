@@ -126,7 +126,7 @@ th { color: var(--ink-2); font-weight: 600; font-size: 13px; } td.num, th.num { 
 .hunk { border: 1px solid var(--border); border-radius: 10px; margin-top: 10px; overflow: hidden; }
 .hunk > header { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; background: var(--surface-2); }
 .hunk .sides { display: grid; grid-template-columns: 1fr 1fr; } @media (max-width: 860px) { .hunk .sides { grid-template-columns: 1fr; } }
-.hunk .side { padding: 10px 12px; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; line-height: 1.55; }
+.hunk .side { padding: 10px 12px; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: calc(var(--chat-fs, 15px) - 1px); line-height: 1.55; }
 .hunk .side + .side { border-left: 1px solid var(--grid); } .hunk .side h4 { margin: 0 0 6px; font: 600 12px system-ui, sans-serif; color: var(--ink-2); }
 ins.d { background: var(--ins-bg); text-decoration: none; border-radius: 2px; } del.d { background: var(--del-bg); text-decoration: line-through; border-radius: 2px; }
 .rule { font-size: 12px; color: var(--ink-2); }
@@ -202,14 +202,18 @@ main:focus { outline: none; }
 .panes-area[data-layout="tabs"] { overflow: hidden; }
 
 /* chat */
-.chat-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.chat-page { display: flex; flex-direction: column; height: 100%; min-height: 0; position: relative; }
+.drop-hint { display: none; position: absolute; inset: 0; z-index: 8; align-items: center; justify-content: center; background: color-mix(in srgb, var(--accent) 12%, var(--page)); border: 3px dashed var(--accent); border-radius: 12px; font-size: 18px; font-weight: 600; pointer-events: none; }
+.chat-page.dropping .drop-hint { display: flex; }
+.composer .attach { align-self: flex-end; min-height: 44px; white-space: nowrap; }
+.adding .chip.bad { border-color: var(--critical); color: var(--critical-text); }
 .chat-head > .grow { flex: 1 1 240px; min-width: 200px; } .chat-head { display: flex; gap: 8px 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; padding: 12px 20px; border-bottom: 1px solid var(--border); background: var(--surface-1); }
-.thread { flex: 1; overflow-y: auto; padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
-.msg { display: flex; gap: 10px; max-width: 920px; width: 100%; } .msg.user { align-self: flex-end; justify-content: flex-end; }
+.thread { --chat-fs: clamp(15px, 0.42vw + 8px, 19px); flex: 1; overflow-y: auto; padding: 18px clamp(16px, 2vw, 48px); display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.msg { display: flex; gap: 10px; width: 100%; max-width: 2200px; } .msg.user { align-self: flex-start; }
 .msg .who { width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: grid; place-items: center; font-weight: 600; font-size: 13px; flex: none; }
 .bubble { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 10px 14px; min-width: 0; max-width: 100%; }
-.msg.user .bubble { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); white-space: pre-wrap; max-width: 75%; }
-.msg.assistant .bubble { flex: 1; } .prose { white-space: pre-wrap; } .bubble p { margin: 0 0 8px; } .bubble > * + * { margin-top: 8px; }
+.msg.user .bubble { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); white-space: pre-wrap; max-width: min(75%, 110ch); }
+.msg.assistant .bubble { flex: 1; font-size: var(--chat-fs, 15px); } .prose { white-space: pre-wrap; } .bubble p { margin: 0 0 8px; } .bubble > * + * { margin-top: 8px; }
 .composer { border-top: 1px solid var(--border); background: var(--surface-1); padding: 10px 20px 14px; display: flex; flex-direction: column; gap: 8px; }
 .composer .top { align-items: flex-end; flex-wrap: nowrap; } .composer textarea { min-height: 44px; max-height: 180px; flex: 1; }
 .chip { border-radius: 999px; padding: 3px 12px; min-height: 28px; font-size: 13px; background: var(--surface-2); }
@@ -222,8 +226,14 @@ main:focus { outline: none; }
 @media (prefers-reduced-motion: reduce) { .msg.fresh { animation: none; } }
 .steps { list-style: none; margin: 0; padding: 0; } .step { display: flex; gap: 8px; align-items: center; padding: 3px 0; font-size: 14px; }
 .step .mark { width: 16px; text-align: center; color: var(--good-text); } .step.failed .mark { color: var(--critical-text); } .step.skipped { color: var(--ink-3); }
-.approach { font-size: 15px; line-height: 1.55; border-left: 3px solid var(--series-1); padding-left: 10px; }
+.approach { font-size: var(--chat-fs, 15px); line-height: 1.55; border-left: 3px solid var(--series-1); padding-left: 10px; max-width: 120ch; }
 .unit { border-top: 1px solid var(--grid); padding-top: 10px; } .unit h3, .unit h4 { margin-bottom: 6px; }
+.unit-why > * + * { margin-top: 8px; } .unit-changes > .hunk:first-child { margin-top: 0; }
+/* a wide screen: the explanation and the questions stay in view on the left while the changes use the rest of the width */
+@media (min-width: 1500px) {
+  .unit { display: grid; grid-template-columns: minmax(320px, 30%) minmax(0, 1fr); gap: 8px 20px; align-items: start; }
+  .unit-why { position: sticky; top: 0; }
+}
 .actions { margin-top: 10px; }
 .tone { border-top: 1px dashed var(--axis); margin-top: 12px; padding-top: 12px; } .tone .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } @media (max-width: 1100px) { .tone .two { grid-template-columns: 1fr; } }
 .tone textarea { width: 100%; resize: vertical; }

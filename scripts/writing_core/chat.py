@@ -460,7 +460,8 @@ def instruction_for(text):
 
 
 CHIPS = [("Make it clearer", "Make this clearer and easier to follow."), ("More concise", "Make this more concise without losing any content."),
-         ("Fix grammar and tense", "Fix grammar, tense and word choice."), ("Improve the flow", "Improve the flow between sentences and paragraphs.")]
+         ("Fix grammar and tense", "Fix grammar, tense and word choice."), ("Improve the flow", "Improve the flow between sentences and paragraphs."),
+         ("Use my files", "Use my files.")]
 
 
 # ------------------------------------------------------------------------------------------- the request, ready to send
@@ -471,7 +472,7 @@ def plan(name, proj, instruction, chunk_ids, book_id=None):
     res = revise.run(name, proj, instruction, chunk_ids=chunk_ids, book_id=book_id, dry_run=True, source="web")
     return {"instruction": instruction, "chunk_ids": chunk_ids, "units": res["units"], "passages": res["passages"], "est_tokens_in": res["est_tokens_in"],
             "est_cost": res["est_cost"], "manuscript_tokens": res["manuscript_tokens"], "model": res["model"], "tips": len(res["rules"]),
-            "payload_hash": res["payload_hash"], "warnings": res["warnings"], "book": res["book"], "parts": res["parts"]}
+            "payload_hash": res["payload_hash"], "warnings": res["warnings"], "book": res["book"], "parts": res["parts"], "sources": res.get("sources", [])}
 
 
 # ------------------------------------------------------------------------------------------- peer review: which part?

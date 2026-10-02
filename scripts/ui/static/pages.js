@@ -17,7 +17,7 @@
     const viewer = h('section', { class: 'card', 'aria-label': 'Chunk' }, h('p', { class: 'muted', text: 'Click a row to read that chunk.' }));
     const tableBox = h('div');
     const info = h('p', { class: 'small secondary' });
-    const kindSel = h('select', { 'aria-label': 'Kind' }, [['', 'All kinds'], ['tex', 'Manuscript'], ['memory', 'Session notes'], ['review', 'Reviews'], ['bib', 'Bibliography']].map(([v, t]) => h('option', { value: v, selected: v === P.kind, text: t })));
+    const kindSel = h('select', { 'aria-label': 'Kind' }, [['', 'All kinds'], ['tex', 'Manuscript'], ['memory', 'Session notes'], ['review', 'Reviews'], ['bib', 'Bibliography'], ['source', 'Added files'], ['project', 'Project files']].map(([v, t]) => h('option', { value: v, selected: v === P.kind, text: t })));
     const load = async () => {
       clear(tableBox).append(busy('Refreshing the index...'));
       const r = await api.get(`/api/paper/${enc(name)}/index`);
@@ -104,6 +104,103 @@
   }
   window.OLS.refCard = refCard;
 
+  // ------------------------------------------------------------------ the author's files: articles, tables, notes and code the requests can read
+  const readB64 = (file) => new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+    fr.onerror = () => reject(new Error('I could not read ' + file.name + '.'));
+    fr.readAsDataURL(file);
+  });
+  const MAX_UPLOAD_MB = 25;
+  async function uploadFile(paper, file, opts) {
+    if (file.size > MAX_UPLOAD_MB * 1048576) throw new Error(`${file.name} is over the ${MAX_UPLOAD_MB} MB limit. Overleaf projects have a size limit too, so add only the pages you need.`);
+    const data = await readB64(file);
+    return api.post('/api/files/upload', Object.assign({ paper, name: file.name, data }, opts || {}));
+  }
+  window.OLS.files = { upload: uploadFile };
+  const bytes = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB');
+  const FILE_TYPES = '.pdf,.docx,.txt,.md,.markdown,.csv,.tsv,.json,.ipynb,.py,.r,.rmd,.m,.jl,.sql,.sh,.yaml,.yml,.toml,.tex,.bib,.rst,.png,.jpg,.jpeg,.gif,.svg,.webp';
+
+  function filesCard(name) {
+    const list = h('div');
+    const out = h('div', { class: 'stack' });
+    const picker = h('input', { type: 'file', multiple: true, hidden: true, 'aria-hidden': 'true', tabindex: '-1', accept: FILE_TYPES });
+    const folderBox = h('textarea', { rows: '3', 'aria-label': 'Folders with your code and results', placeholder: '/Users/you/Documents/analysis' });
+    const folderOut = h('div', { class: 'stack' });
+    const modeSel = h('select', { 'aria-label': 'When requests use my files' }, [['auto', 'When I mention them (recommended)'], ['always', 'In every request'], ['never', 'Never']].map(([v, t]) => h('option', { value: v, text: t })));
+    const autoSend = h('input', { type: 'checkbox', 'aria-label': 'Send added files to Overleaf automatically' });
+    const parts = new Map();
+
+    const showFolders = (folders) => {
+      clear(folderOut).append(...folders.map((f) => notice(f.ok ? 'ok' : 'warn', h('span', { class: 'mono small', text: f.path }), f.ok ? ' can be read.' : ' ' + f.note)));
+    };
+    async function show() {
+      const r = await api.get(`/api/files?paper=${enc(name)}`);
+      modeSel.value = r.use_files; autoSend.checked = r.send_uploads;
+      if (document.activeElement !== folderBox) folderBox.value = r.folders.map((f) => f.path).join('\n');
+      showFolders(r.folders);
+      clear(list);
+      if (!r.files.length) { list.append(h('p', { class: 'muted small', text: `No files yet. Add an article, a table or your notes, or drop them on the chat. They are saved in the ${r.folder} folder of your project.` })); return; }
+      const rows = [];
+      r.files.forEach((f) => {
+        const where = f.upload ? `Added here · ${r.folder}/` : f.file.startsWith('/') ? 'Other folder · ' + f.file : 'In your project · ' + f.file;
+        const open = h('tr', { class: 'parts-row', hidden: true }, h('td', { colspan: '5' }));
+        const see = f.parts ? h('button', { type: 'button', class: 'small', text: 'See the parts', onclick: async (ev) => {
+          const btn = ev.currentTarget;
+          if (!open.hidden) { open.hidden = true; btn.textContent = 'See the parts'; return; }
+          btn.disabled = true;
+          try {
+            const p = await api.get(`/api/files/parts?paper=${enc(name)}&file=${enc(f.file)}`);
+            clear(open.firstChild).append(h('ul', { class: 'small parts' }, p.parts.map((x) => h('li', null, h('strong', { text: x.where }), h('span', { class: 'muted', text: ` · about ${Math.round(x.tokens * 0.75)} words` }), h('div', { class: 'muted', text: x.preview })))));
+            open.hidden = false; btn.textContent = 'Hide the parts';
+          } catch (e) { toast(e.message); }
+          btn.disabled = false;
+        } }) : null;
+        const del = f.upload ? guarded(h('button', { type: 'button', class: 'small', text: 'Remove' }), async () => {
+          if (!window.confirm(`Remove ${f.name} from this paper? It leaves Overleaf too the next time you send.`)) return;
+          const rm = await api.post('/api/files/remove', { paper: name, file: f.file });
+          toast(rm.note); await show(); await window.OLS.loadState();
+        }) : null;
+        rows.push(h('tr', null, h('td', null, h('div', { class: 'mono small', text: f.name }), h('div', { class: 'muted small', text: where })),
+          h('td', { class: 'num', text: f.reads ? String(f.parts) : '-' }), h('td', { class: 'num', text: f.reads ? f.words.toLocaleString() : bytes(f.size) }),
+          h('td', { class: 'small', text: f.note }), h('td', null, h('div', { class: 'row tight' }, see, del))), open);
+      });
+      list.append(h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['File', 'Parts', 'Words', 'Note', ''].map((t) => h('th', { text: t })))), h('tbody', null, rows))));
+    }
+    const add = async (fileList) => {
+      for (const f of Array.from(fileList || [])) {
+        const line = h('div', null, busy(`Adding ${f.name}...`));
+        out.append(line);
+        try {
+          const r = await uploadFile(name, f, {});
+          clear(line).append(notice(r.push && !r.push.sent && r.push.level !== 'ok' ? 'warn' : 'ok', h('strong', { text: f.name + ': ' }),
+            r.file && r.file.parts ? `${r.file.parts} parts, about ${r.file.words.toLocaleString()} words. ` : (r.file && r.file.note ? r.file.note + ' ' : 'saved. '),
+            r.push ? (r.push.friendly || r.push.summary || '') : 'It goes to Overleaf with your next send.'));
+        } catch (e) { clear(line).append(notice('bad', h('strong', { text: f.name + ' was not added. ' }), e.message)); }
+      }
+      await show(); await window.OLS.loadState();
+    };
+    picker.addEventListener('change', () => { add(picker.files); picker.value = ''; });
+    modeSel.addEventListener('change', async () => { try { await api.post('/api/settings', { paper: name, use_files: modeSel.value }); toast('Saved'); } catch (e) { toast(e.message); } });
+    autoSend.addEventListener('change', async () => { try { await api.post('/api/settings', { paper: name, send_uploads: autoSend.checked }); toast(autoSend.checked ? 'Added files will go to Overleaf at once' : 'Added files wait for your next send'); } catch (e) { toast(e.message); autoSend.checked = !autoSend.checked; } });
+    const card = h('section', { class: 'card', 'aria-label': 'Your files' }, h('h2', { text: 'Your files' }),
+      h('p', { class: 'small secondary', text: 'Add articles you cite, tables of results, notes or code. Each file is saved in the references folder of your project, sent to Overleaf, and split into small labelled parts, so a request can read just the part it needs ("the methods of that article", "rows 1 to 25 of results.csv").' }),
+      h('div', { class: 'row' }, h('button', { type: 'button', class: 'primary', text: 'Add files', onclick: () => picker.click() }), picker,
+        h('label', { class: 'row tight small' }, autoSend, ' Send added files to Overleaf at once')),
+      out, list,
+      h('h3', { text: 'When a request may use them' }),
+      h('div', { class: 'row' }, modeSel, h('span', { class: 'small secondary', text: 'Nothing goes to OpenAI unless a request uses it, and the request shows which parts.' })),
+      h('h3', { text: 'Code and results in other folders' }),
+      h('p', { class: 'small secondary', text: 'If your analysis lives outside the Overleaf project, list its folders here (one full path per line). Inside Docker, the folder must be shared first: ./ui.sh folders add <folder>. Passwords, keys and hidden folders are never read.' }),
+      folderBox, folderOut,
+      guarded(h('button', { type: 'button', text: 'Save the folders' }), async () => {
+        const r = await api.post('/api/files/folders', { paper: name, folders: folderBox.value.split('\n').map((x) => x.trim()).filter(Boolean) });
+        showFolders(r.folders); toast('Saved'); await show();
+      }));
+    show().catch((e) => clear(list).append(notice('bad', e.message)));
+    return card;
+  }
+
   registerPage('references', 'References', async (box) => {
     await window.OLS.loadState();
     if (!S.paper) { box.append(notice('warn', 'Add a paper first (Settings).')); return; }
@@ -158,6 +255,7 @@
       } catch (e) { clear(results).append(notice('bad', e.message)); throw e; }
     });
     box.append(h('section', { class: 'card', 'aria-label': 'Add by DOI' }, h('h2', { text: 'Add a reference' }), ta, h('div', { class: 'row' }, add)), results, waiting, group);
+    box.append(filesCard(name));
     box.append(h('section', { class: 'card', 'aria-label': 'Mendeley' }, h('h2', { text: 'From Mendeley' }),
       h('p', { class: 'small secondary', text: proj.group ? `Pull references that are already in the Mendeley group “${proj.group}” into the bibliography (only new ones are added).` : 'Link a Mendeley group to pull references from it.' }),
       proj.group ? guarded(h('button', { type: 'button', text: 'Pull new references from Mendeley' }), async () => {

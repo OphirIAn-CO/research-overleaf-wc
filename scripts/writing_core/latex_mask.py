@@ -138,6 +138,31 @@ def _commands(text):
     return set(re.findall(r"\\([A-Za-z]+)", PH.sub(" ", text)))
 
 
+_TOKEN = re.compile(r"\\+(?:[A-Za-z]+|[^A-Za-z\s])")
+
+
+def command_tokens(text):
+    """Every backslash command or escape exactly as written, backslashes included: \\S and \\\\S are different tokens, which the set of command names cannot tell apart."""
+    return Counter(_TOKEN.findall(PH.sub(" ", text)))
+
+
+_DOUBLED = re.compile(r"(?<!\\)\\\\([A-Za-z]+)")
+
+
+def collapse_doubled(original, revised):
+    """A model that answers in JSON sometimes writes a command with its backslash doubled (\\\\S for \\S), which LaTeX reads as a line break followed by the letter S.
+    Where the original has the command written once and never doubled, put the single backslash back. -> (text, [commands fixed])"""
+    fixed = []
+
+    def fix(m):
+        name = m.group(1)
+        if ("\\\\" + name) in original or not re.search(r"(?<!\\)\\" + re.escape(name) + r"(?![A-Za-z])", original):
+            return m.group(0)
+        fixed.append("\\" + name)
+        return "\\" + name
+    return _DOUBLED.sub(fix, revised), fixed
+
+
 def _caps(text):
     t = PH.sub(" ", text)
     t = re.sub(r"\\[A-Za-z]+", " ", t)
@@ -150,8 +175,9 @@ def _words(text):
     return len(re.findall(r"[A-Za-z]{2,}", PH.sub(" ", re.sub(r"\\[A-Za-z]+", " ", text))))
 
 
-def validate(original, revised, min_ratio=0.5, max_ratio=1.6):
-    """Compare masked texts. -> list of {name, ok, severity ('error'|'warn'), detail}. A passage is acceptable iff no error fails."""
+def validate(original, revised, min_ratio=0.5, max_ratio=1.6, context=""):
+    """Compare masked texts. -> list of {name, ok, severity ('error'|'warn'), detail}. A passage is acceptable iff no error fails.
+    `context` is text the revision may legitimately draw on (parts of the author's own files): numbers, acronyms and names that stand there are not new."""
     res = []
 
     def add(name, ok, detail="", severity="error"):
@@ -163,7 +189,7 @@ def validate(original, revised, min_ratio=0.5, max_ratio=1.6):
         "; ".join(filter(None, [f"missing or dropped: {', '.join(missing)}" if missing else "", f"duplicated or invented: {', '.join(extra)}" if extra else ""])))
     add("placeholder_order", placeholders(original) == placeholders(revised) or po != pr,
         "citations/formulas/refs changed their relative order; check they still sit next to the claim they support", "warn")
-    new_nums = sorted(number_tokens(revised) - number_tokens(original))
+    new_nums = sorted(number_tokens(revised) - number_tokens(original) - (number_tokens(context) if context else set()))
     add("no_new_numbers", not new_nums, f"numbers not in the original: {', '.join(new_nums)}")
     do, dr = _dash_counts(original), _dash_counts(revised)
     add("no_new_dashes", dr["em"] <= do["em"] and dr["en"] <= do["en"],
@@ -173,6 +199,11 @@ def validate(original, revised, min_ratio=0.5, max_ratio=1.6):
     new_cmds = sorted(_commands(revised) - _commands(original))
     cmd_list = ", ".join("\\" + c for c in new_cmds)
     add("no_new_commands", not new_cmds, f"LaTeX commands not in the original: {cmd_list}")
+    to, tr = command_tokens(original), command_tokens(revised)
+    changed = sorted(t for t in (tr - to).elements() if t.lstrip("\\") not in new_cmds)
+    add("commands_unchanged", not changed, "LaTeX that is not in the original or is written differently (a doubled backslash, for example): " + ", ".join(dict.fromkeys(changed)))
+    gone = sorted((to - tr).elements())
+    add("commands_kept", not gone, "LaTeX in the original that is missing now: " + ", ".join(dict.fromkeys(gone)), "warn")
     add("no_new_special_characters", _special_count(revised) <= _special_count(original),
         "unescaped % & # _ ^ would break compilation (write \\% \\& \\# \\_)")
     wo, wr = _words(original), _words(revised)
@@ -181,7 +212,10 @@ def validate(original, revised, min_ratio=0.5, max_ratio=1.6):
     add("length_within_bounds", wo == 0 or lo <= ratio <= hi, f"length changed to {ratio:.0%} of the original (allowed {lo:.0%} to {hi:.0%})")
     ao, mo = _caps(original)
     ar, mr = _caps(revised)
-    low_original = original.lower()
+    if context:
+        eo, em = _caps(context)
+        ao, mo = ao | eo, mo | em
+    low_original = (original + " " + context).lower() if context else original.lower()
     new_acr = sorted(a for a in ar - ao if a.lower() not in low_original.split() and a not in {"LX"})
     add("no_new_acronyms", not new_acr, f"acronyms not in the original: {', '.join(new_acr)}")
     new_names = sorted(n for n in mr - mo if n.lower() not in low_original and n.lower() not in WHITELIST_CAPS)
@@ -353,7 +387,11 @@ def check_author_text(original, text, mapping):
     """The author's own version of a masked passage. -> (normalized text, validator results, missing-piece details).
     Same validators as for the model's answer, run on the text after forgiving tag spellings."""
     fixed = restore_literals(normalize_tags(text), mapping, original)
-    return fixed, validate(original, fixed), missing_details(original, fixed, mapping)
+    fixed, doubled = collapse_doubled(original, fixed)
+    results = validate(original, fixed)
+    if doubled:
+        results.append({"name": "doubled_backslashes_fixed", "ok": False, "severity": "warn", "detail": f"I turned {', '.join(dict.fromkeys(doubled))} back into a single backslash, as in your paper (a doubled one would break the LaTeX)"})
+    return fixed, results, missing_details(original, fixed, mapping)
 
 
 # ------------------------------------------------------------------------------------------- headings the model does not need to see

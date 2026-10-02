@@ -150,7 +150,10 @@
     const ta = h('textarea', { id: 'composer', rows: '2', 'aria-label': 'Ask for a change', placeholder: 'What should I do? For example: improve the flow of the text before Figure 1 in the methods' });
     const sendBtn = h('button', { type: 'button', class: 'primary', text: 'Send' });
     const chips = h('div', { class: 'row chips' }, data.chips.map((c) => h('button', { type: 'button', class: 'chip', text: c.label, onclick: () => { ta.value = (ta.value.trim() ? ta.value.trim() + ' ' : '') + c.text; ta.focus(); } })));
-    const composer = h('form', { class: 'composer' }, chips, h('div', { class: 'row top' }, ta, sendBtn));
+    const fileInput = h('input', { type: 'file', multiple: true, hidden: true, 'aria-hidden': 'true', tabindex: '-1', accept: '.pdf,.docx,.txt,.md,.markdown,.csv,.tsv,.json,.ipynb,.py,.r,.rmd,.m,.jl,.sql,.sh,.yaml,.yml,.toml,.tex,.bib,.rst,.png,.jpg,.jpeg,.gif,.svg,.webp' });
+    const attachBtn = h('button', { type: 'button', class: 'attach', text: 'Add a file', title: 'Add an article (PDF or Word), a table (CSV), notes, a notebook or code to this paper. It is saved in the references folder, sent to Overleaf, and split into parts a request can read.' });
+    const adding = h('div', { class: 'row chips adding', role: 'status', 'aria-live': 'polite', hidden: true });
+    const composer = h('form', { class: 'composer' }, chips, adding, h('div', { class: 'row top' }, attachBtn, ta, sendBtn), fileInput);
     const setBusy = (b) => { st.busy = b; sendBtn.disabled = b; sendBtn.textContent = b ? 'Working...' : 'Send'; };
 
     async function reload() {
@@ -173,6 +176,29 @@
       } catch (e) { toast(e.message); }
       finally { setBusy(false); }
     }
+    // ---- adding files: from the button or by dropping them on the chat. Each one is saved, read into parts and (unless switched off) sent to Overleaf on its own.
+    async function addFiles(list) {
+      const picked = Array.from(list || []);
+      if (!picked.length) return;
+      for (const f of picked) {
+        const chip = h('span', { class: 'chip static', text: `Adding ${f.name}...` });
+        adding.hidden = false; adding.append(chip);
+        try {
+          const r = await window.OLS.files.upload(paper, f, { chat: st.cid });
+          chip.textContent = `${f.name}: ${r.file && r.file.parts ? plural(r.file.parts, 'part') : 'saved'}`;
+          if (r.push && !r.push.sent) st.local.push({ node: gitNotice(r.push) });          // a refusal by Overleaf comes with its own button
+          if (r.saved.warning) toast(r.saved.warning);
+        } catch (e) {
+          chip.textContent = `${f.name}: not added`; chip.classList.add('bad');
+          st.local.push({ node: notice('bad', h('strong', { text: `${f.name} was not added. ` }), e.message) });
+        }
+        setTimeout(() => { chip.remove(); if (!adding.childNodes.length) adding.hidden = true; }, 6000);
+        await reload().catch(() => {});
+        loadOverview();
+      }
+    }
+    attachBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
     const submit = () => { const t = ta.value.trim(); if (!t) return; ta.value = ''; send(t); };
     sendBtn.addEventListener('click', submit);
     composer.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
@@ -248,10 +274,16 @@
       if (d.notes && d.notes.length) lines.push(h('p', { class: 'small secondary', text: d.notes.join(' ') }));
       lines.push(h('p', { class: 'small secondary', text: (pl.tips ? `I will add ${plural(pl.tips, 'tip')} from your writing book. ` : 'No book advice this time. ') +
         `About ${fmtTok(pl.est_tokens_in)} tokens go to ${pl.model}${pl.est_cost != null ? ', roughly ' + pl.est_cost.toFixed(4) + ' in your price units' : ''}. Your citations, formulas and numbers stay behind as tags.` }));
+      const src = pl.sources || [];
+      if (src.length) {
+        const names = [...new Set(src.map((x) => x.file.split('/').pop()))];
+        lines.push(h('p', { class: 'small secondary', text: `${plural(src.length, 'part')} of your files go with it (${names.slice(0, 3).join(', ')}${names.length > 3 ? '...' : ''}), labelled so the answer can say where a number came from. Numbers taken from them are pointed out for you to check.` }));
+      }
       (pl.warnings || []).forEach((x) => lines.push(notice('warn', x)));
       const exact = h('div');
       const details = h('details', null, h('summary', { text: 'What goes out' }),
-        h('ul', { class: 'small' }, pl.passages.map((x) => h('li', { text: `${x.file}, lines ${x.lines[0]} to ${x.lines[1]} · ${x.section} · about ${x.words} words` }))),
+        h('ul', { class: 'small' }, pl.passages.map((x) => h('li', { text: `${x.file}, lines ${x.lines[0]} to ${x.lines[1]} · ${x.section} · about ${x.words} words` })),
+          src.map((x) => h('li', { text: `From your files: ${x.where} · about ${fmtTok(x.tokens * 0.75)} words` }))),
         h('button', { type: 'button', class: 'small', text: 'Show the exact text', onclick: async (ev) => {
           ev.target.disabled = true;
           const r = await api.post('/api/revise/preview', { paper, instruction: pl.instruction, chunk_ids: pl.chunk_ids, book_id: pl.book });
@@ -380,6 +412,11 @@
       holder.append(h('div', { class: 'row small secondary' }, h('span', { text: `${p.model} · ${fmtTok(usage.input_tokens)} in / ${fmtTok(usage.output_tokens)} out${usage.cost != null ? ' · cost ' + usage.cost : ''}` }),
         p.status === 'applied' ? h('span', { class: 'badge ok', text: 'saved in your files' }) : p.status === 'rejected' ? h('span', { class: 'badge', text: 'set aside' }) : null,
         p.edited_by_author ? h('span', { class: 'badge', text: 'your own version' }) : null));
+      if ((p.sources || []).length) {
+        const per = new Map();
+        p.sources.forEach((x) => per.set(x.file.split('/').pop(), (per.get(x.file.split('/').pop()) || 0) + 1));
+        holder.append(h('p', { class: 'small secondary', text: 'Used parts of your files: ' + [...per].map(([f, n]) => `${f} (${plural(n, 'part')})`).join(', ') }));
+      }
       if (m.data.steps && m.data.steps.length) holder.append(h('details', null, h('summary', { text: 'What I did' }), stepList(m.data.steps)));
       (p.warnings || []).forEach((w) => holder.append(notice('warn', w)));
       if (p.status === 'failed') {
@@ -391,15 +428,19 @@
       // each passage: the explanation, then the changes
       p.units.forEach((u) => {
         if (u.status === 'failed') { holder.append(notice('bad', `${u.section_path}: ${u.error_plain || u.error || 'failed'}`)); return; }
-        const box = h('section', { class: 'unit' }, h('h3', { text: `${u.section_path.split(' > ').slice(-1)[0]} · lines ${u.line_start} to ${u.line_end}` }));
-        if (u.approach) box.append(h('p', { class: 'approach', text: u.approach }));
+        // on a wide screen the explanation sits beside the changes instead of above them (see .unit in the stylesheet)
+        const why = h('div', { class: 'unit-why' }, h('h3', { text: `${u.section_path.split(' > ').slice(-1)[0]} · lines ${u.line_start} to ${u.line_end}` }));
+        const changes = h('div', { class: 'unit-changes' });
+        const box = h('section', { class: 'unit' }, why, changes);
+        if (u.approach) why.append(h('p', { class: 'approach', text: u.approach }));
         const back = (u.restored || []).filter((x) => !x.own_line);
-        if (back.length) box.append(notice('warn', `OpenAI left out ${plural(back.length, 'citation or formula', 'citations or formulas')} (${back.map((x) => x.latex).join(', ')}). I put ${back.length === 1 ? 'it' : 'them'} back where ${back.length === 1 ? 'it' : 'they'} stood; check ${back.length === 1 ? 'it still sits' : 'they still sit'} next to the claim ${back.length === 1 ? 'it supports' : 'they support'}.`));
-        (u.questions || []).forEach((q) => box.append(notice('warn', h('strong', { text: 'A question for you: ' }), q)));
+        if (back.length) why.append(notice('warn', `OpenAI left out ${plural(back.length, 'citation or formula', 'citations or formulas')} (${back.map((x) => x.latex).join(', ')}). I put ${back.length === 1 ? 'it' : 'them'} back where ${back.length === 1 ? 'it' : 'they'} stood; check ${back.length === 1 ? 'it still sits' : 'they still sit'} next to the claim ${back.length === 1 ? 'it supports' : 'they support'}.`));
+        (u.questions || []).forEach((q) => why.append(notice('warn', h('strong', { text: 'A question for you: ' }), q)));
         const bad = (u.validators || []).filter((v) => !v.ok);
-        if (bad.length) box.append(notice('warn', 'Heads up: ', bad.map((v) => v.detail || v.name).join('; ')));
-        u.hunks.forEach((hk) => box.append(hunkCard(hk, sel, () => { count.textContent = `${sel.size} of ${nHunks} changes selected`; }, locked, p.rule_labels)));
-        if (!u.hunks.length && u.status !== 'failed') box.append(h('p', { class: 'muted small', text: 'No changes in this passage.' }));
+        if (bad.length) why.append(notice('warn', 'Heads up: ', bad.map((v) => v.detail || v.name).join('; ')));
+        if ((u.from_files || []).length) why.append(notice('warn', h('strong', { text: 'Numbers that came from your files: ' }), u.from_files.join(', '), '. Check them against the source before you keep the change.'));
+        u.hunks.forEach((hk) => changes.append(hunkCard(hk, sel, () => { count.textContent = `${sel.size} of ${nHunks} changes selected`; }, locked, p.rule_labels)));
+        if (!u.hunks.length && u.status !== 'failed') changes.append(h('p', { class: 'muted small', text: 'No changes in this passage.' }));
         holder.append(box);
       });
 
@@ -659,7 +700,14 @@
         h('p', { class: 'small muted', text: 'Your citations, formulas, numbers and figures never leave your computer as text; OpenAI only sees the passage with tags in their place, and the answer is rejected if any of them changed. Each paper keeps its own private notes.' }));
     }
 
-    box.append(h('div', { class: 'chat-page' }, head, threadEl, composer));
+    const page = h('div', { class: 'chat-page' }, head, threadEl, composer, h('div', { class: 'drop-hint', 'aria-hidden': 'true', text: 'Drop the file here to add it to this paper' }));
+    let depth = 0;
+    const hasFiles = (e) => !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+    page.addEventListener('dragenter', (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; page.classList.add('dropping'); });
+    page.addEventListener('dragover', (e) => { if (hasFiles(e)) e.preventDefault(); });
+    page.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth) page.classList.remove('dropping'); });
+    page.addEventListener('drop', (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth = 0; page.classList.remove('dropping'); addFiles(e.dataTransfer.files); });
+    box.append(page);
     // the router attaches this page to the document right after we return, and the thread only draws itself while attached
     setTimeout(() => {
       renderThread();

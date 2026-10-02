@@ -222,9 +222,19 @@ it. Each paper's index is private to it: never use, quote or mention another pap
 content while working on this one (same rule as step 0).
 
 Tools: `paper_query` (this paper's relevant chunks with file and line ranges; empty
-query = outline; "my methods" returns that whole part), `book_query` (the few book
+query = outline; "my methods" returns that whole part; `kind: "source"` searches the files
+the author added to `references/` (articles, tables, notes), `kind: "project"` the data, code
+and notes around the paper, each cut into labelled parts with page, row or line ranges), `book_query` (the few book
 chunks that matter, with page references to cite), `chatgpt_revise` (one passage ->
 validated proposal; never edits files), `revise_record` (logs accept/reject).
+
+The author's own files: when a passage should be written or checked against their results, code
+or an article they added, search those parts first (`paper_query` with `kind: "project"` or
+`"source"`). Quote nothing from an article beyond a short phrase, never state a number that is
+not in the parts you found, and say which file and rows or pages it came from. The web app does
+the same for a request that names a file (`results.csv`) or talks about "my data/files" and shows
+which parts go out. `overleaf_sync` saves and pushes everything waiting, including saved changes an
+earlier refused push left behind; files in `references/` are never dropped as build output.
 
 1. Resolve the paper (step 0) and `overleaf_pull`.
 2. Which part? If unclear, `paper_query` with no query shows the outline; confirm with

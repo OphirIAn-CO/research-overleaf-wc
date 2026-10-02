@@ -13,7 +13,7 @@ from pathlib import Path
 
 import common
 
-from . import chunk_tex, config, events, gitguard, retrieve, store, taxonomy
+from . import chunk_tex, config, events, files as pfiles, gitguard, retrieve, store, taxonomy
 
 SCHEMA = 1
 KINDS_DEFAULT = ("tex", "memory", "review")
@@ -95,7 +95,7 @@ def fingerprint(proj):
     for p in _sources(proj):
         st = p.stat()
         rows.append((str(p.relative_to(root)), st.st_mtime_ns, st.st_size))
-    return store.sha256_text(json.dumps([SCHEMA, proj.get("main"), rows]))
+    return store.sha256_text(json.dumps([SCHEMA, proj.get("main"), rows, pfiles.fingerprint_rows(proj)]))
 
 
 def gather(name, proj):
@@ -116,7 +116,9 @@ def gather(name, proj):
     bib = root / proj["bib"]
     if bib.exists():
         chunks += chunk_tex.parse_bib(bib.read_text(encoding="utf-8", errors="replace"), name, proj["bib"])
-    return chunks, {"outline": outline, "files": files, "warnings": warnings, "main": main}
+    fchunks, sources, fwarn = pfiles.gather(name, proj)     # uploads, data, code and notes around the paper
+    chunks += fchunks
+    return chunks, {"outline": outline, "files": files, "warnings": warnings + fwarn, "main": main, "sources": sources}
 
 
 def _tex_tokens(con):
@@ -176,6 +178,7 @@ def _apply(con, chunks, info, fp):
         store.meta_set(con, "files", info["files"])
         store.meta_set(con, "main", info["main"])
         store.meta_set(con, "warnings", info["warnings"])
+        store.meta_set(con, "sources", info.get("sources", []))
         store.meta_set(con, "manuscript_tokens", sum(c["tokens"] for c in chunks if c["kind"] == "tex"))
     return {"added": len(added), "changed": len(changed), "removed": len(removed), "unchanged": unchanged,
             "total": len(fresh), "tex_tokens": sum(c["tokens"] for c in chunks if c["kind"] == "tex"), "warnings": info["warnings"],

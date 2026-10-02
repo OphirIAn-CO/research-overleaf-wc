@@ -152,6 +152,7 @@ Everything else is set up **inside the app**, in **Settings** (nothing to edit b
    command). Link a paper to its group on the References page.
 
 Then just talk to it. The pages are **Chat**, **References**, **Activity** and **Settings**; the papers and your chats are in the sidebar.
+The chat uses the width of your window: on a wide screen the explanation stays on the left while the before/after columns use the rest, and the text grows a little with the window.
 
 **QuillBot and Overleaf inside the app (the built-in browser).** Press **QuillBot**, **Overleaf** or **Paper text** above the chat and the
 page opens in the side area. QuillBot and Overleaf refuse to be shown inside another page, so the app starts a real browser (Chromium) in
@@ -206,6 +207,39 @@ You sign in once and it stays signed in (the sign-in is kept in `~/.config/overl
 QuillBot has no public API, so the paste stays yours. **Copy for QuillBot** copies the suggestion with your citations and formulas as tags
 (`[[LX001]]`) so QuillBot cannot damage them.
 
+**Your files: articles, tables, notes and code.** The app does not only read your LaTeX. Press **Add a file** next to the message box (or
+drop files on the chat, or use **References > Your files**) to add an article you cite (PDF or Word), a table of results (CSV or TSV),
+notes (text, Markdown), JSON, a notebook, or code (Python, R, MATLAB, Julia, SQL, shell); pictures are kept but not read. Excel files: save as CSV first.
+- **Saved and sent.** The file is saved in the `references/` folder of your paper, committed on its own (whatever else is waiting stays
+  waiting) and sent to Overleaf, where it shows in the file list. Switch the sending off on the **Your files** card to keep files here until
+  your next send. A second file with the same name never replaces the first (it becomes `name (2).pdf`); passwords and keys are refused;
+  25 MB per file (Overleaf projects have a size limit too).
+- **Split into parts.** Each file is cut into small labelled parts of about 350 tokens: a PDF by page and heading (the reference list is left
+  out), a table into a summary (rows, columns, min/max/mean of each numeric column) plus blocks of 25 rows, code at its functions, Markdown
+  and Word by heading, a notebook by cell (code and text output; pictures are skipped). **See the parts** lists them with where each came from
+  ("pages 3 to 4 · Methods", "rows 26 to 50"). Scanned PDFs have no text: the app says so.
+- **Code and results around the paper.** Without adding anything, the app also reads data and code files inside your paper's folder
+  (tables, JSON, notebooks, scripts, notes; never `.env`, keys, hidden or build folders, or links). If your analysis lives elsewhere, list
+  its folders under **Your files > Code and results in other folders** (inside Docker the folder must be shared first with
+  `./ui.sh folders add <folder>`, then `./ui.sh down` and `./ui.sh up`).
+- **When a request uses them.** Never silently. By default ("when I mention them") a request uses your files when it names one
+  (`rewrite the results using results.csv`), or talks about them ("based on my data", "check it against my files", the **Use my files** chip).
+  Everyday words do not count: a file called `results.csv` is not named by "improve the results". The request card says how many parts go
+  with it and **What goes out** lists them; the answer says which parts it used. You can set it to *every request* or *never* per paper.
+  Only the few best parts go (about 1,800 tokens, fewer when a request has many passages).
+- **Numbers from your files.** The check that stops a rewrite from inventing numbers accepts a number that stands in the parts that went
+  with the request, and points it out in the answer ("Numbers that came from your files: 0.82. Check them against the source"). A number
+  found nowhere is still refused. The model is told to copy numbers exactly, never to invent a value, and not to copy long stretches of an article.
+- **Claude Code** can read the same parts: `paper_query` with `kind: "source"` (added files) or `kind: "project"` (everything else).
+
+**Sending to Overleaf, and why it sometimes says "Overleaf has newer changes".** If you (or a coauthor) edited the project in Overleaf since you last
+got the latest, Overleaf refuses a send. Your change is then a *saved change* that never arrived. The header counts these ("1 saved change not
+in Overleaf yet"), another **Send** tries again, and **Get the latest from Overleaf, then send again** saves what is waiting, puts Overleaf's
+latest underneath your changes, and sends. If the same lines were changed on both sides it stops before sending, undoes the attempt, and tells
+you nothing was lost (then ask Claude to merge them). After a send the app asks Overleaf what it has and says so ("Checked: Overleaf now has your
+change"), reloads the project's Overleaf page in the built-in browser even when its tab is not showing, and presses Recompile there so the PDF follows.
+(Overleaf's editor does not follow a send by itself: a page that was open before keeps showing the old text until it is loaded again.)
+
 **Peer review** needs the `academic-paper` skill installed under `~/.claude/skills/` (`ui.sh` shares its rubric folder read-only).
 
 Terminal alternatives (for Claude Code or scripts): `writing.py book-ingest`, `book-rules`, `revise`, `eval`, `stats`, `doctor`; see
@@ -227,9 +261,9 @@ your book), or use **Book check** in the book library (Settings, Advanced).
 - Secrets stay in `~/.config/overleaf-skill/`, outside this repo and outside your papers.
 - The bot only obeys chat ids you whitelist.
 - Before any action Claude checks the folder still points at the same Overleaf project, and refuses otherwise.
-- LaTeX build files (`.aux`, `.log`, `.pdf`, ...) are never pushed to Overleaf by the sync tool.
+- LaTeX build files (`.aux`, `.log`, `.pdf`, ...) are never pushed to Overleaf by the sync tool (files you add to `references/` are not build files and are sent).
 - Peer review only runs when you ask. Mendeley is written to only when you ask Claude to add a reference or send a DOI to the bot.
-- The ChatGPT pass only runs when you ask. Each passage is sent with citations, formulas and headings masked, together with the paper's short card and a few book rules; never another paper, never your keys. Asking in the chat is the consent, and "What goes out" shows the exact text; turn on "Ask me before anything is sent" in Settings to confirm every time. Requests above a size you set, and every peer review (which reads the whole paper), always ask first. Answers are checked before you see them (protected LaTeX intact, no new numbers, no dashes, balanced braces) and nothing is written until you approve it.
+- The ChatGPT pass only runs when you ask. Each passage is sent with citations, formulas and headings masked, together with the paper's short card and a few book rules; never another paper, never your keys. Asking in the chat is the consent, and "What goes out" shows the exact text; turn on "Ask me before anything is sent" in Settings to confirm every time. Requests above a size you set, and every peer review (which reads the whole paper), always ask first. Answers are checked before you see them (protected LaTeX intact, no new numbers, no dashes, balanced braces, and every LaTeX command written exactly as in your paper: a model that doubles a backslash, `\\S` for `\S`, is corrected and told so, and one that adds or changes other LaTeX is refused) and nothing is written until you approve it. Parts of your own files go out only when a request uses them, and the request lists them. Linked folders cannot be system folders, hidden folders or this app's own settings folder.
 - QuillBot is a third party: only what you paste or put there leaves your computer. Your own version is checked against the same rules before it can be saved.
 - The built-in browser (QuillBot and Overleaf inside the app) lives in its own container with none of your keys or papers (see above). Your saved QuillBot/Overleaf email and password are in `~/.config/overleaf-skill/sites.json`, readable only by you, not encrypted.
 - The web app listens on `127.0.0.1` only (your computer, not the network), needs a fresh access token every time you start it, refuses requests from other websites, loads nothing from the internet, runs as you with a read-only filesystem and no extra privileges, and can see only your registered paper folders, the data folder and the inbox. It closes itself when idle.
