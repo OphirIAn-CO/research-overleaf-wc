@@ -162,7 +162,7 @@ async function until(fn, ms) { const end = Date.now() + (ms || 12000); for (;;) 
   await page.fill('#composer', 'improve the first paragraph of the methods');
   await page.press('#composer', 'Enter');
   await page.waitForSelector('.msg.assistant .approach', { timeout: 30000 });
-  await page.click('button:has-text("Adjust the tone myself")');
+  await page.click('button:has-text("Polish in QuillBot or by hand")');
   await page.waitForSelector('.tone textarea:not([readonly])');
   ok(await page.isVisible('.tone button:has-text("Put it in QuillBot")'), 'the tone panel offers to put the suggestion into QuillBot');
   const suggestion = await page.locator('.tone textarea[readonly]').first().inputValue();

@@ -522,6 +522,7 @@
     await m.api.ready;
     return m.api;
   }
+  function show(site) { if (has(site) && !A.enabled.includes(site)) setEnabled(A.layout === 'tabs' ? [site] : [...A.enabled, site]); }     // opens the pane beside the chat
   async function sendText(site, text) { const a = await use(site); await a.insert(text); }
   async function takeFrom(site, what) { const a = await use(site); return what === 'clipboard' ? (await a.clipboard()) : (await a.selection()); }
   /* Sends one site to a window of the author's own browser (it passes the human checks a built-in browser may not): remembers it in Settings. */
@@ -535,6 +536,6 @@
   async function afterSend() { const m = A.mounted.overleaf; if (m) { try { await m.api.reload(); } catch (e) { /* it will show on the next reload */ } } }
   async function knows(paper) { try { await addressesFor(paper || S.paper); } catch (e) { /* no panes known */ } return has('quillbot'); }
 
-  window.OLS.panes = { openBeside, framePane, bar, onRoute, setTargetFromThread, refreshText, has, sendText, takeFrom, afterSend, knows, copyAsync, useWindow };
+  window.OLS.panes = { openBeside, framePane, bar, onRoute, setTargetFromThread, refreshText, has, sendText, takeFrom, afterSend, knows, copyAsync, useWindow, show };
 
 }());

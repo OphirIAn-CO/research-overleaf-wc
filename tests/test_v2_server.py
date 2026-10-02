@@ -74,6 +74,46 @@ class FriendlySignIn(UiBase):
         self.assertIn("not accepted", r["friendly"])
 
 
+class CatchUp(UiBase):
+    """'Overleaf has newer changes': one button gets the latest and sends again, and stops with the reason when the two sides cannot be joined."""
+
+    def setUp(self):
+        super().setUp()
+        self.name, self.proj = paper(self)
+        self.c.login()
+        self._pull, self._sync = ui.overleaf_mcp.tool_pull, ui.overleaf_mcp.tool_sync
+        self.calls = []
+        ui.overleaf_mcp.tool_pull = lambda a: self.calls.append("pull") or self.pull_says
+        ui.overleaf_mcp.tool_sync = lambda a: self.calls.append("sync") or "committed\npush: ok"
+        self.pull_says = "Already up to date."
+
+    def tearDown(self):
+        ui.overleaf_mcp.tool_pull, ui.overleaf_mcp.tool_sync = self._pull, self._sync
+        super().tearDown()
+
+    def test_a_rejected_send_offers_the_catch_up_and_it_gets_the_latest_then_sends(self):
+        ui.overleaf_mcp.tool_sync = lambda a: "committed\npush: ! [rejected] main -> main (fetch first)"
+        st, r = self.c.post("/api/papers/sync", {"name": "alpha"})
+        self.assertEqual((r["level"], r["needs"]), ("warn", "latest"))
+        ui.overleaf_mcp.tool_sync = lambda a: self.calls.append("sync") or "committed\npush: ok"
+        st, r = self.c.post("/api/papers/catchup", {"name": "alpha", "message": "Writing assistant: update"})
+        self.assertEqual(st, 200)
+        self.assertEqual(self.calls, ["pull", "sync"])
+        self.assertEqual((r["pull"]["level"], r["push"]["level"], r["push"]["summary"]), ("ok", "ok", "Sent to Overleaf."))
+
+    def test_when_the_two_sides_cannot_be_joined_it_stops_before_sending(self):
+        self.pull_says = "pull failed: fatal: Not possible to fast-forward, aborting."
+        st, r = self.c.post("/api/papers/catchup", {"name": "alpha"})
+        self.assertEqual((r["pull"]["needs"], r["push"]), ("claude", None))
+        self.assertEqual(self.calls, ["pull"], "nothing was sent")
+
+    def test_without_the_sign_in_it_says_so_and_sends_nothing(self):
+        self.pull_says = "pull failed: fatal: could not read Password for 'https://git@git.overleaf.com'"
+        st, r = self.c.post("/api/papers/catchup", {"name": "alpha"})
+        self.assertEqual((r["pull"]["hint"], r["push"]), ("token", None))
+        self.assertEqual(self.c.post("/api/papers/catchup", {"name": "nobody"})[0], 404)
+
+
 if __name__ == "__main__":
     unittest.main()
 

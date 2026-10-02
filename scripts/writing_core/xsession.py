@@ -259,12 +259,15 @@ class XSession(webview._Session):
 
     # ------------------------------------------------------------------ the debugging port: short connections, nothing that instruments the page
     def _targets(self):
+        """The browser's tabs, the ones with a real address first (helper pages of the browser itself, such as the new-tab page, come last)."""
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/json/list", timeout=2) as r:
-            return [t for t in json.loads(r.read().decode("utf-8")) if t.get("type") == "page"]
+            pages = [t for t in json.loads(r.read().decode("utf-8")) if t.get("type") == "page" and not t.get("url", "").startswith(("devtools:", "chrome-extension:"))]
+        web = [t for t in pages if t.get("url", "").startswith(("http:", "https:"))]
+        return web + [t for t in pages if t not in web]
 
-    def _cdp(self, method, params=None, timeout=4):
+    def _cdp(self, method, params=None, timeout=4, target=None):
         import websocket
-        pages = self._targets()
+        pages = [target] if target else self._targets()
         if not pages:
             raise BrowserError("the page is not ready yet")
         ws = websocket.create_connection(pages[0]["webSocketDebuggerUrl"], timeout=timeout, suppress_origin=True)
@@ -313,13 +316,19 @@ class XSession(webview._Session):
         except Exception:  # noqa: BLE001
             return
         url = page.get("url", "")
-        if not self.allow_private and not webview.public_url(url):
-            self.info["notice"] = "The built-in browser only opens public websites, so it did not go to that address."
-            try:
-                self._cdp("Page.navigate", {"url": "about:blank"})
-            except Exception:  # noqa: BLE001
-                pass
-            return
+        if not self.allow_private:
+            for other in self._targets():                    # any tab that went somewhere private is sent back to a blank page
+                if not webview.public_url(other.get("url", "")):
+                    self.info["notice"] = "The built-in browser only opens public websites, so it did not go to that address."
+                    self._guard_notice = True
+                    try:
+                        self._cdp("Page.navigate", {"url": "about:blank"}, target=other)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
+            if getattr(self, "_guard_notice", False):
+                self._guard_notice = False
+                self.info["notice"] = ""                      # everything is fine again: the note does not linger
         self.info.update(url=url, title=(page.get("title") or "")[:120])
         if time.time() - self._challenge_at > 2.0:
             self._challenge_at = time.time()

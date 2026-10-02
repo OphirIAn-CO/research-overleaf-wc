@@ -40,7 +40,7 @@ BUTTONS = {0: "left", 1: "middle", 2: "right"}
 MODS = ("Shift", "Control", "Alt", "Meta")
 NAMED_KEYS = {"Enter", "Tab", "Backspace", "Delete", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Insert",
               *[f"F{i}" for i in range(1, 13)]}
-NAV_SCHEMES = ("http", "https", "about", "blob", "data", "chrome-error")
+NAV_SCHEMES = ("http", "https", "about", "blob", "data", "chrome-error", "chrome", "chrome-untrusted", "chrome-search")   # the last three are the browser's own pages
 
 
 class BrowserError(Exception):
@@ -66,7 +66,7 @@ def public_url(url):
         return False
     if u.scheme not in NAV_SCHEMES:
         return False
-    if u.scheme in ("about", "blob", "data", "chrome-error"):
+    if u.scheme in ("about", "blob", "data", "chrome-error", "chrome", "chrome-untrusted", "chrome-search"):
         return True
     host = (u.hostname or "").lower()
     if not host or "." not in host and ":" not in host:     # single-label names are internal (docker service names, "localhost")

@@ -423,7 +423,8 @@ class BrowserContainer(unittest.TestCase):
 
 class AddressRules(unittest.TestCase):
     def test_only_public_websites_can_be_visited(self):
-        for ok in ("https://www.overleaf.com/project/abc", "https://quillbot.com/", "http://example.org/", "about:blank", "data:text/html,hi", "chrome-error://chromewebdata/"):
+        for ok in ("https://www.overleaf.com/project/abc", "https://quillbot.com/", "http://example.org/", "about:blank", "data:text/html,hi", "chrome-error://chromewebdata/",
+                   "chrome://new-tab-page/", "chrome-untrusted://new-tab-page/", "chrome://version/"):
             self.assertTrue(webview.public_url(ok), ok)
         for bad in ("http://127.0.0.1:8765/", "http://localhost/", "http://[::1]/", "http://10.1.2.3/", "http://192.168.0.1/", "http://169.254.169.254/latest/",
                     "http://overleaf-ui:8765/", "http://overleaf-browser:9233/", "http://host.docker.internal/", "http://printer.local/", "http://intranet.internal/",

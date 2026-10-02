@@ -84,14 +84,33 @@
     const paper = S.paper;
     const data = await api.get(`/api/chat?paper=${enc(paper)}&id=${enc(S.chatId || '')}`);
     S.chatId = data.id;
-    const st = { data, paper, cid: data.id, messages: data.thread.messages, local: [], working: null, busy: false };
+    const st = { data, paper, cid: data.id, messages: data.thread.messages, local: [], working: null, busy: false, cache: new Map(), seen: new Set(), workEl: null, work: null, welcomeEl: null, welcomeSig: '', stuck: true };
     const threadEl = h('div', { class: 'thread', role: 'log', 'aria-label': 'Conversation' });
     const sub = h('p', { class: 'muted small' });
     const alive = () => document.body.contains(threadEl) && S.paper === paper && S.chatId === st.cid;
+    // The conversation follows new content only while the reader is at the bottom; scroll up to read and it stays where you left it.
+    const nearBottom = () => threadEl.scrollHeight - threadEl.scrollTop - threadEl.clientHeight < 90;
+    threadEl.addEventListener('scroll', () => { st.stuck = nearBottom(); }, { passive: true });
+    const follow = typeof ResizeObserver === 'function' ? new ResizeObserver(() => { if (st.stuck && alive()) threadEl.scrollTop = threadEl.scrollHeight; }) : null;   // a bubble that grows after it was drawn
+    if (follow) follow.observe(threadEl);
 
     // ---- header
-    const gitNotice = (r) => (r.friendly ? notice('warn', r.friendly, ' ', h('a', { href: '#/settings', text: 'Open Settings' })) :
-      h('div', null, notice(r.level === 'bad' ? 'bad' : r.level === 'warn' ? 'warn' : 'ok', r.summary || r.output), r.output && r.output !== r.summary ? h('details', null, h('summary', { text: 'Details' }), h('pre', { class: 'small payload', text: r.output })) : null));
+    const catchUp = (into) => guarded(h('button', { type: 'button', class: 'primary', text: 'Get the latest from Overleaf, then send again' }), async () => {
+      const r = await api.post('/api/papers/catchup', { name: paper, message: 'Writing assistant: update' });
+      into.append(gitNotice(r.pull));
+      if (r.push) into.append(gitNotice(r.push));
+      loadOverview();
+      await window.OLS.loadState();
+      if (window.OLS.panes && window.OLS.panes.refreshText) window.OLS.panes.refreshText();
+      if (r.push && r.push.level === 'ok' && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend();
+    });
+    const gitNotice = (r) => {
+      if (r.friendly) return notice('warn', r.friendly, ' ', h('a', { href: '#/settings', text: 'Open Settings' }));
+      const box = h('div', { class: 'stack' }, notice(r.level === 'bad' ? 'bad' : r.level === 'warn' ? 'warn' : 'ok', r.summary || r.output));
+      if (r.needs === 'latest') box.append(h('div', { class: 'row' }, catchUp(box)));
+      if (r.output && r.output !== r.summary) box.append(h('details', null, h('summary', { text: 'Details' }), h('pre', { class: 'small payload', text: r.output })));
+      return box;
+    };
     async function loadOverview() {
       try {
         const o = await api.get('/api/overview?paper=' + enc(paper), { poll: true });
@@ -132,6 +151,7 @@
 
     async function send(text, extra) {
       if (st.busy) return;
+      st.stuck = true;
       setBusy(true);
       try {
         const r = await api.post('/api/chat/send', Object.assign({ paper, id: st.cid, text }, extra || {}));
@@ -147,16 +167,60 @@
     composer.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
     ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
 
-    // ---- the pass in progress
+    // ---- the pass in progress: one calm line, and the steps behind a toggle. Nothing is rebuilt while it works; the line and the rows change in place.
+    const stepsKey = (steps) => (steps || []).map((x) => `${x.key}|${x.state}|${x.label}|${x.detail || ''}`).join('\n');
+    function workingBubble() {
+      if (st.workEl) return st.workEl;
+      const line = h('span', { class: 'grow work-text', text: 'Working on it...' });
+      const list = h('ul', { class: 'steps' });
+      const det = h('details', { class: 'work-steps' }, h('summary', { text: 'What I am doing' }), list);
+      det.open = window.OLS.store.get('ols-show-steps') === '1';          // remembered: open it once and it stays open for the next requests
+      det.addEventListener('toggle', () => { window.OLS.store.set('ols-show-steps', det.open ? '1' : '0'); if (st.stuck) threadEl.scrollTop = threadEl.scrollHeight; });
+      st.workEl = assistant(h('div', { class: 'row tight work-line', role: 'status', 'aria-live': 'polite' }, h('span', { class: 'spinner', 'aria-hidden': 'true' }), line), det);
+      st.work = { line, list, rows: new Map(), key: '' };
+      return st.workEl;
+    }
+    function updateWorking(steps) {
+      const w = st.work;
+      if (!w || !steps) return;
+      const key = stepsKey(steps);
+      if (key === w.key) return;                                          // nothing new: touch nothing
+      w.key = key;
+      const cur = steps.find((x) => x.state === 'running') || steps[steps.length - 1];
+      const text = cur ? cur.label + (cur.detail ? ' · ' + cur.detail : '') : 'Working on it...';
+      if (w.line.textContent !== text) w.line.textContent = text;
+      const ids = new Set(steps.map((x, i) => x.key || String(i)));
+      Array.from(w.rows.keys()).forEach((id) => { if (!ids.has(id)) { w.rows.get(id).li.remove(); w.rows.delete(id); } });    // the first 'Starting' row goes once the real steps arrive
+      steps.forEach((x, i) => {
+        const id = x.key || String(i);
+        let row = w.rows.get(id);
+        if (!row) {
+          row = { li: h('li', { class: 'step' }), mark: h('span', { class: 'mark', 'aria-hidden': 'true' }), spin: h('span', { class: 'spinner', 'aria-hidden': 'true' }), txt: h('span', { class: 'grow' }), state: '', text: '' };
+          row.li.append(row.mark, row.spin, row.txt);
+          w.rows.set(id, row);
+          w.list.append(row.li);
+        }
+        if (row.state !== x.state) {
+          row.state = x.state;
+          row.li.className = 'step ' + x.state;
+          row.mark.textContent = x.state === 'done' ? '✓' : x.state === 'failed' ? '✗' : x.state === 'skipped' ? '–' : '';
+        }
+        const t = x.label + (x.detail ? ' · ' + x.detail : '');
+        if (row.text !== t) { row.text = t; row.txt.textContent = t; }
+      });
+      if (st.stuck) threadEl.scrollTop = threadEl.scrollHeight;
+    }
     async function watch(jobId) {
       st.working = { steps: [{ key: 'start', label: 'Starting', state: 'running', detail: '' }] };
+      st.workEl = null; st.work = null;
       renderThread();
+      updateWorking(st.working.steps);
       setBusy(true);
       try {
-        await waitJob(jobId, (j) => { if (j.steps) { st.working.steps = j.steps; if (alive()) renderThread(); } });
+        await waitJob(jobId, (j) => { if (j.steps && alive()) { st.working.steps = j.steps; updateWorking(j.steps); } });
       } catch (e) { /* the failure is already in the chat as a message */ }
       finally {
-        st.working = null; setBusy(false);
+        st.working = null; st.workEl = null; st.work = null; setBusy(false);
         await reload().catch(() => {});
         if (window.OLS.panes && window.OLS.panes.setTargetFromThread) window.OLS.panes.setTargetFromThread(st.messages);
       }
@@ -330,34 +394,65 @@
 
       holder.append(notices);
       const count = h('span', { class: 'muted small', text: `${sel.size} of ${nHunks} changes selected` });
+      const copyAs = window.OLS.panes && window.OLS.panes.copyAsync;
+      // the text of the ticked changes, as the server assembles it (real LaTeX, or tagged for QuillBot); nothing is written
+      const textOf = () => api.post('/api/proposal/text', { paper, id: p.id, accept: sel.size ? [...sel] : 'all' });
+      const copyBtn = (label, title, make, what) => guarded(h('button', { type: 'button', class: 'small', text: label, title }), async () => {
+        if (!sel.size) throw new Error('Tick at least one change.');
+        await copyAs(make(), what);
+      });
+      const beforeAfter = (hk) => [hk.diff.filter(([o]) => o !== '+').map(([, t]) => t).join(''), hk.diff.filter(([o]) => o !== '-').map(([, t]) => t).join('')];
+      const everything = async () => {
+        const t = await textOf();
+        const parts = [];
+        p.units.filter((u) => u.status !== 'failed').forEach((u) => {
+          const mine = u.hunks.filter((hk) => sel.has(hk.uid));
+          parts.push(`${u.section_path.split(' > ').slice(-1)[0]} (lines ${u.line_start} to ${u.line_end})`);
+          if (u.approach) parts.push('', 'Why: ' + u.approach);
+          if (mine.length) parts.push('', 'Changes:', ...mine.map((hk) => { const [b, a] = beforeAfter(hk); return `- "${b.trim()}" -> "${a.trim()}"${hk.reasons.length ? ' (' + hk.reasons.join('; ') + ')' : ''}`; }));
+          parts.push('');
+        });
+        return parts.join('\n') + 'New text:\n\n' + t.latex;
+      };
+      const copies = h('div', { class: 'row tight copies' }, h('span', { class: 'small muted', text: 'Copy:' }),
+        copyBtn('the new text', 'The improved text with your citations and formulas back in place, ready to paste into Overleaf or anywhere', async () => (await textOf()).latex, 'The new text'),
+        copyBtn('for QuillBot', 'The same text with citations and formulas as tags like [[LX001]], so QuillBot cannot damage them', async () => (await textOf()).masked, 'The text for QuillBot'),
+        copyBtn('everything', 'The explanation, each change with its reason, and the new text', everything, 'The whole answer'));
       if (locked) {
-        if (p.status === 'applied') holder.append(h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Send to Overleaf' }), async () => {
-          const r = await api.post('/api/papers/sync', { name: paper, message: 'Writing assistant: ' + (p.instruction || '').slice(0, 60) });
-          showGit(notices, r);
-        })));
+        if (p.status === 'applied') {
+          holder.append(h('div', { class: 'stack' }, notice('ok', h('strong', { text: 'Saved in your files. ' }), 'It is not in Overleaf until you send it.'),
+            h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Send to Overleaf' }), async () => {
+              const r = await api.post('/api/papers/sync', { name: paper, message: 'Writing assistant: ' + (p.instruction || '').slice(0, 60) });
+              showGit(notices, r);
+              if (r.level === 'ok' && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend();
+            }))));
+        }
         return;
       }
       if (!nHunks) return;
       const tone = h('div', { hidden: true, class: 'tone' });
-      const canApply = st.data.can_apply;
+      const unclean = !st.data.can_apply;             // no text-cleaning service: the text is saved exactly as written, and the card says so
       const approve = (push) => async () => {
         if (!sel.size) throw new Error('Tick at least one change.');
-        await doApprove(notices, p, { accept: [...sel], push }, redraw);
+        await doApprove(notices, p, { accept: [...sel], push, unclean_ok: unclean }, redraw);
       };
-      const handoff = guarded(h('button', { type: 'button', class: canApply ? '' : 'primary', text: 'Let Claude apply it' }), async () => {
+      const handoff = guarded(h('button', { type: 'button', class: 'ghost', text: 'Hand to Claude Code instead' }), async () => {
         await api.post('/api/proposal/approve', { paper, id: p.id, accept: [...sel], mode: 'handoff' });
-        notices.append(notice('ok', h('strong', { text: 'Handed to Claude. ' }), 'In Claude Code say "apply the suggestion I handed you". It saves exactly the changes you ticked and cleans the text first.'));
+        notices.append(notice('ok', h('strong', { text: 'Handed to Claude Code. ' }), 'In Claude Code say "apply the suggestion I handed you". It saves exactly the changes you ticked and runs your text-cleaning step first.'));
       });
-      handoff.title = 'Claude saves the ticked changes itself, including the text-cleaning step';
+      handoff.title = 'For when you work in Claude Code: it saves the ticked changes itself, after your text-cleaning step. You do not need this to save from here.';
       const actions = h('div', { class: 'row actions' },
-        canApply ? guarded(h('button', { type: 'button', class: 'primary', text: 'Approve and save' }), approve(false)) : null,
-        canApply ? guarded(h('button', { type: 'button', text: 'Approve and push to Overleaf' }), approve(true)) : null,
-        canApply ? null : handoff,
-        h('button', { type: 'button', text: 'Adjust the tone myself', onclick: () => { tone.hidden = !tone.hidden; if (!tone.childNodes.length) buildTone(tone, p, redraw); } }),
+        guarded(h('button', { type: 'button', class: 'primary', text: 'Save in my files' }), approve(false)),
+        guarded(h('button', { type: 'button', text: 'Save and send to Overleaf' }), approve(true)),
+        h('button', { type: 'button', text: 'Polish in QuillBot or by hand', onclick: () => {
+          tone.hidden = !tone.hidden;
+          if (!tone.childNodes.length) buildTone(tone, p, redraw);
+          if (!tone.hidden && window.OLS.panes && window.OLS.panes.has && window.OLS.panes.has('quillbot')) window.OLS.panes.show('quillbot');   // QuillBot opens beside the chat
+        } }),
         guarded(h('button', { type: 'button', class: 'ghost', text: 'Not now' }), async () => { await api.post('/api/proposal/record', { paper, id: p.id, accepted: [], rejected: 'all' }); await redraw(); }),
         h('span', { class: 'grow' }), count);
-      holder.append(actions);
-      if (!canApply) holder.append(h('p', { class: 'small muted', text: 'The text-cleaning service is not set up, so Claude saves it for you. Add its address in Settings to save directly from here.' }));
+      holder.append(copies, actions);
+      holder.append(h('p', { class: 'small muted' }, unclean ? 'Saved exactly as written: no text-cleaning service is set up. ' : '', 'Saving puts the ticked changes into your files here; "send" then puts them in Overleaf. ', handoff));
       holder.append(tone);
     }
 
@@ -433,10 +528,12 @@
         }, 350);
       };
       const out = h('div', { class: 'stack' });
-      el.append(h('p', { class: 'small secondary', text: (inQuillBot ?
-        'Press "Put it in QuillBot", adjust the tone in the QuillBot pane, then press "Take QuillBot\'s result" (or select the result there and press "Take the text I selected"). You can also copy and paste by hand, or just edit here. ' :
-        'Copy the suggestion to QuillBot (the pane on the right, or any window), adjust the tone, copy the result, and paste it into "Your final version". You can also just edit it here. ') +
-        'Tags like [[LX001]] stand for your citations and formulas: leave them as they are.' }));
+      el.append(h('ol', { class: 'small secondary tone-steps' },
+        h('li', null, inQuillBot ? 'Press "Put it in QuillBot" (left). It goes into the QuillBot pane beside the chat.' : 'Press "Copy for QuillBot" (left) and paste it into QuillBot, in the pane beside the chat or in any window.'),
+        h('li', null, 'Adjust the tone there. Or skip QuillBot and just edit "Your final version" (right) by hand.'),
+        h('li', null, inQuillBot ? 'Press "Take QuillBot\'s result" (right): QuillBot\'s own Copy button, or the text you selected there, comes into the box. Otherwise copy it in QuillBot and press "Paste what I copied".' : 'Copy QuillBot\'s result and press "Paste what I copied" (right).'),
+        h('li', null, 'Check the notes under the box, then press "Save my version" or "Save and send to Overleaf".')),
+        h('p', { class: 'small muted', text: 'Tags like [[LX001]] stand for your citations and formulas: leave them as they are.' }));
       units.forEach((u) => {
         const v = u.views;
         const mine = h('textarea', { rows: '8', 'aria-label': 'Your final version', class: 'mono' });
@@ -464,45 +561,79 @@
                 take(mine, check, 'selection', 'Take the text I selected', 'The text you selected in the QuillBot pane')] : null,
               h('button', { type: 'button', text: 'Paste what I copied', onclick: async () => {
                 try { mine.value = await navigator.clipboard.readText(); check(); } catch (e) { toast('Your browser did not allow reading the clipboard. Paste with Cmd+V or Ctrl+V into the box instead.'); }
-              } }), h('button', { type: 'button', class: 'ghost', text: 'Start over', onclick: () => { mine.value = v.suggested_masked; check(); } })))),
+              } }), h('button', { type: 'button', class: 'ghost', text: 'Start over', onclick: () => { mine.value = v.suggested_masked; check(); } })),
+              h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'small', text: 'Copy my version as LaTeX', title: 'Your version with the citations and formulas put back, ready to paste anywhere' }), async () => {
+                await window.OLS.panes.copyAsync(api.post('/api/proposal/check', { paper, id: p.id, texts: { [u.unit_id]: mine.value } }).then((r) => r.checks[u.unit_id].latex), 'Your version');
+              })))),
           legend.length ? h('details', null, h('summary', { text: 'What each tag stands for' }), h('ul', { class: 'small mono' }, legend.map(([k, x]) => h('li', { text: `[[${k}]]  ${x}` })))) : null,
           list, h('div', { class: 'row small' }, which), diff));
       });
+      const unclean = !st.data.can_apply;             // no text-cleaning service: saved exactly as written
       const approve = (push) => async () => {
-        const r = await doApprove(out, p, { texts: texts(), acknowledge: ack.checked, push });
+        const r = await doApprove(out, p, { texts: texts(), acknowledge: ack.checked, push, unclean_ok: unclean });
         if (r && r.ok === false) { paintChecks(r.checks); if (r.needs_ack) { ackRow.hidden = false; toast('Tick "I checked the warnings" to go ahead.'); } else toast('Fix the red items first.'); }
       };
-      const b1 = guarded(h('button', { type: 'button', class: 'primary', text: 'Approve and save' }), approve(false));
-      const b2 = guarded(h('button', { type: 'button', text: 'Approve and push to Overleaf' }), approve(true));
-      const b3 = guarded(h('button', { type: 'button', text: 'Let Claude apply my version' }), async () => {
+      const b1 = guarded(h('button', { type: 'button', class: 'primary', text: 'Save my version' }), approve(false));
+      const b2 = guarded(h('button', { type: 'button', text: 'Save my version and send to Overleaf' }), approve(true));
+      const b3 = guarded(h('button', { type: 'button', class: 'ghost', text: 'Hand my version to Claude Code instead', title: 'For when you work in Claude Code. You do not need this to save from here.' }), async () => {
         const r = await api.post('/api/proposal/approve', { paper, id: p.id, texts: texts(), acknowledge: ack.checked, mode: 'handoff' });
         if (r.ok === false) { paintChecks(r.checks); return; }
-        out.append(notice('ok', 'Handed to Claude with your version.'));
+        out.append(notice('ok', 'Handed to Claude Code with your version.'));
       });
-      approveBtns.push(...(st.data.can_apply ? [b1, b2] : [b3]));
-      el.append(out, ackRow, h('div', { class: 'row' }, st.data.can_apply ? [b1, b2] : [b3]));
+      approveBtns.push(b1, b2);
+      el.append(out, ackRow, h('div', { class: 'row' }, b1, b2, b3), ...(unclean ? [h('p', { class: 'small muted', text: 'Saved exactly as written: no text-cleaning service is set up.' })] : []));
       check();
     }
 
-    // ---- the thread
+    // ---- the thread. Every message keeps its element until its own content changes, so a refresh never flashes, never loses an open toggle or text
+    // being edited, and never throws the reading position away.
+    function buildMessage(m) {
+      if (m.role === 'user') return h('div', { class: 'msg user' }, h('div', { class: 'bubble', text: m.text }));
+      if (m.kind === 'plan') return planBubble(m);
+      if (m.kind === 'ask') return askBubble(m);
+      if (m.kind === 'result') return resultBubble(m);
+      if (m.kind === 'refs') return refsBubble(m);
+      if (m.kind === 'review_plan') return reviewPlanBubble(m);
+      if (m.kind === 'review') return reviewBubble(m);
+      if (m.kind === 'error') return assistant(notice('bad', m.text));
+      return assistant(textBlock(m.text));
+    }
+    function syncChildren(parent, nodes) {
+      const want = new Set(nodes);
+      Array.from(parent.children).forEach((c) => { if (!want.has(c)) parent.removeChild(c); });
+      nodes.forEach((n, i) => { if (parent.children[i] !== n) parent.insertBefore(n, parent.children[i] || null); });
+    }
     function renderThread() {
       if (!alive()) return;
-      clear(threadEl);
-      if (!st.messages.length || st.showHelp) threadEl.append(welcome());
-      for (const m of st.messages) {
-        if (m.role === 'user') threadEl.append(h('div', { class: 'msg user' }, h('div', { class: 'bubble', text: m.text })));
-        else if (m.kind === 'plan') threadEl.append(planBubble(m));
-        else if (m.kind === 'ask') threadEl.append(askBubble(m));
-        else if (m.kind === 'result') threadEl.append(resultBubble(m));
-        else if (m.kind === 'refs') threadEl.append(refsBubble(m));
-        else if (m.kind === 'review_plan') threadEl.append(reviewPlanBubble(m));
-        else if (m.kind === 'review') threadEl.append(reviewBubble(m));
-        else if (m.kind === 'error') threadEl.append(assistant(notice('bad', m.text)));
-        else threadEl.append(assistant(textBlock(m.text)));
+      const stick = st.stuck || !threadEl.firstChild;
+      const keep = threadEl.scrollTop;
+      const ctx = JSON.stringify([st.data.can_apply, st.data.openai, !!(window.OLS.panes && window.OLS.panes.has && window.OLS.panes.has('quillbot'))]);
+      const nodes = [];
+      if (!st.messages.length || st.showHelp) {
+        const wsig = ctx + (S.st.books || []).length;
+        if (!st.welcomeEl || st.welcomeSig !== wsig) { st.welcomeEl = welcome(); st.welcomeSig = wsig; }
+        nodes.push(st.welcomeEl);
       }
-      st.local.forEach((l) => threadEl.append(assistant(l.node)));
-      if (st.working) threadEl.append(assistant(h('p', { class: 'small secondary', text: 'Working on it...' }), stepList(st.working.steps, true)));
-      threadEl.scrollTop = threadEl.scrollHeight;
+      const live = new Set();
+      for (const m of st.messages) {
+        live.add(m.id);
+        const sig = ctx + JSON.stringify([m.kind, m.role, m.text, m.data]);
+        let hit = st.cache.get(m.id);
+        if (!hit || hit.sig !== sig) {
+          hit = { sig, node: buildMessage(m) };
+          if (st.seen.size && !st.seen.has(m.id)) hit.node.classList.add('fresh');       // a new message eases in; the ones already there stay still
+          st.cache.set(m.id, hit);
+        }
+        st.seen.add(m.id);
+        nodes.push(hit.node);
+      }
+      Array.from(st.cache.keys()).forEach((id) => { if (!live.has(id)) st.cache.delete(id); });
+      st.local.forEach((l) => { if (!l.wrapper) l.wrapper = assistant(l.node); nodes.push(l.wrapper); });
+      if (st.working) nodes.push(workingBubble());
+      syncChildren(threadEl, nodes);
+      if (follow) nodes.forEach((n) => follow.observe(n));              // observing an element twice is harmless; a removed one is dropped by the browser
+      threadEl.scrollTop = stick ? threadEl.scrollHeight : keep;
+      if (stick) st.stuck = true;
     }
 
     function welcome() {

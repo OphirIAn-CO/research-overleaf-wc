@@ -457,6 +457,22 @@ def unit_views(u):
             "legend": {k: (v if len(v) <= 70 else v[:67] + "...") for k, v in u.get("mapping", {}).items()}}
 
 
+def selected_views(proj, pid, accept="all"):
+    """The suggestion with only the ticked changes, passage by passage, ready to copy: as tags (what goes to QuillBot) and as real LaTeX
+    (what goes into Overleaf or any editor). Writes nothing. -> [{unit_id, section, lines, masked, latex}]"""
+    proposal = get_proposal(proj, pid)
+    chosen = _selected(proposal, accept)
+    out = []
+    for u in proposal["units"]:
+        if u["status"] == "failed" or not u.get("segments"):
+            continue
+        ids = {h["id"] for h in u["hunks"] if h["uid"] in chosen}
+        masked = latex_mask.assemble(u["segments"], ids)
+        out.append({"unit_id": u["unit_id"], "section": u["section_path"], "lines": [u["line_start"], u["line_end"]], "masked": masked,
+                    "latex": latex_mask.unmask(masked, u["mapping"])})
+    return out
+
+
 def _kind(latex):
     if re.match(r"\\(?:cite|parencite|textcite|autocite|footcite|nocite)", latex):
         return "citation"

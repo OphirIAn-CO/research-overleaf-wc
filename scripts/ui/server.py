@@ -274,6 +274,15 @@ def plain_git(action, out):
     return {"summary": first, "level": "ok", "needs": None}
 
 
+def api_catchup(r):
+    """'Overleaf has newer changes': get the latest, then send again, in one go. Stops with the reason when the two sides cannot be joined safely."""
+    name = r.body.get("name", "")
+    pull = git_action(name, "pull")
+    if pull.get("hint") or pull.get("needs") == "claude" or pull.get("level") == "bad":
+        return {"pull": pull, "push": None}
+    return {"pull": pull, "push": git_action(name, "sync", r.body.get("message"))}
+
+
 def api_git(r, action):
     (name,) = need(r.body, "name")
     return git_action(name, action, r.body.get("message"))
@@ -487,6 +496,16 @@ def api_apply(r):
         return revise.apply(n, p, pid, accept=accept, cleaner=cleaner, source="web")
     except revise.ReviseError as e:
         raise ApiError(409, str(e), handoff_available=True) from None
+
+
+def api_proposal_text(r):
+    """The suggestion with the ticked changes only, ready to copy (real LaTeX, and the tagged version for QuillBot). Writes nothing."""
+    n, p = paper_ref(r.body.get("paper", ""))
+    try:
+        units = revise.selected_views(p, _pid(r), r.body.get("accept", "all"))
+    except revise.ReviseError as e:
+        raise ApiError(409, str(e)) from None
+    return {"units": units, "latex": "\n\n".join(u["latex"] for u in units), "masked": "\n\n".join(u["masked"] for u in units)}
 
 
 def api_record(r):
@@ -1008,22 +1027,25 @@ def api_proposal_approve(r):
         return {"ok": True, "handoff": h}
     url = config.ui_cfg()["watermark_url"]
     cleaner = watermark.make_cleaner(url) if url else None
+    unclean = bool(r.body.get("unclean_ok")) and not url      # the author saves as written because no text-cleaning service is set up; with one set up it always runs
     try:
-        out = revise.apply(n, p, pid, accept=accept, cleaner=cleaner, source="web", note="edited by you" if texts is not None else "")
+        out = revise.apply(n, p, pid, accept=accept, cleaner=cleaner, unclean_ok=unclean, source="web",
+                           note=("edited by you" if texts is not None else "") + (" (saved without the text-cleaning step)" if unclean else ""))
     except revise.ReviseError as e:
         raise ApiError(409, str(e), handoff_available=True) from None
     files = sorted({w["file"] for w in out["written"]})
-    res = {"ok": True, "applied": out, "files": files}
+    res = {"ok": True, "applied": out, "files": files, "cleaned": bool(cleaner)}
     if cid:
         try:
-            chat.append(p, cid, "assistant", "note", f"Saved in {', '.join(files)}." + (" This is your own version." if texts is not None else ""), proposal=pid)
+            chat.append(p, cid, "assistant", "note", f"Saved in {', '.join(files)}." + (" This is your own version." if texts is not None else "")
+                        + ("" if cleaner else " Saved exactly as written: no text-cleaning service is set up."), proposal=pid)
         except ValueError:
             pass
     if r.body.get("push"):
         prop = revise.get_proposal(p, pid)
         what = ", ".join(taxonomy.label(x) for x in prop.get("part") or []) or "text"
         res["push"] = git_action(n, "sync", f"Writing assistant: improve {what}")
-        if cid and "hint" not in res["push"]:
+        if cid and "hint" not in res["push"] and res["push"].get("level") == "ok":      # only when Overleaf really took it
             try:
                 chat.append(p, cid, "assistant", "note", "Sent to Overleaf.", proposal=pid)
             except ValueError:
@@ -1496,6 +1518,7 @@ ROUTES = [
     ("POST", r"^/api/chat/delete$", api_chat_delete), ("GET", r"^/api/chat$", api_chat_get), ("POST", r"^/api/chat/send$", api_chat_send),
     ("POST", r"^/api/chat/run$", api_chat_run), ("POST", r"^/api/chat/count$", api_chat_count), ("POST", r"^/api/chat/cancel$", api_chat_cancel),
     ("POST", r"^/api/proposal/check$", api_proposal_check), ("POST", r"^/api/proposal/approve$", api_proposal_approve),
+    ("POST", r"^/api/proposal/text$", api_proposal_text), ("POST", r"^/api/papers/catchup$", api_catchup),
     ("GET", r"^/api/paper/([^/]+)/sections$", api_sections), ("GET", r"^/api/paper/([^/]+)/text$", api_paper_text),
 ]
 ROUTES = [(m, re.compile(p), fn) for m, p, fn in ROUTES]

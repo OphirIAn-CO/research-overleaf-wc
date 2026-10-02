@@ -233,6 +233,42 @@ class ApproveFlow(ChatBase):
         finally:
             wm.close()
 
+    def test_saving_in_the_app_without_a_cleaner_needs_the_authors_explicit_choice_and_says_so(self):
+        before = self.main.read_text()
+        st, r = self.c.post("/api/proposal/approve", {"paper": "alpha", "id": self.pid, "accept": "all"})
+        self.assertEqual((st, r["handoff_available"]), (409, True), "without the choice nothing is written")
+        self.assertEqual(self.main.read_text(), before)
+        st, r = self.c.post("/api/proposal/approve", {"paper": "alpha", "id": self.pid, "accept": "all", "unclean_ok": True, "chat": self.chat_thread()["id"]})
+        self.assertEqual((st, r["ok"], r["cleaned"]), (200, True, False), r)
+        self.assertNotEqual(self.main.read_text(), before)
+        self.assertIn("no text-cleaning service is set up", self.last()["text"])
+        self.assertEqual(self.c.get(f"/api/proposal?paper=alpha&id={self.pid}")[1]["status"], "applied")
+
+    def test_with_a_cleaner_set_up_the_choice_cannot_skip_it(self):
+        wm = FakeWatermark()
+        try:
+            self.c.post("/api/settings", {"ui": {"watermark_url": wm.url}})
+            st, r = self.c.post("/api/proposal/approve", {"paper": "alpha", "id": self.pid, "accept": "all", "unclean_ok": True})
+            self.assertEqual((st, r["cleaned"]), (200, True))
+            self.assertEqual([c[0] for c in wm.calls], ["/inspect", "/clean"], "the cleaner ran although the flag was sent")
+        finally:
+            wm.close()
+
+    def test_the_ticked_changes_can_be_copied_as_text_without_writing_anything(self):
+        before = self.main.read_text()
+        uids = [h["uid"] for u in self.prop["units"] for h in u["hunks"]]
+        self.assertTrue(uids)
+        st, r = self.c.post("/api/proposal/text", {"paper": "alpha", "id": self.pid, "accept": "all"})
+        self.assertEqual(st, 200)
+        self.assertEqual(r["latex"], self.view["suggested_latex"])
+        self.assertEqual(r["masked"], self.view["suggested_masked"])
+        self.assertIn("[[LX", r["masked"])
+        self.assertNotIn("[[LX", r["latex"])
+        st, none = self.c.post("/api/proposal/text", {"paper": "alpha", "id": self.pid, "accept": []})
+        self.assertEqual(none["latex"].strip(), self.prop["units"][0]["original_text"].strip(), "no change ticked: the original text")
+        self.assertEqual(self.c.post("/api/proposal/text", {"paper": "alpha", "id": "nope"})[0], 400)
+        self.assertEqual(self.main.read_text(), before)
+
     def test_without_the_cleaner_saving_is_refused_and_handing_to_claude_is_offered(self):
         st, r = self.c.post("/api/proposal/approve", {"paper": "alpha", "id": self.pid, "accept": "all"})
         self.assertEqual(st, 409)

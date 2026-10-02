@@ -178,6 +178,24 @@ class RealBrowser(unittest.TestCase):
         finally:
             webview.STUCK_AFTER, xsession.XSession._do_clipboard = old_stuck, old_clip
 
+    def test_it_will_not_go_to_a_private_address_and_the_note_does_not_linger(self):
+        from writing_core import xsession
+        s = xsession.XSession("quillbot", self.tmp / "guard", None, False)          # allow_private off: the stand-in site on 127.0.0.1 is a private address
+        s.start()
+        try:
+            self.assertTrue(s.ready.wait(40))
+            s.call("open", self.url, 1100, 700, True)
+            self.assertIn("only opens public websites", s.state()["notice"])
+            self.assertTrue(wait_for(lambda: s.call("nav", "stop")["url"] in ("about:blank", ""), 8), "it was sent back to a blank page")
+            st = s.call("open", "chrome://version/", 1100, 700, True)                # the browser's own pages are fine
+            self.assertEqual(st["notice"], "")
+            s.watch()
+            time.sleep(1.5)
+            self.assertEqual(s.state()["notice"], "")
+        finally:
+            s.call("close")
+            s.thread.join(timeout=15)
+
     def test_a_closed_browser_window_is_noticed_and_started_again(self):
         b = webview.Browsers(self.tmp / "closed", allow_private=True, real_sites=("quillbot",))
         b.open("quillbot", self.url, 1100, 700, force=True)

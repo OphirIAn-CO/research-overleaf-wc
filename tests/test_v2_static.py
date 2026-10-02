@@ -39,5 +39,19 @@ class Static(unittest.TestCase):
                 self.assertRegex(u, r"^https?://(quillbot\.com|www\.overleaf\.com|platform\.openai\.com|www\.w3\.org/2000/svg|host\.docker\.internal:PORT)", f"{p.name}: {u}")   # the last two are an SVG namespace and an input placeholder, not requests
 
 
+    def test_the_chat_never_rebuilds_what_is_already_on_screen_and_never_appends_a_null(self):
+        js = (STATIC / "chat.js").read_text()
+        for needed in ("st.cache", "syncChildren", "updateWorking", "ols-show-steps", "st.stuck"):
+            self.assertIn(needed, js, needed)
+        self.assertNotIn("clear(threadEl)", js, "the thread is reconciled, not cleared and redrawn")
+        self.assertNotRegex(js, r"(?m)^\s*(?:el|holder|box|into|out|threadEl)\.append\([^\n]*: null\);", "Element.append(null) writes the word null on the page: spread an array instead")
+
+    def test_saving_without_a_text_cleaning_service_is_the_authors_explicit_choice_in_the_request(self):
+        js = (STATIC / "chat.js").read_text()
+        self.assertIn("unclean_ok", js)
+        self.assertIn("Save in my files", js)
+        self.assertIn("Save and send to Overleaf", js)
+
+
 if __name__ == "__main__":
     unittest.main()

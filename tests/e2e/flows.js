@@ -51,8 +51,19 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   ok(/ch05|p\.\d+/.test(thread), 'the reason says where in the book it comes from');
   ok(!/After the map we describe/.test(thread), 'the part after the figure is not in the answer');
   ok(!JARGON.test(await text(page, '.thread')), 'the answer uses no jargon: ' + (JARGON.exec(await text(page, '.thread')) || [''])[0]);
-  await page.click('button:has-text("Adjust the tone myself")');
+  // the answer can be copied with one press each: the new text, the text for QuillBot, or everything
+  const copied = async (label) => { await page.click(`.copies button:has-text("${label}")`); await page.waitForTimeout(500); return page.evaluate(() => navigator.clipboard.readText()); };
+  const newText = await copied('the new text');
+  ok(/The study covers three regions/.test(newText) && !/\[\[LX/.test(newText), 'one press copies the new text with the citations and formulas back in place: ' + JSON.stringify(newText.slice(0, 60)));
+  const forQuill = await copied('for QuillBot');
+  ok(/\[\[LX\d+\]\]/.test(forQuill), 'one press copies the text for QuillBot with tags');
+  const all = await copied('everything');
+  ok(/Why: /.test(all) && /Changes:/.test(all) && /New text:/.test(all) && /The study covers three regions/.test(all), 'one press copies the whole answer: the reason, each change, and the new text');
+  ok(await page.isVisible('button:has-text("Save in my files")') && await page.isVisible('button:has-text("Save and send to Overleaf")'), 'the answer can be saved, or saved and sent to Overleaf, right where it is');
+  ok(!/Let Claude apply/.test(await text(page, '.thread')), 'no confusing "Let Claude apply it" as the main button');
+  await page.click('button:has-text("Polish in QuillBot or by hand")');
   await page.waitForSelector('.tone textarea:not([readonly])');
+  ok(/Adjust the tone there/.test(await text(page, '.tone-steps')) && (await page.$$eval('.tone-steps li', (a) => a.length)) === 4, 'the polish panel lists its four steps');
   const box = page.locator('.tone textarea:not([readonly])').first();
   const original = await box.inputValue();
   await box.fill(original.replace('its own climate', 'a climate of its own'));
@@ -60,11 +71,13 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   ok(/still there/.test(await text(page, '.checks')), 'the live check says the citations and formulas are still there');
   await box.fill(original.replace('three regions', 'four regions'));
   await page.waitForSelector('.checks .chk.error');
-  ok(await page.isDisabled('.tone button:has-text("Approve and save")'), 'a new number blocks approval');
+  ok(await page.isDisabled('.tone button:has-text("Save my version") >> nth=0'), 'a new number blocks saving');
   await box.fill(original.replace('its own climate', 'a climate of its own'));
   await page.waitForSelector('.checks .chk.ok');
   await shot(page, '02-tone-panel');
-  await page.click('.tone >> text=Approve and save');
+  const mineLatex = await (async () => { await page.click('.tone button:has-text("Copy my version as LaTeX")'); await page.waitForTimeout(500); return page.evaluate(() => navigator.clipboard.readText()); })();
+  ok(/a climate of its own/.test(mineLatex) && !/\[\[LX/.test(mineLatex), '"Copy my version as LaTeX" copies what is in the box with the citations back in place');
+  await page.click('.tone button:has-text("Save my version") >> nth=0');
   await page.waitForSelector('text=Saved in main.tex', { timeout: 15000 });
   const written = mainTex();
   ok(written.includes('a climate of its own') && !written.includes('its own climate and soil'), 'the author\'s own version is what reached main.tex');
@@ -92,10 +105,49 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   ok(/\\cite\{/.test(refs) && /Mendeley/.test(refs) && /Sent to Overleaf/.test(refs), 'the reference card shows the \\cite, Mendeley and Overleaf');
   await shot(page, '05-reference');
 
+  // ---- smooth progress: while the model works nothing on screen is rebuilt, one calm line says what is happening, and the steps stay behind a toggle
+  await page.evaluate(() => { document.querySelector('.thread .msg.user .bubble').dataset.keep = 'first'; });
+  await page.evaluate(() => {
+    window.__removed = 0;
+    window.__obs = new MutationObserver((ml) => ml.forEach((m) => m.removedNodes.forEach((n) => { if (n.nodeType === 1 && n.classList.contains('msg')) window.__removed++; })));
+    window.__obs.observe(document.querySelector('.thread'), { childList: true });
+  });
+  const FAKE = [
+    [{ key: 'read', label: 'Reading your Methods', state: 'running', detail: '' }],
+    [{ key: 'read', label: 'Read your Methods', state: 'done', detail: '2 passages' }, { key: 'rules', label: 'Picking the advice', state: 'running', detail: '' }],
+    [{ key: 'read', label: 'Read your Methods', state: 'done', detail: '2 passages' }, { key: 'rules', label: 'Picked the advice', state: 'done', detail: '4 tips' }, { key: 'ask', label: 'Asking the model', state: 'running', detail: 'passage 1 of 2' }],
+    [{ key: 'read', label: 'Read your Methods', state: 'done', detail: '2 passages' }, { key: 'rules', label: 'Picked the advice', state: 'done', detail: '4 tips' }, { key: 'ask', label: 'Asking the model', state: 'running', detail: 'passage 2 of 2' }],
+  ];
+  let polls = 0;
+  await page.route('**/api/jobs/*', async (route) => {
+    polls++;
+    if (polls <= FAKE.length * 2) return route.fulfill({ json: { id: 'x', status: 'running', steps: FAKE[Math.min(FAKE.length - 1, Math.floor((polls - 1) / 2))] } });   // each picture shown twice: a repeat must change nothing
+    return route.continue();
+  });
+  const before = await page.$$eval('.msg.assistant .approach', (a) => a.length);
+  await page.fill('#composer', 'make the second paragraph of the methods more concise');
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('.work-line', { timeout: 15000 });
+  ok(!(await page.$eval('details.work-steps', (d) => d.open)), 'while it works only one calm line shows; the steps are behind a toggle');
+  const lines = new Set();
+  const seenAt = Date.now();
+  while (Date.now() - seenAt < 4500 && lines.size < 3) { lines.add(await page.$eval('.work-text', (e) => e.textContent).catch(() => '')); await new Promise((r) => setTimeout(r, 120)); }
+  ok(lines.size >= 3, 'the line follows the progress: ' + [...lines].join(' / '));
+  ok((await page.evaluate(() => window.__removed)) === 0, 'nothing already on screen was rebuilt while it worked');
+  ok(await page.$eval('[data-keep="first"]', () => true).catch(() => false), 'the first message of the conversation is still the very same element');
+  await page.click('details.work-steps > summary');
+  ok((await page.$$eval('details.work-steps .step', (a) => a.length)) >= 3 && /Picked the advice/.test(await text(page, 'details.work-steps')), 'opening the toggle shows the steps');
+  ok(await page.waitForFunction(() => window.localStorage.getItem('ols-show-steps') === '1', null, { timeout: 3000 }).then(() => true, () => false), 'and the choice is remembered');
+  await page.waitForFunction((n) => document.querySelectorAll('.msg.assistant .approach').length > n, before, { timeout: 25000 });
+  await page.unroute('**/api/jobs/*');
+  ok(await page.$eval('[data-keep="first"]', () => true).catch(() => false), 'when the answer arrives the earlier messages are still untouched');
+  ok(await page.$eval('.msg.fresh', () => true).catch(() => false), 'and the new answer eases in');
+  await page.evaluate(() => window.localStorage.setItem('ols-show-steps', '0'));
+
   // ---- coming back later: the conversation is still there
   await page.reload();
   await page.waitForSelector('.msg.user');
-  ok((await page.$$eval('.msg.user', (a) => a.length)) >= 4 && await page.isVisible('.approach'), 'after a reload the whole conversation is back');
+  ok((await page.$$eval('.msg.user', (a) => a.length)) >= 5 && await page.isVisible('.approach'), 'after a reload the whole conversation is back');
 
   // ---- other pages
   await page.click('#nav a:has-text("References")');
