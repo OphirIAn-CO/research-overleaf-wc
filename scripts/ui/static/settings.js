@@ -123,6 +123,8 @@
       [['auto', 'Automatic (built-in browser if there)'], ['browser', 'Always the built-in browser'],
         ['window', 'Always a separate window'], ['inside', 'Inside the page (may stay blank)']].map(([v, t]) => h('option', { value: v, text: t, selected: pn.mode === v })));
     const paneOut = h('div', { class: 'stack' });
+    const builtin = pn.builtin || { quillbot: true, overleaf: true };
+    const useQ = h('input', { type: 'checkbox', checked: builtin.quillbot }), useO = h('input', { type: 'checkbox', checked: builtin.overleaf });
     const sitesCard = h('section', { class: 'card', 'aria-label': 'Side panes' }, h('div', { class: 'row' }, h('h2', { text: 'QuillBot and Overleaf inside the app' }),
       badge(bi.available, 'built-in browser ready', 'built-in browser not available')),
       bi.available ?
@@ -131,8 +133,10 @@
       h('label', { class: 'field' }, h('span', { text: 'QuillBot address (leave empty for the usual one)' }), qUrl),
       S.paper ? h('label', { class: 'field' }, h('span', { text: `Overleaf project address for ${S.paper}` + (pn.overleaf_derived ? ' (taken from the paper\'s Git address; type another to override)' : '') }), oUrl) : null,
       h('label', { class: 'field' }, h('span', { text: 'How to show them' }), modeSel),
+      h('div', { class: 'stack' }, h('label', { class: 'check' }, useQ, 'Use the built-in browser for QuillBot'), h('label', { class: 'check' }, useO, 'Use the built-in browser for Overleaf'),
+        h('p', { class: 'small muted', text: 'Switch one off and that site opens in a window of your own browser instead. Some sites run human checks that a built-in browser may not pass; your own browser usually does.' })),
       h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Save' }), async () => {
-        await api.post('/api/settings', Object.assign({ ui: { quillbot_url: qUrl.value.trim(), pane_mode: modeSel.value } }, S.paper ? { paper: S.paper, overleaf_url: oUrl.value.trim() } : {}));
+        await api.post('/api/settings', Object.assign({ ui: { quillbot_url: qUrl.value.trim(), pane_mode: modeSel.value, builtin_quillbot: useQ.checked, builtin_overleaf: useO.checked } }, S.paper ? { paper: S.paper, overleaf_url: oUrl.value.trim() } : {}));
         toast('Saved'); window.OLS.route();
       }), !bi.available && S.paper ? guarded(h('button', { type: 'button', text: 'Ask the sites if they allow it' }), async () => {
         clear(paneOut).append(busy('Asking QuillBot and Overleaf...'));

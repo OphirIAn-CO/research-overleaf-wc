@@ -154,11 +154,18 @@ its own Docker container and shows you what it sees; your mouse and keyboard are
 You sign in once and it stays signed in (the sign-in is kept in `~/.config/overleaf-skill/browser/`; delete that folder to sign out).
 
 - **Sign in:** type your email and password in the page as usual, or save them once in **Settings > Sign-in for QuillBot and Overleaf**
-  and press **Fill my sign-in** in the pane. The app fills the form; you press the site's own Sign in button, so a code or a "not a robot"
-  check stays with you. Saved details are in `~/.config/overleaf-skill/sites.json` (`{"quillbot": {"email": "...", "password": "..."}, "overleaf": {...}}`),
+  and press **Fill my sign-in** in the pane. The app types them into the form, checks the page kept them (and tries two other ways if
+  it did not), and tells you what happened; you press the site's own Sign in button, so a code or a "not a robot" check stays with you.
+  Saved details are in `~/.config/overleaf-skill/sites.json` (`{"quillbot": {"email": "...", "password": "..."}, "overleaf": {...}}`),
   readable only by you and **not encrypted**; the app never shows a saved password again. Google, Apple or university sign-in cannot be
-  filled (and Google refuses embedded browsers): for these two sites use an email and password (Overleaf: Account settings, set a password;
-  QuillBot: "Forgot password" lets you set one).
+  filled (and Google refuses embedded browsers): for these two sites use an email and password (Overleaf: Account settings, set a
+  password; QuillBot: "Forgot password" lets you set one).
+- **"Verify you are human" checks.** QuillBot (Cloudflare) and Overleaf (reCAPTCHA) check visitors. The built-in browser does not label
+  itself as a robot (the one automation flag a remote-controlled browser would otherwise set is off, and it uses your computer's time
+  zone), but a site can still decide not to trust it. When a pane shows such a check, a note appears above it: click the checkbox in the
+  picture, and if it keeps coming back press **Open QuillBot in a window instead**. That sends the site to a window of your own browser,
+  which passes these checks, and remembers it (**Settings > QuillBot and Overleaf inside the app**, "Use the built-in browser for ..."; you
+  can switch it back there). Nothing in the app tries to solve or get around a check.
 - **Layout:** one pane uses the whole side area; **Both at once** (strip at the top of the area) stacks QuillBot above Overleaf; **Wider**
   gives the area more room; drag its left edge to resize. The page is drawn at least 1100 pixels wide and shrunk to fit, so the sites keep
   their desktop layout; **Aa** in the pane draws it narrower for bigger text. Back, forward, reload, stop and home are in the pane's toolbar.
@@ -230,7 +237,7 @@ your book), or use **Book check** in the book library (Settings, Advanced).
 | The model was not found / the key was rejected | Use **Test** in **Settings > OpenAI**. It says which one it is, and never shows the key. |
 | The pane says the built-in browser is not available | The image is older than the app: run `./ui.sh down`, then `./ui.sh up` (the first start rebuilds the image, a few minutes). **Settings > QuillBot and Overleaf inside the app** says why if it still fails. Meanwhile the sites open in a window beside the app. |
 | The pane stays on "Starting the browser" or says the page did not answer | The site could not be reached from the container (internet, a VPN, or the site is down). Press **Reload**, or **Home**. Chromium keeps your sign-in, so nothing is lost. |
-| The page shows "not a robot" or refuses the sign-in | Some sites challenge automated-looking browsers. Solve the check in the pane if it lets you. A Google/Apple/university sign-in does not work in an embedded browser: use an email and password. |
+| The page keeps asking "Verify you are human", or the sign-in is refused | Click the checkbox in the picture. If it comes back, use **Open QuillBot in a window instead** in the note above the pane (or switch the built-in browser off for that site in **Settings**); your own browser passes these checks. A Google/Apple/university sign-in does not work in an embedded browser: use an email and password. If Overleaf says the email or password is wrong, check them in Settings; the app never sees what you type in the page itself. |
 | The picture is small or blurry | The page is drawn wide and shrunk to fit: press **Wider**, or **Aa** for bigger text. |
 | "Fill my sign-in" finds no form | Open the site's sign-in page first. Some sites ask for the email, then the password: press the button again after **Continue**. |
 | Typing does nothing | Click inside the page first (a blue outline shows it has the keyboard). |

@@ -112,7 +112,8 @@ class _Session:
         self.error = None
         self.cond = threading.Condition()
         self.seq, self.jpeg, self._hash = 0, b"", None
-        self.info = {"url": "", "title": "", "notice": ""}
+        self.info = {"url": "", "title": "", "notice": "", "challenge": False}
+        self._challenge_at = 0.0
         self.size = (DESKTOP_W, 720)
         self.alive = False
         self.last_seen = time.time()
@@ -220,9 +221,15 @@ class _Session:
                 pass
         w, h = self.size
         exe = self.exe or os.environ.get("OLS_BROWSER_PATH") or None
+        # The person at the keyboard is the one using this browser; Playwright is only the cable between the picture and the page. Left alone the browser
+        # would tell every site "navigator.webdriver = true" (an automated robot), which sign-in pages and human checks react to, so that one flag is off.
         kw = dict(user_data_dir=str(self.profile), headless=True, viewport={"width": w, "height": h}, locale="en-US", accept_downloads=False,
                   permissions=["clipboard-read", "clipboard-write"],   # so a site's own "Copy" button can be read back (see clipboard())
-                  args=["--disable-gpu", "--disk-cache-size=52428800", "--no-first-run", "--no-default-browser-check", "--disable-features=Translate,MediaRouter"])
+                  args=["--disable-gpu", "--disk-cache-size=52428800", "--no-first-run", "--no-default-browser-check", "--disable-features=Translate,MediaRouter",
+                        "--disable-blink-features=AutomationControlled"])
+        tz = os.environ.get("OLS_BROWSER_TZ", "")
+        if re.fullmatch(r"[A-Za-z0-9_+\-]+(/[A-Za-z0-9_+\-]+){0,2}", tz):
+            kw["timezone_id"] = tz        # the time zone of the computer, so the browser does not claim to be elsewhere than the connection it uses
         if exe:
             kw["executable_path"] = exe
         else:
@@ -233,7 +240,13 @@ class _Session:
             ua = None
         if ua:
             kw["user_agent"] = ua
-        self.ctx = pw.chromium.launch_persistent_context(**kw)
+        try:
+            self.ctx = pw.chromium.launch_persistent_context(**kw)
+        except Exception as e:  # noqa: BLE001
+            if "timezone_id" not in kw or "imezone" not in str(e):
+                raise
+            kw.pop("timezone_id")         # an unknown time zone name must not stop the browser from starting
+            self.ctx = pw.chromium.launch_persistent_context(**kw)
         self.ctx.set_default_timeout(15000)
         self.ctx.on("page", self._adopt)
         for p in list(self.ctx.pages):
@@ -368,7 +381,13 @@ class _Session:
         try:
             self.info.update(url=self.page.url, title=self.page.title()[:120])
         except Exception:  # noqa: BLE001
-            pass
+            return
+        if time.time() - self._challenge_at > 2.0:       # is the site asking "verify you are human"? asked every couple of seconds, not every picture
+            self._challenge_at = time.time()
+            try:
+                self.info["challenge"] = bool(self._js(CHALLENGE_JS, timeout_ms=1500))
+            except Exception:  # noqa: BLE001
+                pass
 
     def _send(self, method, params=None):
         c = self.cdp.get(self.page)
@@ -401,6 +420,8 @@ class _Session:
         same = bool(cur) and cur != "about:blank" and _site_key(urllib.parse.urlsplit(cur).hostname) == _site_key(urllib.parse.urlsplit(url).hostname)
         self.info["notice"] = ""
         if force or not same:
+            self.info["challenge"] = False        # a new page: what the old one asked no longer holds
+            self._challenge_at = 0.0
             try:
                 self.page.goto(url, wait_until="commit", timeout=NAV_TIMEOUT_MS)
             except Exception as e:  # noqa: BLE001
@@ -485,6 +506,8 @@ class _Session:
             self.info["notice"] = ""
             self._refresh_info()
             return self.state()
+        self.info["challenge"] = False
+        self._challenge_at = 0.0
         try:
             {"back": page.go_back, "forward": page.go_forward, "reload": page.reload}[action](timeout=15000)
         except KeyError:
@@ -510,13 +533,17 @@ class _Session:
         return str(self._js("() => navigator.clipboard.readText()") or "")[:MAX_TEXT]
 
     def _do_signin(self, email, password):
-        """Types the saved email and password into the visible sign-in fields of the current page. Nothing is submitted: the author presses the site's own button."""
-        filled = []
+        """Types the saved email and password into the visible sign-in fields of the current page, key by key like a person, checks the page kept them and,
+        when it did not, sets them the way a form framework notices. Nothing is submitted: the author presses the site's own button.
+        -> {filled: [...], failed: [...]}"""
+        filled, failed = [], []
         for kind, value in (("email", email), ("password", password)):
-            if value and self._js(FOCUS_FIELD_JS, kind):
-                self.page.keyboard.insert_text(value)      # the field is focused with its content selected, so this replaces it
-                filled.append(kind)
-        return {"filled": filled}
+            if not value or not self._js(FOCUS_FIELD_JS, kind):             # focused with its content selected, so typing replaces it
+                continue
+            self.page.keyboard.type(value, delay=18)
+            ok = self._js(KEPT_JS, len(value)) or self._js(SET_FIELD_JS, [kind, value])
+            (filled if ok else failed).append(kind)
+        return {"filled": filled, "failed": failed}
 
     def _do_close(self):
         self._stop = True
@@ -524,7 +551,7 @@ class _Session:
 
     def state(self):
         return {"running": self.running(), "url": self.info.get("url", ""), "title": self.info.get("title", ""), "notice": self.info.get("notice", ""),
-                "w": self.size[0], "h": self.size[1], "seq": self.seq}
+                "challenge": bool(self.info.get("challenge")), "w": self.size[0], "h": self.size[1], "seq": self.seq}
 
 
 SELECTION_JS = """() => {
@@ -564,6 +591,24 @@ FOCUS_FIELD_JS = """(kind) => {
   if (el.select) el.select();
   return true;
 }"""
+
+
+KEPT_JS = """(n) => { const el = document.activeElement; return !!el && el.tagName === 'INPUT' && el.value.length === n; }"""
+
+SET_FIELD_JS = """([kind, value]) => {
+  const shown = (el) => { const r = el.getBoundingClientRect(), cs = getComputedStyle(el); return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none' && !el.disabled && !el.readOnly; };
+  const sel = kind === 'password' ? 'input[type=password]'
+    : 'input[type=email], input[name=email], input[autocomplete=username], input[autocomplete=email], input[name=username], input[id*=email i]';
+  const el = Array.from(document.querySelectorAll(sel)).find(shown);
+  if (!el) return false;
+  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, value);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+  return el.value.length === value.length;
+}"""
+
+CHALLENGE_JS = """() => !!document.querySelector('iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"][src*="bframe"], iframe[src*="hcaptcha.com"][src*="challenge"], .cf-turnstile, #challenge-form, #cf-challenge-running')
+  || /^(just a moment|attention required|one more step)/i.test(document.title)"""
 
 
 def _drain(q):

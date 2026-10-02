@@ -144,6 +144,10 @@
     const view = h('div', { class: 'bview' }, canvas, keys, overlay);
     const where = h('span', { class: 'small muted ellipsis grow', title: '' });
     const line = h('div', { class: 'small secondary bline', 'aria-live': 'polite', hidden: true });
+    const check = h('div', { class: 'small bline warn challenge', role: 'status', hidden: true },
+      h('strong', { text: label + ' is checking that you are human. ' }),
+      'Click its checkbox in the picture below. If the check keeps coming back, your own browser will pass it: ',
+      h('button', { type: 'button', class: 'small', text: `Open ${label} in a window instead`, onclick: () => window.OLS.panes.useWindow(site, d.url) }));
     const say = (kind, text) => { line.hidden = !text; line.className = 'small bline ' + (kind || 'secondary'); line.textContent = text || ''; };
 
     // ---- what the page looks like and where things are. The picture keeps its proportions (top-left aligned); clicks are mapped back through the same scale.
@@ -242,6 +246,7 @@
           bmp.close();
           if (!canvas.dataset.live) { canvas.dataset.live = '1'; show(null); }
           failures = 0;
+          if (Date.now() - (st.fitAt || 0) > 1500) { st.fitAt = Date.now(); fit(); }    // a picture that does not match the pane is repaired by itself
         } catch (e) {
           if (!st.alive || st.run !== run) return;
           if (++failures >= 3) { problem(e); return; }
@@ -286,16 +291,20 @@
         where.textContent = s.title ? `${s.title}` : (s.url || '');
         where.title = s.url || '';
         say('warn', s.notice || '');
+        check.hidden = !s.challenge;
       } catch (e) { /* the next round tries again */ }
       st.poll = setTimeout(watch, 2500);
     }
 
     // ---- size follows the pane
     async function fit() {
-      if (!st.alive || !st.started) return;
-      const sz = measure(), cur = st.size || {};
+      if (!st.alive || !st.started || st.fitting) return;
+      const sz = measure();
+      const cur = canvas.dataset.live ? { w: canvas.width, h: canvas.height } : st.size || {};
       if (!sz || (Math.abs(sz.w - cur.w) < 8 && Math.abs(sz.h - cur.h) < 8)) return;
+      st.fitting = true;
       try { const r = await post('resize', sz); st.size = { w: r.w, h: r.h }; } catch (e) { /* shown by the next picture */ }
+      st.fitting = false;
     }
     const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => { clearTimeout(st.rsz); st.rsz = setTimeout(fit, 250); }) : null;
     if (ro) ro.observe(view);
@@ -314,7 +323,7 @@
         tool('←', 'Back', () => nav('back')), tool('→', 'Forward', () => nav('forward')), tool('↻', 'Reload', () => nav('reload')), tool('✕', 'Stop loading', () => nav('stop')), tool('Home', 'Back to the start page', () => nav('home')),
         bigText,
         h('a', { class: 'small', href: '#/settings', text: 'Settings' })),
-      line, view,
+      line, check, view,
       h('div', { class: 'row tight pane-foot' }, signin,
         guarded(h('button', { type: 'button', class: 'small', text: 'Copy what I selected', title: 'Copies the text selected in ' + label + ' to your clipboard' }), () => copyOut(false)),
         h('span', { class: 'small muted grow', text: 'Click inside and type as usual. Cmd/Ctrl+V pastes your clipboard.' })));
@@ -515,9 +524,17 @@
   }
   async function sendText(site, text) { const a = await use(site); await a.insert(text); }
   async function takeFrom(site, what) { const a = await use(site); return what === 'clipboard' ? (await a.clipboard()) : (await a.selection()); }
+  /* Sends one site to a window of the author's own browser (it passes the human checks a built-in browser may not): remembers it in Settings. */
+  async function useWindow(site, url) {
+    try { await api.post('/api/settings', { ui: { ['builtin_' + site]: false } }); } catch (e) { toast(e.message); return; }
+    A.urls = {};
+    if (url) openBeside(url, 'ols-' + site);
+    await renderArea(true);
+    toast(TITLES[site] + ' now opens in a window beside the app. You can change this in Settings.');
+  }
   async function afterSend() { const m = A.mounted.overleaf; if (m) { try { await m.api.reload(); } catch (e) { /* it will show on the next reload */ } } }
   async function knows(paper) { try { await addressesFor(paper || S.paper); } catch (e) { /* no panes known */ } return has('quillbot'); }
 
-  window.OLS.panes = { openBeside, framePane, bar, onRoute, setTargetFromThread, refreshText, has, sendText, takeFrom, afterSend, knows, copyAsync };
+  window.OLS.panes = { openBeside, framePane, bar, onRoute, setTargetFromThread, refreshText, has, sendText, takeFrom, afterSend, knows, copyAsync, useWindow };
 
 }());

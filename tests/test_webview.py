@@ -32,8 +32,21 @@ PAGE = b"""<!doctype html><title>Stand-in site</title><body style="margin:0;font
 <button id=go style="position:absolute;left:20px;top:260px;width:100px;height:40px"
   onclick="fetch('/log?'+new URLSearchParams({a:document.getElementById('a').value,b:document.getElementById('b').value}))">Go</button>
 <a id=lnk href="/login" style="position:absolute;left:200px;top:270px">sign in</a>
+<a id=chal href="/challenge" style="position:absolute;left:200px;top:320px">check</a>
 <button id=copy style="position:absolute;left:330px;top:260px;width:100px;height:40px"
   onclick="navigator.clipboard.writeText(document.getElementById('b').value)">Copy</button>
+</body>"""
+PICKY = b"""<!doctype html><title>Picky</title><body style="margin:0">
+<form method=post action="/login" style="margin:30px">
+<input type=email name=email id=e style="display:block;width:300px;height:30px;margin:10px">
+<input type=password name=password id=p style="display:block;width:300px;height:30px;margin:10px">
+<button id=sub style="width:100px;height:40px;margin:10px">Sign in</button></form>
+<script>
+// a page that wipes whatever the keyboard types (inputType is set for typed text) and only keeps values set by script
+for (const id of ['e', 'p']) document.getElementById(id).addEventListener('input', (ev) => { if (ev.inputType) ev.target.value = ''; });
+</script></body>"""
+CHALLENGE = b"""<!doctype html><title>Paraphrasing Tool</title><body><h1>Tool</h1>
+<iframe src="https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv/x/0x4AAA/light/fbE/new/normal/auto/" width=300 height=65></iframe>
 </body>"""
 LOGIN = b"""<!doctype html><title>Sign in</title><body style="margin:0">
 <form method=post action="/login" style="margin:30px">
@@ -75,6 +88,10 @@ class Site(BaseHTTPRequestHandler):
             return self._send(b"ok", "text/plain")
         if u.path == "/login":
             return self._send(LOGIN)
+        if u.path == "/picky":
+            return self._send(PICKY)
+        if u.path == "/challenge":
+            return self._send(CHALLENGE)
         if u.path == "/seen":   # for the browser demo: what the page has reported so far
             return self._send(json.dumps({"log": Site.log, "posts": Site.posts}).encode(), "application/json")
         Site.cookies.append(self.headers.get("Cookie") or "")
@@ -191,6 +208,48 @@ class BuiltInBrowser(unittest.TestCase):
         self.b.input("overleaf", [{"t": "key", "key": "Enter"}])
         got = wait_for(lambda: Site.posts[-1] if Site.posts else None)
         self.assertEqual(got, {"email": "me@example.org", "password": "s3cret pass"})
+
+    def test_the_browser_does_not_announce_itself_as_a_robot(self):
+        self.b.open("quillbot", self.url, 1100, 700, force=True)
+        webview._Session._do_fp = lambda self: self._js("() => ({webdriver: navigator.webdriver, ua: navigator.userAgent, brands: navigator.userAgentData && navigator.userAgentData.brands.map((b) => b.brand).join(',')})")
+        fp = self.b.sessions["quillbot"].call("fp")
+        self.assertIs(fp["webdriver"], False, "the person at the keyboard is the one using it: no automation flag")
+        self.assertNotIn("Headless", fp["ua"] + (fp["brands"] or ""))
+
+    def test_it_uses_the_time_zone_of_the_computer(self):
+        os.environ["OLS_BROWSER_TZ"] = "America/Bogota"
+        try:
+            b = webview.Browsers(self.tmp / "tz", exe=chromium(), allow_private=True)
+            b.open("quillbot", self.url, 1100, 700, force=True)
+            webview._Session._do_tz = lambda self: self._js("() => Intl.DateTimeFormat().resolvedOptions().timeZone")
+            self.assertEqual(b.sessions["quillbot"].call("tz"), "America/Bogota")
+            b.close_all()
+            os.environ["OLS_BROWSER_TZ"] = "Not/A_Zone"          # a name the browser rejects must not stop it from starting
+            b = webview.Browsers(self.tmp / "tz2", exe=chromium(), allow_private=True)
+            self.assertTrue(b.open("quillbot", self.url, 1100, 700, force=True)["running"])
+            b.close_all()
+        finally:
+            os.environ.pop("OLS_BROWSER_TZ", None)
+
+    def test_a_page_that_throws_away_typed_text_still_gets_the_sign_in(self):
+        self.b.open("overleaf", self.url + "picky", 1100, 700, force=True)
+        r = self.b.signin("overleaf", "me@example.org", "s3cret pass")
+        self.assertEqual((r["filled"], r["failed"]), (["email", "password"], []), "typed text was wiped, the value was set the way a form framework notices")
+        self.b.input("overleaf", [{"t": "key", "key": "Enter"}])
+        got = wait_for(lambda: Site.posts[-1] if Site.posts else None)
+        self.assertEqual(got, {"email": "me@example.org", "password": "s3cret pass"})
+
+    def test_it_says_when_the_page_cannot_be_filled(self):
+        self.b.open("overleaf", self.url, 1100, 700, force=True)              # no sign-in form here
+        self.assertEqual(self.b.signin("overleaf", "a@b.org", "pw"), {"filled": [], "failed": []})
+
+    def test_a_human_check_on_the_page_is_noticed(self):
+        self.b.open("quillbot", self.url + "challenge", 1100, 700, force=True)
+        self.b.next_frame("quillbot", -1, 3)                      # somebody is looking at the pane, so the page is watched
+        self.assertTrue(wait_for(lambda: self.b.state("quillbot")["challenge"], 8), "a Cloudflare check frame is recognised")
+        self.b.open("quillbot", self.url, 1100, 700, force=True)
+        self.b.next_frame("quillbot", -1, 3)
+        self.assertTrue(wait_for(lambda: not self.b.state("quillbot")["challenge"], 8))
 
     def test_the_sign_in_survives_closing_the_browser(self):
         self.b.open("overleaf", self.url, 1100, 700, force=True)

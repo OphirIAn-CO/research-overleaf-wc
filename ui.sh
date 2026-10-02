@@ -117,12 +117,15 @@ case "$cmd" in
     # The built-in browser, in its own container on a private network. It gets NO secrets, no papers, no book: only its sign-in folder (read-write),
     # a token file and the app code (read-only). Nothing is published on the computer's network; only the web app container can reach it.
     browser_env=()
+    # the browser should claim the time zone of this computer (a browser in another time zone than its connection looks odd to sign-in pages)
+    TZNAME="${TZ:-}"; [ -n "$TZNAME" ] || TZNAME="$(readlink /etc/localtime 2>/dev/null | sed -n 's#.*/zoneinfo/\(.*\)#\1#p')"
+    tz_env=(); case "$TZNAME" in ""|*[!A-Za-z0-9_+/-]*) ;; *) tz_env=(-e "OLS_BROWSER_TZ=$TZNAME") ;; esac
     docker rm -f "$BROWSER" >/dev/null 2>&1 || true
     if docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET" >/dev/null 2>&1; then
       if bout="$(docker run -d --rm --init --name "$BROWSER" --network "$NET" \
         --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp:rw,mode=1777,size=512m --shm-size=512m \
         --cap-drop ALL --security-opt no-new-privileges --pids-limit 1024 --memory 3g \
-        -e HOME=/tmp/home -e OLS_BROWSER_BIND=0.0.0.0 -e OLS_BROWSER_PORT=9233 -e OLS_BROWSER_TOKEN_FILE=/run/browser_token -e OLS_BROWSER_PROFILES=/profiles \
+        ${tz_env[@]+"${tz_env[@]}"} -e HOME=/tmp/home -e OLS_BROWSER_BIND=0.0.0.0 -e OLS_BROWSER_PORT=9233 -e OLS_BROWSER_TOKEN_FILE=/run/browser_token -e OLS_BROWSER_PROFILES=/profiles \
         --mount "$(mount_arg "$DATA/browser" /profiles)" --mount "$(mount_arg "$DATA/.browser_token" /run/browser_token readonly)" --mount "$(mount_arg "$DIR/scripts" /app readonly)" \
         "$IMAGE" python3 /app/ui/browser_service.py 2>&1)"; then
         browser_env=(--network "$NET" -e "OLS_BROWSER_URL=http://${BROWSER}:9233" -e "OLS_BROWSER_TOKEN_FILE=$DATA/.browser_token")

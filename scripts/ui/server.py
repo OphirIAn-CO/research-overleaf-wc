@@ -604,13 +604,17 @@ def api_panes(r):
     mode = ui.get("pane_mode") if ui.get("pane_mode") in PANE_MODES else "auto"
     bst = r.app.browser().status()
     have = bool(bst.get("available"))
+    wanted = {k: bool(ui.get("builtin_" + k, True)) for k in ("quillbot", "overleaf")}     # the author can send one site to a window of their own browser
     use_browser = have and mode in ("auto", "browser")
     urls = [u for u in (q, o) if u]
-    probes = _probe_many(urls) if r.arg("check") and mode == "auto" and not use_browser else {}
+    probes = _probe_many(urls) if r.arg("check") and mode == "auto" and not (use_browser and all(wanted.values())) else {}
     out = {"paper": n, "mode": mode, "browser": {"available": have, "reason": bst.get("reason", "")}}
     for key, url in (("quillbot", q), ("overleaf", o)):
         if not url:
             out[key] = {"url": None, "inside": False, "how": "none", "reason": "There is no address for this paper's Overleaf project yet. Add it in Settings."}
+            continue
+        if use_browser and not wanted[key]:
+            out[key] = {"url": url, "inside": False, "how": "window", "reason": "You chose to open " + SITE_TITLES[key] + " in a window of your own browser (Settings)."}
             continue
         if use_browser:
             out[key] = {"url": url, "inside": False, "how": "browser", "reason": ""}
@@ -734,8 +738,13 @@ def api_browser_signin(r):
     cred = (common.load("sites.json", {}) or {}).get(site) or {}
     if not cred.get("email") and not cred.get("password"):
         raise ApiError(409, f"No sign-in details are saved for {SITE_TITLES[site]} yet. Add them in Settings.")
-    filled = r.app.browser().signin(site, cred.get("email", ""), cred.get("password", "")).get("filled", [])
-    if "email" in filled and "password" in filled:
+    res = r.app.browser().signin(site, cred.get("email", ""), cred.get("password", ""))
+    filled, failed = res.get("filled", []), res.get("failed", [])
+    what = lambda xs: " and ".join(x for x in xs)   # noqa: E731
+    if failed:
+        msg = (f"I could not put your {what(failed)} into the page: it does not keep typed text. Click in the box and type it yourself."
+               + (f" (Your {what(filled)} was filled in.)" if filled else ""))
+    elif "email" in filled and "password" in filled:
         msg = "Filled in your email and password. Press the site's own Sign in button."
     elif "email" in filled:
         msg = "Filled in your email. Press the site's Continue button, then press this again for the password."
@@ -743,7 +752,7 @@ def api_browser_signin(r):
         msg = "Filled in your password. Press the site's own Sign in button."
     else:
         msg = "I could not find a sign-in form on this page. Open the site's sign-in page first, then press this again."
-    return {"filled": filled, "message": msg}
+    return {"filled": filled, "failed": failed, "message": msg}
 
 
 BROWSER_GET = re.compile(r"^/api/browser/(quillbot|overleaf)/frame$")
@@ -1078,7 +1087,8 @@ def api_overview(r):
 
 def _panes_settings(r):
     ui = config.ui_cfg()
-    out = {"mode": ui.get("pane_mode") if ui.get("pane_mode") in PANE_MODES else "auto", "quillbot_url": panes.quillbot_url(ui), "quillbot_default": panes.QUILLBOT_URL,
+    out = {"builtin": {k: bool(ui.get("builtin_" + k, True)) for k in ("quillbot", "overleaf")},
+           "mode": ui.get("pane_mode") if ui.get("pane_mode") in PANE_MODES else "auto", "quillbot_url": panes.quillbot_url(ui), "quillbot_default": panes.QUILLBOT_URL,
            "overleaf_url": None, "overleaf_derived": False, "overleaf_override": ""}
     paper = r.arg("paper")
     if paper:
@@ -1197,6 +1207,9 @@ def api_settings(r):
             if v and not panes.valid_quillbot(v):
                 raise ApiError(400, "the QuillBot address must be an https address on quillbot.com")
             cur["quillbot_url"] = v or None
+        for key in ("builtin_quillbot", "builtin_overleaf"):
+            if key in ui:
+                cur[key] = bool(ui[key])
         if "pane_mode" in ui:
             if ui["pane_mode"] not in PANE_MODES:
                 raise ApiError(400, "pane_mode must be auto, browser, window or inside")

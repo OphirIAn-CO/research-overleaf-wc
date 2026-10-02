@@ -190,6 +190,7 @@ main:focus { outline: none; }
 .bpane { padding: 10px 12px; gap: 6px; }
 .bpane .pane-head { flex-wrap: nowrap; min-width: 0; } .bpane .pane-head h2 { font-size: 15px; margin: 0; flex: none; } .bpane .tool { min-width: 32px; padding: 2px 8px; flex: none; } .bpane .tool[aria-pressed="true"] { background: var(--hover); font-weight: 600; border-color: var(--accent); }
 .bpane .pane-foot { flex-wrap: wrap; } .bpane .pane-foot .grow { min-width: 160px; }
+.bline.challenge { display: block; line-height: 1.6; color: var(--ink); border-left: 3px solid var(--warning); } .bline.challenge[hidden] { display: none; } .bline.challenge button { margin-left: 4px; }
 .bline { padding: 4px 8px; border-radius: 6px; background: var(--hover); } .bline.warn { color: var(--critical-text); } .bline.ok { color: var(--good-text); }
 .bview { position: relative; flex: 1; min-height: 240px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: #fff; cursor: default; touch-action: none; }
 .bview:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }

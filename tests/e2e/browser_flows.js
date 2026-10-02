@@ -23,7 +23,7 @@ async function until(fn, ms) { const end = Date.now() + (ms || 12000); for (;;) 
   const page = await ctx.newPage();
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`console ${m.type()}: ${m.text()}`); });
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
-  page.on('requestfailed', (r) => { if (!/\/frame\?/.test(r.url())) errors.push('requestfailed: ' + r.url()); });   // leaving a pane ends its waiting request on purpose
+  page.on('requestfailed', (r) => { if (!/\/frame\?/.test(r.url())) errors.push('requestfailed: ' + r.method() + ' ' + r.url() + ' ' + ((r.failure() || {}).errorText || '')); });   // leaving a pane ends its waiting request on purpose
   await page.goto(url);
   await page.waitForSelector('.chat-page');
   const shot = (n) => page.screenshot({ path: `${out}/${n}.png` });
@@ -139,6 +139,23 @@ async function until(fn, ms) { const end = Date.now() + (ms || 12000); for (;;) 
   await page.click('.pane-bar button:has-text("QuillBot")');
   await page.waitForSelector('#panes-area .bpane h2:has-text("QuillBot")');
   await shown();
+
+  // ---- a human check on the page: the pane says so and offers the author's own browser
+  await clickAt(210, 330);                                   // the stand-in's link to a page with a Cloudflare check frame
+  await page.waitForSelector('#panes-area .challenge:not([hidden])', { timeout: 20000 });
+  ok(/checking that you are human/.test(await text('#panes-area .challenge')), 'a human check on the page is announced in the pane');
+  await shot('b6a-human-check');
+  const popup = ctx.waitForEvent('page', { timeout: 15000 }).catch(() => null);
+  await page.click('#panes-area .challenge button');
+  ok(!!(await popup), 'the site opens in a window of the author\'s own browser');
+  await page.waitForSelector('#panes-area button:has-text("Open QuillBot beside the app")');
+  ok((await page.evaluate(async () => (await (await fetch('/api/connections', { headers: { 'X-Requested-With': 'ols' } })).json()).panes.builtin.quillbot)) === false, 'and the choice is remembered in Settings');
+  await page.evaluate(async () => { await fetch('/api/settings', { method: 'POST', headers: { 'X-Requested-With': 'ols', 'Content-Type': 'application/json' }, body: JSON.stringify({ ui: { builtin_quillbot: true } }) }).then((r) => r.text()); });
+  await page.reload();
+  await page.waitForSelector('#panes-area .bpane h2:has-text("QuillBot")');
+  await shown();
+  await page.evaluate(async () => { await fetch('/api/browser/quillbot/nav', { method: 'POST', headers: { 'X-Requested-With': 'ols', 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'home', paper: 'soil-yield' }) }).then((r) => r.text()); });
+  await sleep(1500);
 
   // ---- an edit, and the hand-off to QuillBot and back
   await page.fill('#composer', 'improve the first paragraph of the methods');

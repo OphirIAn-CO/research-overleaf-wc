@@ -20,8 +20,8 @@ class FakeBrowser:
     """Stands in for the browser (local or in its container) and records what the app asked of it."""
     kind = "fake"
 
-    def __init__(self, filled=("email", "password")):
-        self.calls, self.filled, self.frames, self.polls = [], list(filled), [JPEG_A, JPEG_B], []
+    def __init__(self, filled=("email", "password"), failed=()):
+        self.calls, self.filled, self.failed, self.frames, self.polls = [], list(filled), list(failed), [JPEG_A, JPEG_B], []
         self.up = {}
 
     def status(self):
@@ -60,7 +60,7 @@ class FakeBrowser:
 
     def signin(self, site, email="", password=""):
         self.calls.append(("signin", site, email, password))
-        return {"filled": self.filled}
+        return {"filled": self.filled, "failed": self.failed}
 
     def close(self, site):
         self.up.pop(site, None)
@@ -214,6 +214,12 @@ class SavedSignIn(BrowserApiBase):
         self.assertIn("Continue", self.c.post("/api/browser/quillbot/signin")[1]["message"])
         self.fake.filled = []
         self.assertIn("could not find a sign-in form", self.c.post("/api/browser/quillbot/signin")[1]["message"])
+        self.fake.filled, self.fake.failed = ["email"], ["password"]
+        r = self.c.post("/api/browser/quillbot/signin")[1]
+        self.assertIn("could not put your password into the page", r["message"])
+        self.assertIn("Your email was filled in", r["message"])
+        self.assertEqual(r["failed"], ["password"])
+        self.assertNotIn("pw pw", str(r))
 
     def test_the_password_is_not_in_the_container_log_line_of_any_call(self):
         self.c.post("/api/secrets/site", {"site": "quillbot", "email": "me@example.org", "password": "TOPSECRET-123"})
@@ -245,6 +251,17 @@ class PaneChoice(BrowserApiBase):
             self.assertEqual(self.panes(pane_mode="inside")["quillbot"]["how"], "frame")
         self.assertEqual(self.panes(pane_mode="browser")["quillbot"]["how"], "browser")
         self.assertEqual(self.c.post("/api/settings", {"ui": {"pane_mode": "teleport"}})[0], 400)
+
+    def test_one_site_can_be_sent_to_a_window_of_the_authors_own_browser(self):
+        self.assertEqual(self.c.get("/api/connections?paper=main")[1]["panes"]["builtin"], {"quillbot": True, "overleaf": True})
+        self.assertEqual(self.c.post("/api/settings", {"ui": {"builtin_quillbot": False}})[0], 200)
+        r = self.panes()
+        self.assertEqual((r["quillbot"]["how"], r["overleaf"]["how"]), ("window", "browser"))
+        self.assertIn("window of your own browser", r["quillbot"]["reason"])
+        self.assertEqual(r["quillbot"]["url"], "https://quillbot.com/paraphrasing-tool", "the window opens the same page")
+        self.assertEqual(self.c.get("/api/connections?paper=main")[1]["panes"]["builtin"], {"quillbot": False, "overleaf": True})
+        self.c.post("/api/settings", {"ui": {"builtin_quillbot": True}})
+        self.assertEqual(self.panes()["quillbot"]["how"], "browser")
 
     def test_without_the_browser_the_old_behaviour_remains(self):
         self.srv.app._browser = webview.Unavailable("It is not installed.")
