@@ -31,7 +31,7 @@ import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
 from writing_core import (activity, book_index, chat, chunk_book, config, events, health, openai_client, panes, paper_index, preferences,  # noqa: E402
-                          retrieve, review, revise, rule_cards, stats, taxonomy, watermark)
+                          retrieve, review, revise, rule_cards, stats, taxonomy, watermark, webview)
 
 STATIC = Path(__file__).resolve().parent / "static"
 FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
@@ -102,7 +102,7 @@ class Jobs:
 def friendly(e):
     """Message for errors we expect and can explain; None for anything else (-> logged, generic 500)."""
     known = (book_index.BookError, config.ConfigError, paper_index.IsolationError, revise.ReviseError, review.ReviewError, ValueError, FileNotFoundError,
-             watermark.WatermarkError)
+             watermark.WatermarkError, webview.BrowserError)
     if isinstance(e, openai_client.OpenAIError):
         return f"OpenAI error ({e.kind}): {e}"
     if isinstance(e, known):
@@ -121,6 +121,14 @@ class App:
         self.jobs = Jobs()
         self.last_activity = time.time()
         self.idle_seconds = (idle_minutes if idle_minutes is not None else config.ui_cfg()["idle_minutes"]) * 60
+        self._browser, self._browser_lock = None, threading.Lock()
+
+    def browser(self):
+        """The built-in browser (QuillBot / Overleaf inside the app): the browser container in Docker, a local Chromium otherwise, or a note on why not."""
+        with self._browser_lock:
+            if self._browser is None:
+                self._browser = webview.backend()
+            return self._browser
 
     def host_ok(self, host):
         """Only loopback names on this app's own port: a page on another origin cannot reach us through a rebinding trick."""
@@ -584,22 +592,37 @@ def _pane_addresses(n, p):
     return ui, panes.quillbot_url(ui), panes.overleaf_url(p, config.paper_settings(p).get("overleaf_url"))
 
 
+PANE_MODES = ("auto", "browser", "window", "inside")
+SITE_TITLES = {"quillbot": "QuillBot", "overleaf": "Overleaf"}
+
+
 def api_panes(r):
-    """What the two side panes show and how: inside the app (when the site allows it) or in a window beside it. ?check=1 asks the sites."""
+    """What the two side panes show and how: in the built-in browser (when it is available), inside the app as a frame (when the site allows
+    it) or in a window beside the app. ?check=1 asks the sites about framing."""
     n, p = paper_ref(r.arg("paper", ""))
     ui, q, o = _pane_addresses(n, p)
-    mode = ui.get("pane_mode") if ui.get("pane_mode") in ("auto", "window", "inside") else "auto"
+    mode = ui.get("pane_mode") if ui.get("pane_mode") in PANE_MODES else "auto"
+    bst = r.app.browser().status()
+    have = bool(bst.get("available"))
+    use_browser = have and mode in ("auto", "browser")
     urls = [u for u in (q, o) if u]
-    probes = _probe_many(urls) if r.arg("check") and mode == "auto" else {}
-    out = {"paper": n, "mode": mode}
+    probes = _probe_many(urls) if r.arg("check") and mode == "auto" and not use_browser else {}
+    out = {"paper": n, "mode": mode, "browser": {"available": have, "reason": bst.get("reason", "")}}
     for key, url in (("quillbot", q), ("overleaf", o)):
         if not url:
-            out[key] = {"url": None, "inside": False, "reason": "There is no address for this paper's Overleaf project yet. Add it in Settings."}
+            out[key] = {"url": None, "inside": False, "how": "none", "reason": "There is no address for this paper's Overleaf project yet. Add it in Settings."}
             continue
-        inside, reason = panes.decide_inside(mode, probes.get(url), url)
-        if mode == "auto" and not r.arg("check"):
+        if use_browser:
+            out[key] = {"url": url, "inside": False, "how": "browser", "reason": ""}
+            continue
+        if mode == "browser":   # asked for, but not available: a window is the next best thing
+            out[key] = {"url": url, "inside": False, "how": "window", "reason": (bst.get("reason") or "The built-in browser is not available.") + " It opens in a window beside the app instead."}
+            continue
+        fmode = "window" if mode == "window" else "inside" if mode == "inside" else "auto"
+        inside, reason = panes.decide_inside(fmode, probes.get(url), url)
+        if fmode == "auto" and not r.arg("check"):
             inside, reason = False, ""   # not asked yet
-        out[key] = {"url": url, "inside": inside, "reason": reason}
+        out[key] = {"url": url, "inside": inside, "how": "frame" if inside else "window", "reason": reason}
     return out
 
 
@@ -614,6 +637,116 @@ def api_test_frames(r):
             _PROBES[url] = (time.time(), out[key])
     out["mode"] = ui.get("pane_mode") or "auto"
     return out
+
+
+# ---------------------------------------------------------------------------- the built-in browser (QuillBot and Overleaf inside the app)
+
+def _logins():
+    """The saved sign-in details of the two sites, for showing: the email, and whether a password is saved. Never the password itself."""
+    raw = common.load("sites.json", {}) or {}
+    return {k: {"email": (raw.get(k) or {}).get("email", ""), "password": bool((raw.get(k) or {}).get("password"))} for k in webview.SITES}
+
+
+def api_secret_site(r):
+    """Save (or remove) the email and password used to fill the sign-in form of QuillBot / Overleaf in the built-in browser.
+    Written to sites.json (0600) on this computer; never sent back to any page and never logged."""
+    site = r.body.get("site")
+    if site not in webview.SITES:
+        raise ApiError(400, "unknown site")
+    everything = common.load("sites.json", {}) or {}
+    if r.body.get("clear"):
+        everything.pop(site, None)
+    else:
+        cur = everything.get(site) or {}
+        email = str(r.body.get("email") or cur.get("email") or "").strip()
+        if not email or len(email) > 200 or any(c.isspace() for c in email):
+            raise ApiError(400, "enter the email address you sign in with")
+        pw = r.body.get("password")
+        if pw in (None, ""):
+            if not cur.get("password"):
+                raise ApiError(400, "enter your password")
+            pw = cur["password"]
+        elif not isinstance(pw, str) or len(pw) > 500 or "\n" in pw or "\r" in pw:
+            raise ApiError(400, "the password looks wrong: it should be one line of text")
+        everything[site] = {"email": email, "password": pw}
+    common.save("sites.json", everything)
+    return {"ok": True, "saved": _logins()}
+
+
+def _site_url(site, paper):
+    ui = config.ui_cfg()
+    if site == "quillbot":
+        return panes.quillbot_url(ui)
+    n, p = paper_ref(paper or "")
+    url = panes.overleaf_url(p, config.paper_settings(p).get("overleaf_url"))
+    if not url:
+        raise ApiError(409, "There is no address for this paper's Overleaf project yet. Add it in Settings.")
+    return url
+
+
+def api_browser_status(r):
+    return {**r.app.browser().status(), "saved": _logins()}
+
+
+def api_browser_open(r):
+    site = r.m.group(1)
+    return r.app.browser().open(site, _site_url(site, r.body.get("paper")), r.body.get("w"), r.body.get("h"), bool(r.body.get("force")))
+
+
+def api_browser_resize(r):
+    return r.app.browser().resize(r.m.group(1), r.body.get("w"), r.body.get("h"))
+
+
+def api_browser_input(r):
+    return r.app.browser().input(r.m.group(1), r.body.get("events"))
+
+
+def api_browser_nav(r):
+    site, action = r.m.group(1), r.body.get("action")
+    if action == "home":
+        return r.app.browser().open(site, _site_url(site, r.body.get("paper")), None, None, True)
+    return r.app.browser().nav(site, action)
+
+
+def api_browser_selection(r):
+    return r.app.browser().selection(r.m.group(1))
+
+
+def api_browser_clipboard(r):
+    """What the page last copied with its own Copy button (QuillBot's, for example)."""
+    return r.app.browser().clipboard(r.m.group(1))
+
+
+def api_browser_insert(r):
+    text = r.body.get("text")
+    if not isinstance(text, str) or not text:
+        raise ApiError(400, "nothing to paste")
+    return r.app.browser().insert(r.m.group(1), text[:webview.MAX_TEXT])
+
+
+def api_browser_close(r):
+    return r.app.browser().close(r.m.group(1))
+
+
+def api_browser_signin(r):
+    """Fill the sign-in form that is on screen with the saved email and password. The author presses the site's own button."""
+    site = r.m.group(1)
+    cred = (common.load("sites.json", {}) or {}).get(site) or {}
+    if not cred.get("email") and not cred.get("password"):
+        raise ApiError(409, f"No sign-in details are saved for {SITE_TITLES[site]} yet. Add them in Settings.")
+    filled = r.app.browser().signin(site, cred.get("email", ""), cred.get("password", "")).get("filled", [])
+    if "email" in filled and "password" in filled:
+        msg = "Filled in your email and password. Press the site's own Sign in button."
+    elif "email" in filled:
+        msg = "Filled in your email. Press the site's Continue button, then press this again for the password."
+    elif "password" in filled:
+        msg = "Filled in your password. Press the site's own Sign in button."
+    else:
+        msg = "I could not find a sign-in form on this page. Open the site's sign-in page first, then press this again."
+    return {"filled": filled, "message": msg}
+
+
+BROWSER_GET = re.compile(r"^/api/browser/(quillbot|overleaf)/frame$")
 
 
 # ---------------------------------------------------------------------------- chat
@@ -945,7 +1078,7 @@ def api_overview(r):
 
 def _panes_settings(r):
     ui = config.ui_cfg()
-    out = {"mode": ui.get("pane_mode") if ui.get("pane_mode") in ("auto", "window", "inside") else "auto", "quillbot_url": panes.quillbot_url(ui), "quillbot_default": panes.QUILLBOT_URL,
+    out = {"mode": ui.get("pane_mode") if ui.get("pane_mode") in PANE_MODES else "auto", "quillbot_url": panes.quillbot_url(ui), "quillbot_default": panes.QUILLBOT_URL,
            "overleaf_url": None, "overleaf_derived": False, "overleaf_override": ""}
     paper = r.arg("paper")
     if paper:
@@ -972,7 +1105,8 @@ def api_connections(r):
                          "command": f'python3 "{here}/scripts/mendeley_sync.py" authorize'},
             "telegram": {"state": "set_up" if tg.get("token") else "not_set_up", "allowed": len(tg.get("allowed_chat_ids") or [])},
             "limits": {k: config.ui_cfg()[k] for k in ("guard_passages", "max_passages", "idle_minutes")},
-            "panes": _panes_settings(r), "in_docker": os.environ.get("OVERLEAF_UI_IN_DOCKER") == "1"}
+            "panes": _panes_settings(r), "in_docker": os.environ.get("OVERLEAF_UI_IN_DOCKER") == "1",
+            "sites": _logins(), "browser": {k: v for k, v in r.app.browser().status().items() if k in ("available", "reason", "kind")}}
 
 
 def api_test_openai(r):
@@ -1064,8 +1198,8 @@ def api_settings(r):
                 raise ApiError(400, "the QuillBot address must be an https address on quillbot.com")
             cur["quillbot_url"] = v or None
         if "pane_mode" in ui:
-            if ui["pane_mode"] not in ("auto", "window", "inside"):
-                raise ApiError(400, "pane_mode must be auto, window or inside")
+            if ui["pane_mode"] not in PANE_MODES:
+                raise ApiError(400, "pane_mode must be auto, browser, window or inside")
             cur["pane_mode"] = ui["pane_mode"]
         for key, lo, hi in (("guard_passages", 1, 100), ("max_passages", 1, 100)):
             if key in ui:
@@ -1334,7 +1468,13 @@ ROUTES = [
     ("POST", r"^/api/refs/mendeley$", api_refs_mendeley), ("POST", r"^/api/proposal/handoff$", api_handoff),
     ("GET", r"^/api/refs/pending$", api_refs_pending), ("POST", r"^/api/refs/retry$", api_refs_retry), ("GET", r"^/api/refs/groups$", api_refs_groups),
     ("POST", r"^/api/refs/link$", api_refs_link), ("GET", r"^/api/activity$", api_activity),
-    ("POST", r"^/api/secrets/openai$", api_secret_openai), ("POST", r"^/api/secrets/git$", api_secret_git),
+    ("POST", r"^/api/secrets/openai$", api_secret_openai), ("POST", r"^/api/secrets/git$", api_secret_git), ("POST", r"^/api/secrets/site$", api_secret_site),
+    ("GET", r"^/api/browser$", api_browser_status), ("POST", r"^/api/browser/(quillbot|overleaf)/open$", api_browser_open),
+    ("POST", r"^/api/browser/(quillbot|overleaf)/resize$", api_browser_resize), ("POST", r"^/api/browser/(quillbot|overleaf)/input$", api_browser_input),
+    ("POST", r"^/api/browser/(quillbot|overleaf)/nav$", api_browser_nav), ("POST", r"^/api/browser/(quillbot|overleaf)/selection$", api_browser_selection),
+    ("POST", r"^/api/browser/(quillbot|overleaf)/clipboard$", api_browser_clipboard),
+    ("POST", r"^/api/browser/(quillbot|overleaf)/insert$", api_browser_insert), ("POST", r"^/api/browser/(quillbot|overleaf)/signin$", api_browser_signin),
+    ("POST", r"^/api/browser/(quillbot|overleaf)/close$", api_browser_close),
     ("GET", r"^/api/panes$", api_panes), ("POST", r"^/api/test/frames$", api_test_frames),
     ("GET", r"^/api/overview$", api_overview), ("GET", r"^/api/connections$", api_connections), ("POST", r"^/api/test/openai$", api_test_openai),
     ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/test/cleaner$", api_test_cleaner),
@@ -1436,6 +1576,9 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError
             except ValueError:
                 return self._err(400, "body must be a JSON object")
+        bm = BROWSER_GET.match(path) if method == "GET" else None
+        if bm:
+            return self._browser_picture(bm.group(1), query)
         if method == "GET" and path in FILES:
             name, ctype = FILES[path]
             return self._send(200, (STATIC / name).read_bytes(), ctype)
@@ -1458,6 +1601,22 @@ class Handler(BaseHTTPRequestHandler):
                     traceback.print_exc(file=sys.stderr)
                     return self._err(500, "internal error (see the container log)")
         return self._err(404, "not found")
+
+    def _browser_picture(self, site, query):
+        """The newest picture of a built-in browser as a JPEG. ?after=<number from the last picture>&wait=<seconds> waits (up to that long) for a
+        different picture and answers 204 when nothing changed, so the page can keep asking and always show what the browser shows."""
+        if self.command == "HEAD":
+            return self._err(405, "method not allowed")
+        try:
+            after = int(query.get("after", ["-1"])[0])
+            wait = max(0.1, min(float(query.get("wait", ["0.1"])[0]), 20.0))
+        except ValueError:
+            return self._err(400, "bad number")
+        try:
+            seq, jpeg = self.app.browser().next_frame(site, after, wait)
+        except webview.BrowserError as e:
+            return self._err(409, str(e))
+        return self._send(204, b"", "text/plain") if jpeg is None else self._send(200, jpeg, "image/jpeg", {"X-Seq": str(seq)})
 
     def do_GET(self):
         self._handle("GET")

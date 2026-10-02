@@ -114,22 +114,27 @@
     const tg = h('section', { class: 'card', 'aria-label': 'Telegram' }, h('div', { class: 'row' }, h('h2', { text: 'Telegram (phone)' }), badge(c.telegram.state === 'set_up', 'set up', 'not set up')),
       h('p', { class: 'small secondary', text: c.telegram.state === 'set_up' ? `Send a DOI to your bot from your phone and it is added to the active paper (${c.telegram.allowed} chat allowed).` :
         'Optional. A Telegram bot lets you add a DOI from your phone. See the README for the one-time setup.' }));
-    // ---- QuillBot and Overleaf beside the chat: their addresses, and inside the app or in a window
+    // ---- QuillBot and Overleaf inside the app: the built-in browser, the addresses, and the sign-in details
     const pn = c.panes;
+    const bi = c.browser || {};
     const qUrl = h('input', { type: 'text', value: pn.quillbot_url === pn.quillbot_default ? '' : pn.quillbot_url, placeholder: pn.quillbot_default, 'aria-label': 'QuillBot address', class: 'grow' });
     const oUrl = h('input', { type: 'text', value: pn.overleaf_override || '', placeholder: pn.overleaf_url || 'https://www.overleaf.com/project/<project id>', 'aria-label': 'Overleaf project address', class: 'grow' });
-    const modeSel = h('select', { 'aria-label': 'Where to show them' },
-      [['auto', 'Automatic: inside the app when the site allows it, otherwise in a window'], ['window', 'Always in a window beside the app (works everywhere)'], ['inside', 'Always try inside the app (may stay blank)']].map(([v, t]) => h('option', { value: v, text: t, selected: pn.mode === v })));
+    const modeSel = h('select', { 'aria-label': 'How to show them' },
+      [['auto', 'Automatic (built-in browser if there)'], ['browser', 'Always the built-in browser'],
+        ['window', 'Always a separate window'], ['inside', 'Inside the page (may stay blank)']].map(([v, t]) => h('option', { value: v, text: t, selected: pn.mode === v })));
     const paneOut = h('div', { class: 'stack' });
-    const sitesCard = h('section', { class: 'card', 'aria-label': 'Side panes' }, h('div', { class: 'row' }, h('h2', { text: 'QuillBot and Overleaf beside the chat' })),
-      h('p', { class: 'small secondary', text: 'You do not enter your QuillBot or Overleaf password here. You sign in once, in the window; the app never sees it. Here you only say where the pages are and how to show them.' }),
+    const sitesCard = h('section', { class: 'card', 'aria-label': 'Side panes' }, h('div', { class: 'row' }, h('h2', { text: 'QuillBot and Overleaf inside the app' }),
+      badge(bi.available, 'built-in browser ready', 'built-in browser not available')),
+      bi.available ?
+        h('p', { class: 'small secondary', text: 'QuillBot and Overleaf open in a browser that runs next to this app and is shown in the side panes. Sign in there once and it stays signed in; the sign-in is kept in a folder on this computer. Below you can save your email and password so one button fills the sign-in form.' }) :
+        notice('warn', bi.reason || 'The built-in browser is not available.', ' After updating the app, run ', h('code', { text: './ui.sh build' }), ' once, then ', h('code', { text: './ui.sh down && ./ui.sh up' }), '. Until then the sites open in a window beside the app.'),
       h('label', { class: 'field' }, h('span', { text: 'QuillBot address (leave empty for the usual one)' }), qUrl),
       S.paper ? h('label', { class: 'field' }, h('span', { text: `Overleaf project address for ${S.paper}` + (pn.overleaf_derived ? ' (taken from the paper\'s Git address; type another to override)' : '') }), oUrl) : null,
-      h('label', { class: 'field' }, h('span', { text: 'Where to show them' }), modeSel),
+      h('label', { class: 'field' }, h('span', { text: 'How to show them' }), modeSel),
       h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Save' }), async () => {
         await api.post('/api/settings', Object.assign({ ui: { quillbot_url: qUrl.value.trim(), pane_mode: modeSel.value } }, S.paper ? { paper: S.paper, overleaf_url: oUrl.value.trim() } : {}));
         toast('Saved'); window.OLS.route();
-      }), S.paper ? guarded(h('button', { type: 'button', text: 'Ask the sites if they allow it' }), async () => {
+      }), !bi.available && S.paper ? guarded(h('button', { type: 'button', text: 'Ask the sites if they allow it' }), async () => {
         clear(paneOut).append(busy('Asking QuillBot and Overleaf...'));
         const r = await api.post('/api/test/frames', { paper: S.paper });
         const line = (name, x) => {
@@ -140,7 +145,24 @@
         clear(paneOut).append(line('QuillBot', r.quillbot), line('Overleaf', r.overleaf));
       }) : null,
       h('a', { class: 'small', href: '#/panes', text: 'Try them in your browser' })), paneOut);
-    box.append(h('h2', { class: 'section-h', text: 'Connections' }), h('div', { class: 'grid two' }, openai, overleaf, cleaner, mend, tg, sitesCard));
+
+    const siteForm = (site, title, hint) => {
+      const saved = (c.sites || {})[site] || { email: '', password: false };
+      const em = h('input', { type: 'email', value: saved.email || '', placeholder: 'the email you sign in with', 'aria-label': title + ' email', autocomplete: 'off', class: 'grow' });
+      const pw = h('input', { type: 'password', autocomplete: 'new-password', placeholder: saved.password ? 'a password is saved (type a new one to replace it)' : 'your ' + title + ' password', 'aria-label': title + ' password', class: 'grow' });
+      return h('div', { class: 'stack site-form' }, h('div', { class: 'row' }, h('h3', { text: title }), badge(saved.password, 'saved', 'nothing saved')),
+        hint ? h('p', { class: 'small muted', text: hint }) : null,
+        h('label', { class: 'field' }, h('span', { text: 'Email' }), em), h('label', { class: 'field' }, h('span', { text: 'Password' }), pw),
+        h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Save' }), async () => {
+          await api.post('/api/secrets/site', { site, email: em.value.trim(), password: pw.value });
+          pw.value = ''; toast(title + ' sign-in saved'); window.OLS.route();
+        }), saved.email || saved.password ? guarded(h('button', { type: 'button', text: 'Remove' }), async () => { await api.post('/api/secrets/site', { site, clear: true }); toast('Removed'); window.OLS.route(); }) : null));
+    };
+    const signCard = h('section', { class: 'card', 'aria-label': 'Sign-in for QuillBot and Overleaf' }, h('h2', { text: 'Sign-in for QuillBot and Overleaf' }),
+      h('p', { class: 'small secondary', text: 'Optional. Save the email and password you use on each site, and the "Fill my sign-in" button in the side pane types them into the sign-in form. You still press the site\'s own Sign in button, so a code or a "not a robot" check stays in your hands.' }),
+      h('p', { class: 'small muted', text: 'They are saved on this computer only, in a file that only you can read (sites.json in the data folder). The file is not encrypted, and the app never shows a saved password again. Signing in with Google, Apple or your university login cannot be filled this way: for these two sites use an email and a password instead (Overleaf: Account settings, then set a password; QuillBot: "Forgot password" lets you set one).' }),
+      h('div', { class: 'grid two' }, siteForm('quillbot', 'QuillBot', ''), siteForm('overleaf', 'Overleaf', 'Not the Git token above: that one is for getting and sending your files.')));
+    box.append(h('h2', { class: 'section-h', text: 'Connections' }), h('div', { class: 'grid two' }, openai, overleaf, cleaner, mend, tg, sitesCard), signCard);
 
     // ---- preferences
     const p = paper && window.OLS.paperObj(paper);

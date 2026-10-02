@@ -24,8 +24,8 @@ No dependencies beyond Python 3 and git (Docker only if you want the web page,
 3. **OpenAI rewrites that part** following the advice, and tells you what was weak and how it fixed it. Citations,
    formulas, numbers and figures are replaced by tags before anything leaves your computer, and an answer that changes any
    of them is thrown away.
-4. **You decide.** Keep or set aside each change. If you want to adjust the tone, copy the text to QuillBot (it can sit next
-   to the chat), paste your final version back, and the app checks that no citation or number was lost.
+4. **You decide.** Keep or set aside each change. If you want to adjust the tone, put the text in QuillBot (it opens inside the
+   app, next to the chat), take the result back, and the app checks that no citation or number was lost.
 5. **Approve.** The text is saved in your files, and one click sends it to Overleaf. The Activity page tells you in
    sentences what happened and what it cost.
 
@@ -125,7 +125,7 @@ If you haven't touched that paper for a while, the bot asks which paper first.
 ### 6. (Recommended) The chat app
 
 ```bash
-~/.claude/skills/research-overleaf-wc/install.sh ui      # builds the Docker image once
+~/.claude/skills/research-overleaf-wc/install.sh ui      # builds the Docker image once (a few minutes: it includes the built-in browser)
 ~/.claude/skills/research-overleaf-wc/ui.sh up           # starts it and opens your browser
 ~/.claude/skills/research-overleaf-wc/ui.sh down         # stops it (it also stops itself when idle)
 ```
@@ -148,15 +148,41 @@ Everything else is set up **inside the app**, in **Settings** (nothing to edit b
 
 Then just talk to it. The pages are **Chat**, **References**, **Activity** and **Settings**; the papers and your chats are in the sidebar.
 
-**QuillBot and Overleaf beside the chat.** Switch on **QuillBot**, **Overleaf** and **Paper text** above the chat. QuillBot has no public API,
-so the paste stays yours. Many sites refuse to be shown inside another page (and Safari can block their sign-in), so by default the app
-asks each site once: if it allows it, the page appears inside the app; if not, that pane becomes one clear button, **Open QuillBot beside
-the app**, which opens the site in its own window on the free half of your screen (put the app on the left half; on a Mac hold the green
-button and choose "Tile Window to Left of Screen"). You sign in once in that window; the app never sees your QuillBot or Overleaf
-password. In **Settings > QuillBot and Overleaf beside the chat** you can change the QuillBot address, give a paper's Overleaf project
-address if it differs from the one built from its Git address, force "always in a window", and press **Ask the sites if they allow it**.
-**Copy for QuillBot** copies the suggestion with your citations and formulas as tags (`[[LX001]]`) so QuillBot cannot damage them; paste
-QuillBot's result into "Your final version" and the app checks every tag is still there before you can approve.
+**QuillBot and Overleaf inside the app (the built-in browser).** Press **QuillBot**, **Overleaf** or **Paper text** above the chat and the
+page opens in the side area. QuillBot and Overleaf refuse to be shown inside another page, so the app starts a real browser (Chromium) in
+its own Docker container and shows you what it sees; your mouse and keyboard are passed to it, so it works like a browser tab inside the app.
+You sign in once and it stays signed in (the sign-in is kept in `~/.config/overleaf-skill/browser/`; delete that folder to sign out).
+
+- **Sign in:** type your email and password in the page as usual, or save them once in **Settings > Sign-in for QuillBot and Overleaf**
+  and press **Fill my sign-in** in the pane. The app fills the form; you press the site's own Sign in button, so a code or a "not a robot"
+  check stays with you. Saved details are in `~/.config/overleaf-skill/sites.json` (`{"quillbot": {"email": "...", "password": "..."}, "overleaf": {...}}`),
+  readable only by you and **not encrypted**; the app never shows a saved password again. Google, Apple or university sign-in cannot be
+  filled (and Google refuses embedded browsers): for these two sites use an email and password (Overleaf: Account settings, set a password;
+  QuillBot: "Forgot password" lets you set one).
+- **Layout:** one pane uses the whole side area; **Both at once** (strip at the top of the area) stacks QuillBot above Overleaf; **Wider**
+  gives the area more room; drag its left edge to resize. The page is drawn at least 1100 pixels wide and shrunk to fit, so the sites keep
+  their desktop layout; **Aa** in the pane draws it narrower for bigger text. Back, forward, reload, stop and home are in the pane's toolbar.
+- **Copy and paste:** Cmd/Ctrl+V pastes your clipboard into the page, Cmd/Ctrl+C copies the text selected there to your clipboard, and
+  **Copy what I selected** does the same with a button. Tab and Esc go to the page; click outside it to leave.
+- **The tone pass:** under a suggestion, **Put it in QuillBot** types it into QuillBot's writing box; adjust the tone there, then
+  **Take QuillBot's result** (what QuillBot copied with its own Copy button) or **Take the text I selected** brings it back into
+  "Your final version", where the app checks every `[[LX001]]` tag is still there before you can approve. **Send to Overleaf** reloads the
+  Overleaf pane so you see the update. (These buttons are best effort on the real sites; if one does not land, click in QuillBot's box and
+  paste with Cmd/Ctrl+V: **Copy for QuillBot** puts the suggestion on your clipboard.)
+- **Settings > QuillBot and Overleaf inside the app** shows whether the built-in browser is ready, the QuillBot address, each paper's
+  Overleaf project address (normally built from its Git address), and how to show them: automatic, always the built-in browser, always a
+  separate window beside the app, or inside the page as a frame (usually blank).
+- **Safety:** the browser runs in a second container (`overleaf-browser`) on a private Docker network with nothing published to your
+  network. It has no access to your OpenAI key, Overleaf token, papers or book, only its sign-in folder. It refuses to open local or
+  private addresses, refuses downloads, and the app can only start it on the QuillBot and Overleaf project addresses. Chromium runs there
+  without its own sandbox (a container cannot give it one), so the container itself is the sandbox: read-only, no capabilities, no new
+  privileges, not root. It stops itself after hours of not being used, and `ui.sh down` stops it.
+- **If it is not available** (an old image, or Docker could not start the container) the app says so in Settings and falls back to the
+  old way: a frame when the site allows it, otherwise **Open QuillBot beside the app**, a window on the free half of your screen.
+  After updating the app run `./ui.sh down`, then `./ui.sh up`; the first start rebuilds the image (a few minutes).
+
+QuillBot has no public API, so the paste stays yours. **Copy for QuillBot** copies the suggestion with your citations and formulas as tags
+(`[[LX001]]`) so QuillBot cannot damage them.
 
 **Peer review** needs the `academic-paper` skill installed under `~/.claude/skills/` (`ui.sh` shares its rubric folder read-only).
 
@@ -182,7 +208,8 @@ your book), or use **Book check** in the book library (Settings, Advanced).
 - LaTeX build files (`.aux`, `.log`, `.pdf`, ...) are never pushed to Overleaf by the sync tool.
 - Peer review only runs when you ask. Mendeley is written to only when you ask Claude to add a reference or send a DOI to the bot.
 - The ChatGPT pass only runs when you ask. Each passage is sent with citations, formulas and headings masked, together with the paper's short card and a few book rules; never another paper, never your keys. Asking in the chat is the consent, and "What goes out" shows the exact text; turn on "Ask me before anything is sent" in Settings to confirm every time. Requests above a size you set, and every peer review (which reads the whole paper), always ask first. Answers are checked before you see them (protected LaTeX intact, no new numbers, no dashes, balanced braces) and nothing is written until you approve it.
-- QuillBot is a third party: only what you paste there leaves your computer. Your own version is checked against the same rules before it can be saved.
+- QuillBot is a third party: only what you paste or put there leaves your computer. Your own version is checked against the same rules before it can be saved.
+- The built-in browser (QuillBot and Overleaf inside the app) lives in its own container with none of your keys or papers (see above). Your saved QuillBot/Overleaf email and password are in `~/.config/overleaf-skill/sites.json`, readable only by you, not encrypted.
 - The web app listens on `127.0.0.1` only (your computer, not the network), needs a fresh access token every time you start it, refuses requests from other websites, loads nothing from the internet, runs as you with a read-only filesystem and no extra privileges, and can see only your registered paper folders, the data folder and the inbox. It closes itself when idle.
 - The activity log holds only counts, ids, tokens and timings, never your text.
 
@@ -201,7 +228,12 @@ your book), or use **Book check** in the book library (Settings, Advanced).
 | The book gives odd advice | **Settings > Advanced > Book library > Book check** shows, for each part of a paper, which pages would be used. If the wrong chapter shows up, tell Claude which part and what you expected. A scanned (image-only) PDF needs OCR first. |
 | "Approve and save" is missing | The text-cleaning service is not set in Settings, so the button is **Let Claude apply it**. |
 | The model was not found / the key was rejected | Use **Test** in **Settings > OpenAI**. It says which one it is, and never shows the key. |
-| QuillBot or Overleaf does not appear next to the chat | The site refuses to be shown inside another page (or Safari blocked its sign-in). Choose **Always in a window** in **Settings > QuillBot and Overleaf beside the chat**, or just use **Open QuillBot beside the app**. No password goes in Settings. If the Overleaf address is missing, type the project address there. |
+| The pane says the built-in browser is not available | The image is older than the app: run `./ui.sh down`, then `./ui.sh up` (the first start rebuilds the image, a few minutes). **Settings > QuillBot and Overleaf inside the app** says why if it still fails. Meanwhile the sites open in a window beside the app. |
+| The pane stays on "Starting the browser" or says the page did not answer | The site could not be reached from the container (internet, a VPN, or the site is down). Press **Reload**, or **Home**. Chromium keeps your sign-in, so nothing is lost. |
+| The page shows "not a robot" or refuses the sign-in | Some sites challenge automated-looking browsers. Solve the check in the pane if it lets you. A Google/Apple/university sign-in does not work in an embedded browser: use an email and password. |
+| The picture is small or blurry | The page is drawn wide and shrunk to fit: press **Wider**, or **Aa** for bigger text. |
+| "Fill my sign-in" finds no form | Open the site's sign-in page first. Some sites ask for the email, then the password: press the button again after **Continue**. |
+| Typing does nothing | Click inside the page first (a blue outline shows it has the keyboard). |
 | A reference is "waiting for Mendeley" | The bibliography already has it. Mendeley was unreachable or not signed in; the entry is retried after the next success, or press **Try again now** on the References page. |
 | Anything else | `common.py doctor` lists per-paper problems; `writing.py stats` prints what the system has been doing. |
 

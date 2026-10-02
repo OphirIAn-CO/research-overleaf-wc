@@ -41,8 +41,14 @@ class IsolatedHome(unittest.TestCase):
         common.HOME = self.tmp / "home"
         common.HOME.mkdir()
         os.environ.pop("OVERLEAF_SKILL_HOME", None)
+        self._old_browser = os.environ.get("OLS_BROWSER")
+        os.environ["OLS_BROWSER"] = "off"          # no test starts a real Chromium unless it asks for one explicitly
 
     def tearDown(self):
+        if self._old_browser is None:
+            os.environ.pop("OLS_BROWSER", None)
+        else:
+            os.environ["OLS_BROWSER"] = self._old_browser
         common.HOME = self._old_home
         self._tmp.cleanup()
 

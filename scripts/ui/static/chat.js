@@ -109,6 +109,7 @@
       loadOverview();
       await window.OLS.loadState();
       if (window.OLS.panes && window.OLS.panes.refreshText) window.OLS.panes.refreshText();
+      if (action === 'sync' && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend();
     });
     loadOverview();
     const head = h('header', { class: 'chat-head' }, h('div', { class: 'grow' }, h('h1', { text: paper }), sub),
@@ -382,6 +383,7 @@
         toast('Saved in ' + r.files.join(', '));
         if (r.push) showGit(into, r);
         if (window.OLS.panes && window.OLS.panes.refreshText) window.OLS.panes.refreshText(true);
+        if (r.push && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend();
         await window.OLS.loadState();
         await reload();
         return r;
@@ -392,7 +394,17 @@
     }
 
     // ---- the tone panel: copy to QuillBot (or edit by hand), paste the final version back, check, approve
+    const take = (mine, check, what, label, title) => guarded(h('button', { type: 'button', text: label, title }), async () => {
+      const t = await window.OLS.panes.takeFrom('quillbot', what);
+      if (!t || !t.trim()) {
+        toast(what === 'clipboard' ? 'QuillBot has not copied anything yet. Press QuillBot\'s own Copy button, or select the text there and use "Take the text I selected".' : 'Nothing is selected in QuillBot. Select the result text there first.');
+        return;
+      }
+      mine.value = t; check(); toast('Took ' + t.trim().split(/\s+/).length + ' words from QuillBot. Check them below.');
+    });
+
     function buildTone(el, p, redraw) {
+      const inQuillBot = !!(window.OLS.panes && window.OLS.panes.has && window.OLS.panes.has('quillbot'));
       const units = p.units.filter((u) => u.status !== 'failed' && u.views);
       const boxes = new Map();
       const checkEls = new Map();
@@ -421,7 +433,10 @@
         }, 350);
       };
       const out = h('div', { class: 'stack' });
-      el.append(h('p', { class: 'small secondary', text: 'Copy the suggestion to QuillBot (the pane on the right, or any window), adjust the tone, copy the result, and paste it into "Your final version". You can also just edit it here. Tags like [[LX001]] stand for your citations and formulas: leave them as they are.' }));
+      el.append(h('p', { class: 'small secondary', text: (inQuillBot ?
+        'Press "Put it in QuillBot", adjust the tone in the QuillBot pane, then press "Take QuillBot\'s result" (or select the result there and press "Take the text I selected"). You can also copy and paste by hand, or just edit here. ' :
+        'Copy the suggestion to QuillBot (the pane on the right, or any window), adjust the tone, copy the result, and paste it into "Your final version". You can also just edit it here. ') +
+        'Tags like [[LX001]] stand for your citations and formulas: leave them as they are.' }));
       units.forEach((u) => {
         const v = u.views;
         const mine = h('textarea', { rows: '8', 'aria-label': 'Your final version', class: 'mono' });
@@ -438,9 +453,16 @@
           h('div', { class: 'two' },
             h('div', null, h('label', { class: 'small secondary', text: 'OpenAI\'s suggestion' }), readonlyBox(v.suggested_masked),
               h('div', { class: 'row' }, h('button', { type: 'button', text: 'Copy for QuillBot', onclick: () => copyText(v.suggested_masked, 'Text for QuillBot') }),
+                inQuillBot ? guarded(h('button', { type: 'button', class: 'primary', text: 'Put it in QuillBot', title: 'Types the suggestion into the QuillBot pane' }), async () => {
+                  await window.OLS.panes.sendText('quillbot', v.suggested_masked);
+                  toast('It is in QuillBot. Adjust the tone there, then press "Take QuillBot\'s result" here.');
+                }) : null,
                 h('button', { type: 'button', text: 'Copy as LaTeX', onclick: () => copyText(v.suggested_latex, 'LaTeX') }))),
             h('div', null, h('label', { class: 'small secondary', text: 'Your final version' }), mine,
-              h('div', { class: 'row' }, h('button', { type: 'button', text: 'Paste what I copied', onclick: async () => {
+              h('div', { class: 'row' }, inQuillBot ? [
+                take(mine, check, 'clipboard', 'Take QuillBot\'s result', 'The text QuillBot put on its clipboard with its own Copy button'),
+                take(mine, check, 'selection', 'Take the text I selected', 'The text you selected in the QuillBot pane')] : null,
+              h('button', { type: 'button', text: 'Paste what I copied', onclick: async () => {
                 try { mine.value = await navigator.clipboard.readText(); check(); } catch (e) { toast('Your browser did not allow reading the clipboard. Paste with Cmd+V or Ctrl+V into the box instead.'); }
               } }), h('button', { type: 'button', class: 'ghost', text: 'Start over', onclick: () => { mine.value = v.suggested_masked; check(); } })))),
           legend.length ? h('details', null, h('summary', { text: 'What each tag stands for' }), h('ul', { class: 'small mono' }, legend.map(([k, x]) => h('li', { text: `[[${k}]]  ${x}` })))) : null,
@@ -503,5 +525,6 @@
       ta.focus();
     }, 0);
     if (window.OLS.panes && window.OLS.panes.setTargetFromThread) window.OLS.panes.setTargetFromThread(st.messages);
+    if (window.OLS.panes && window.OLS.panes.knows) window.OLS.panes.knows(paper).catch(() => {});
   });
 }());

@@ -1,16 +1,20 @@
 #!/usr/bin/env bash
 # The one-place web app, in Docker, only when you want it.
-#   ./ui.sh build       build the image once (Python + git + poppler)
+#   ./ui.sh build       build the image once (Python + git + poppler + the built-in browser)
 #   ./ui.sh up          start it, print the URL (with this launch's access token) and open the browser (--no-open to skip)
-#   ./ui.sh down        stop it     |  ./ui.sh status  |  ./ui.sh logs
+#   ./ui.sh down        stop it     |  ./ui.sh status  |  ./ui.sh logs [browser]
 #   ./ui.sh folders add ~/Documents/overleaf   let the app list and add the Overleaf clones in that folder (also: rm <folder>, list)
 # Safe by construction: published on 127.0.0.1 only; runs as you (not root) with a read-only filesystem and no extra privileges;
 # sees only your registered paper folders (and folders you chose with "folders add"), the data folder and the inbox; stops itself when idle.
+# The built-in browser (QuillBot and Overleaf inside the app) runs in a SECOND container on a private network: it sees none of that, only its
+# own sign-in folder, so the pages of those sites never run next to your keys or your papers.
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 DATA="${OVERLEAF_SKILL_HOME:-$HOME/.config/overleaf-skill}"
 NAME="overleaf-ui"
-IMAGE="overleaf-skill-ui:1"
+BROWSER="overleaf-browser"
+NET="overleaf-skill-net"
+IMAGE="overleaf-skill-ui:2"
 
 need_docker() {
   command -v docker >/dev/null 2>&1 || { echo "Docker is not installed. Install Docker Desktop (or Docker Engine), then run this again."; exit 1; }
@@ -96,9 +100,10 @@ case "$cmd" in
       URL="http://127.0.0.1:${P}/?token=$(cat "$DATA/.ui_token")"; echo "$URL"; open_url "$URL" "${2:-}"; exit 0
     fi
     docker rm -f "$NAME" >/dev/null 2>&1 || true   # a half-started leftover of our own, if any
-    docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "First run: building the image (a minute or two)..."; docker build -q -t "$IMAGE" -f "$DIR/ui/Dockerfile" "$DIR/ui" >/dev/null; }
-    mkdir -p "$DATA/inbox"; chmod 700 "$DATA" 2>/dev/null || true
+    docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "Building the image. This takes a few minutes the first time: it includes the built-in browser for QuillBot and Overleaf..."; docker build -q -t "$IMAGE" -f "$DIR/ui/Dockerfile" "$DIR/ui" >/dev/null; }
+    mkdir -p "$DATA/inbox" "$DATA/browser"; chmod 700 "$DATA" "$DATA/browser" 2>/dev/null || true
     ( umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > "$DATA/.ui_token" )
+    ( umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > "$DATA/.browser_token" )
     mounts=(); n=0
     while IFS= read -r p; do
       [ -n "$p" ] && [ -d "$p" ] && mounts+=(--mount "$(mount_arg "$p" "$p")") && n=$((n + 1))
@@ -109,12 +114,32 @@ case "$cmd" in
       mounts+=(--mount "$(mount_arg "$RUBRIC_DIR" /rubric readonly)"); rubric_env=(-e OLS_RUBRIC=/rubric/peer_reviewer_agent.md)
     fi
     GN="$(git config user.name 2>/dev/null || true)"; GE="$(git config user.email 2>/dev/null || true)"
+    # The built-in browser, in its own container on a private network. It gets NO secrets, no papers, no book: only its sign-in folder (read-write),
+    # a token file and the app code (read-only). Nothing is published on the computer's network; only the web app container can reach it.
+    browser_env=()
+    docker rm -f "$BROWSER" >/dev/null 2>&1 || true
+    if docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET" >/dev/null 2>&1; then
+      if bout="$(docker run -d --rm --init --name "$BROWSER" --network "$NET" \
+        --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp:rw,mode=1777,size=512m --shm-size=512m \
+        --cap-drop ALL --security-opt no-new-privileges --pids-limit 1024 --memory 3g \
+        -e HOME=/tmp/home -e OLS_BROWSER_BIND=0.0.0.0 -e OLS_BROWSER_PORT=9233 -e OLS_BROWSER_TOKEN_FILE=/run/browser_token -e OLS_BROWSER_PROFILES=/profiles \
+        --mount "$(mount_arg "$DATA/browser" /profiles)" --mount "$(mount_arg "$DATA/.browser_token" /run/browser_token readonly)" --mount "$(mount_arg "$DIR/scripts" /app readonly)" \
+        "$IMAGE" python3 /app/ui/browser_service.py 2>&1)"; then
+        browser_env=(--network "$NET" -e "OLS_BROWSER_URL=http://${BROWSER}:9233" -e "OLS_BROWSER_TOKEN_FILE=$DATA/.browser_token")
+      else
+        echo "Note: the built-in browser could not start, so QuillBot and Overleaf will open in a window beside the app. (${bout##*$'\n'})"
+        docker rm -f "$BROWSER" >/dev/null 2>&1 || true
+      fi
+    else
+      echo "Note: Docker would not create the private network for the built-in browser, so QuillBot and Overleaf will open in a window beside the app."
+    fi
     start_container() {  # start_container PORT -> 0 started | 98 port taken | 1 other failure (message printed)
       local out
       if out="$(docker run -d --rm --init --name "$NAME" --label "ols.port=$1" \
         --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp:rw,mode=1777,size=128m \
         --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
         -p "127.0.0.1:${1}:${1}" \
+        ${browser_env[@]+"${browser_env[@]}"} \
         -e OVERLEAF_UI_BIND=0.0.0.0 -e OVERLEAF_UI_PORT="$1" -e OVERLEAF_UI_PUBLIC_PORT="$1" \
         -e OVERLEAF_UI_TOKEN_FILE="$DATA/.ui_token" -e OVERLEAF_SKILL_HOME="$DATA" -e OLS_HOST_DIR="$DIR" -e HOME=/tmp/home ${rubric_env[@]+"${rubric_env[@]}"} \
         -e GIT_AUTHOR_NAME="${GN:-Overleaf skill}" -e GIT_COMMITTER_NAME="${GN:-Overleaf skill}" \
@@ -160,15 +185,18 @@ case "$cmd" in
     ;;
   down)
     need_docker
+    docker rm -f "$BROWSER" >/dev/null 2>&1 || true
     docker rm -f "$NAME" >/dev/null 2>&1 && echo "Stopped." || echo "It was not running."
+    docker network rm "$NET" >/dev/null 2>&1 || true
     ;;
   status)
     need_docker
     if running; then echo "Running: http://127.0.0.1:$(running_port || cfg_port)/ (token in $DATA/.ui_token)"; else echo "Not running. Start it with ./ui.sh up"; fi
+    if [ -n "$(docker ps -q -f "name=^/${BROWSER}$" 2>/dev/null)" ]; then echo "Built-in browser: running (sign-ins are kept in $DATA/browser)"; else echo "Built-in browser: not running"; fi
     ;;
   logs)
     need_docker
-    docker logs -f "$NAME"
+    if [ "${2:-}" = "browser" ]; then docker logs -f "$BROWSER"; else docker logs -f "$NAME"; fi
     ;;
   *)
     sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'

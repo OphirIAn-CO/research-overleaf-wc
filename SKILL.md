@@ -254,7 +254,9 @@ The same flow is available to the user in the local chat app (`<skill>/ui.sh up`
 only): the user picks a paper, says what they want in plain words, and gets the explanation and a
 readable before/after to keep or set aside; the same chat also does a peer review (it asks first,
 reading the whole paper) and adds a pasted DOI to the bibliography, the paper's Mendeley group and
-Overleaf. QuillBot, Overleaf and the paper text can sit beside the chat. Suggestions the author
+Overleaf. QuillBot and Overleaf open inside the app, next to the chat, in a built-in browser that runs in its own Docker
+container (no access to keys or papers; the author's optional QuillBot/Overleaf sign-in is in the data folder's
+`sites.json`, filled in only on request), and so can the paper text. Suggestions the author
 hands over ("Let Claude apply it") arrive as `chatgpt_revise` proposals, as described above.
 When the user asks to "open the UI / app / dashboard", run `ui.sh up` and give them the printed
 URL (it carries a one-time access token; do not repeat it anywhere else).
