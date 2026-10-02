@@ -151,6 +151,41 @@ def unsafe_folder(p):
     return ""
 
 
+def set_folders(proj, wanted):
+    """Save the list of linked folders for a paper. Each is written as an absolute path; a folder that is refused stays in the list with its reason (see folders())."""
+    cleaned = []
+    for x in wanted:
+        x = str(x or "").strip()
+        if not x or x in cleaned:
+            continue
+        if len(x) > 500 or "\n" in x or "\0" in x:
+            raise FileProblem("That does not look like a folder path.")
+        cleaned.append(str(Path(x).expanduser()) if x.startswith("~") else x)
+    if len(cleaned) > 8:
+        raise FileProblem("At most 8 folders can be linked to one paper.")
+    config.set_paper_setting(proj, "data_folders", cleaned)
+    return folders(proj)
+
+
+def link_folder(proj, path):
+    """Terminal use: link one folder that exists on this computer. -> the folder's status {path, ok, note}"""
+    p = Path(str(path)).expanduser().resolve()
+    if not p.is_dir():
+        raise FileProblem(f"{p} is not a folder.")
+    why = unsafe_folder(p)
+    if why:
+        raise FileProblem(why)
+    cur = [f["path"] for f in folders(proj)]
+    set_folders(proj, cur + [str(p)] if str(p) not in cur else cur)
+    return next(f for f in folders(proj) if f["path"] == str(p))
+
+
+def unlink_folder(proj, path):
+    p = str(Path(str(path)).expanduser().resolve())
+    cur = [f["path"] for f in folders(proj)]
+    set_folders(proj, [x for x in cur if x not in (p, str(path))])
+
+
 def folders(proj):
     """The folders the author linked for this paper: [{path, ok, note}]. They hold code and results that live outside the Overleaf project."""
     out = []
@@ -161,7 +196,7 @@ def folders(proj):
         elif unsafe_folder(p):
             out.append({"path": str(p), "ok": False, "note": unsafe_folder(p)})
         elif not p.is_dir():
-            out.append({"path": str(p), "ok": False, "note": "I cannot see this folder. If the app runs in Docker, share its parent with: ./ui.sh folders add <folder>, then ./ui.sh down and up."})
+            out.append({"path": str(p), "ok": False, "note": "I cannot see this folder. If the app runs in Docker, share it (read-only is enough) with: ./ui.sh folders add --read-only <folder>, then ./ui.sh down and ./ui.sh up."})
         else:
             out.append({"path": str(p), "ok": True, "note": ""})
     return out

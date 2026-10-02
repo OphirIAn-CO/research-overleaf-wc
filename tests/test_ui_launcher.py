@@ -43,6 +43,25 @@ class Launcher(IsolatedHome):
         self.assertIn("folders add", UI_SH)
         self.assertIn('OLS_HOST_DIR="$DIR"', UI_SH)
 
+    def test_an_analysis_folder_can_be_shared_read_only(self):
+        analysis = self.tmp / "analysis"
+        analysis.mkdir()
+        env = {"OVERLEAF_SKILL_HOME": str(common.HOME), "PATH": "/usr/bin:/bin", "HOME": str(self.tmp)}
+        run = lambda *a: subprocess.run(["bash", str(ROOT / "ui.sh"), "folders", *a], capture_output=True, text=True, env=env)  # noqa: E731
+        common_py = lambda *a: subprocess.run(["python3", str(ROOT / "scripts" / "common.py"), *a], capture_output=True, text=True, env=env).stdout.split()  # noqa: E731
+        r = run("add", "--read-only", str(analysis))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("READ-ONLY", r.stdout)
+        self.assertIn("Restart the app", r.stdout)
+        self.assertIn(f"{analysis.resolve()}  (read-only)", run("list").stdout)
+        self.assertEqual(common_py("ropaths"), [str(analysis.resolve())])
+        self.assertEqual(common_py("paths"), [], "it is not in the read-write list, so it can never be changed from the container")
+        self.assertIn('done < <(python3 "$DIR/scripts/common.py" ropaths)', UI_SH)
+        self.assertRegex(UI_SH, r'mounts\+=\(--mount "\$\(mount_arg "\$p" "\$p" readonly\)"\)[^\n]*\n\s*done < <\(python3 "\$DIR/scripts/common.py" ropaths\)')
+        run("rm", str(analysis))
+        self.assertEqual(common_py("ropaths"), [])
+        self.assertNotEqual(run("add", "--read-only", str(self.tmp / "missing")).returncode, 0)
+
     def test_the_hardening_flags_are_present_and_nothing_is_published_to_the_network(self):
         for flag in ("--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "--user \"$(id -u):$(id -g)\"", "--init",
                      "-p \"127.0.0.1:${1}:${1}\"", 'mount_arg "$DIR/scripts" /app readonly'):

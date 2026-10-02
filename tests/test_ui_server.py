@@ -217,8 +217,12 @@ class Security(UiBase):
             c.cookie = hd["set-cookie"].split(";")[0]
             t0 = time.time()
             while t.is_alive() and time.time() - t0 < 8:
-                c.raw("GET", "/api/state", None, {"X-Poll": "1"})  # polling must not count as activity
+                try:
+                    c.raw("GET", "/api/state", None, {"X-Poll": "1"})  # polling must not count as activity
+                except OSError:      # the server shut down while this very request was being accepted: exactly what the test waits for
+                    break
                 time.sleep(0.1)
+            t.join(timeout=5)
             self.assertFalse(t.is_alive(), "server should have shut itself down")
         finally:
             ui.IDLE_POLL = 15

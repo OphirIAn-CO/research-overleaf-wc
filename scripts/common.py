@@ -11,6 +11,7 @@ CLI:
   common.py add <path> --name N --relink        after moving/re-cloning a paper
   common.py doctor                              check every paper (folder, remote, bib, group)
   common.py paths                               print every registered paper folder (used by ui.sh to build the container mounts)
+  common.py folders add [--read-only] <folder>  share a folder with the web app (read-only: code and results it may read but never change)
   common.py rm <name>
   common.py default <name>
 """
@@ -157,6 +158,15 @@ def workspace_roots():
     return out
 
 
+def data_roots():
+    """Folders shared with the web app READ-ONLY (ui.json "data_roots"): the code and results of an analysis, which the app may read but never change."""
+    out = []
+    for r in (load("ui.json", {}) or {}).get("data_roots") or []:
+        if isinstance(r, str) and r.strip():
+            out.append(str(Path(r).expanduser().resolve()))
+    return out
+
+
 def inside(path, root):
     path, root = Path(path).resolve(), Path(root).resolve()
     return path == root or root in path.parents
@@ -213,25 +223,39 @@ def main(a):
         for p in reg["projects"].values():
             if not any(inside(p["path"], r) for r in roots):
                 print(p["path"])
+    elif a[:1] == ["ropaths"]:  # folders the web app container gets read-only
+        for r in data_roots():
+            print(r)
     elif a[:1] == ["folders"]:
         cur = load("ui.json", {}) or {}
-        roots = workspace_roots()
-        if a[1:2] == ["add"] and len(a) > 2:
-            new = str(Path(a[2]).expanduser().resolve())
+        roots, ro = workspace_roots(), data_roots()
+        readonly = "--read-only" in a
+        rest = [x for x in a[1:] if x != "--read-only"]
+        if rest[:1] == ["add"] and len(rest) > 1:
+            new = str(Path(rest[1]).expanduser().resolve())
             if not Path(new).is_dir():
                 sys.exit(f"not a folder: {new}")
-            if new not in roots:
-                roots.append(new)
-            cur["workspace_roots"] = roots
-            save("ui.json", cur)
-            print("shared with the web app:", new)
-        elif a[1:2] in (["rm"], ["remove"]) and len(a) > 2:
-            gone = str(Path(a[2]).expanduser().resolve())
+            if readonly:
+                if new not in ro:
+                    ro.append(new)
+                cur["data_roots"] = ro
+                save("ui.json", cur)
+                print("shared READ-ONLY with the web app (it can read the code and results there, never change them):", new)
+            else:
+                if new not in roots:
+                    roots.append(new)
+                cur["workspace_roots"] = roots
+                save("ui.json", cur)
+                print("shared with the web app:", new)
+        elif rest[:1] in (["rm"], ["remove"]) and len(rest) > 1:
+            gone = str(Path(rest[1]).expanduser().resolve())
             cur["workspace_roots"] = [r for r in roots if r != gone]
+            cur["data_roots"] = [r for r in ro if r != gone]
             save("ui.json", cur)
             print("no longer shared:", gone)
         else:
-            print("\n".join(roots) if roots else "(no folder is shared; papers registered with `common.py add` are still visible)")
+            lines = roots + [f"{r}  (read-only)" for r in ro]
+            print("\n".join(lines) if lines else "(no folder is shared; papers registered with `common.py add` are still visible)")
     elif a[:1] == ["rm"] and len(a) > 1:
         reg["projects"].pop(a[1], None)
         reg["default"] = reg["default"] if reg["default"] in reg["projects"] else next(iter(reg["projects"]), None)

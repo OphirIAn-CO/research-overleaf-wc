@@ -182,6 +182,28 @@ with `overleaf_projects` or `python3 scripts/common.py list|add|rm|default`.
    was done this session. See "Session memory" below. Never delete or
    overwrite prior entries — this file only grows.
 
+## Writing a section from the author's own results (a Discussion, a Results paragraph)
+
+Use this when the user wants new text grounded in their analysis, which can be anywhere on their computer
+(not only in the paper's folder, and not in Docker: you run locally and can read it directly).
+
+1. Resolve the paper (step 0), `overleaf_pull`. Ask the user where the analysis lives if it is not obvious
+   ("which folder holds the code and results for this paper?"). Read what they point to with `Read`/`Grep`/`Glob`
+   (result tables, logs, notebooks' output cells, the scripts that produced them). Do not run their code unless asked.
+   To make a folder part of the paper's searchable files for later (and for the web app):
+   `python3 <skill>/scripts/writing.py settings --paper NAME --link-folder PATH`; `writing.py files` lists what is readable.
+2. Read the paper itself first: `paper_query` for the Introduction (aims, research questions), Methods and Results (what was
+   measured, how it is named, the paper card's notation and tense), then the section you are about to write.
+3. Read the articles the user added (`paper_query` with `kind: "source"`) or the entries of `references.bib` for what the
+   Discussion must compare with. Cite only keys that exist in `references.bib`; a source that is not there goes through
+   "Search & cite a new paper" or the DOI flow, never as an invented `\cite`.
+4. Draft in the paper's voice, in the order the research questions were asked: main finding in one sentence, what explains it,
+   how it compares with the cited work, limitations, what follows. Every number comes from a file you read; say in your reply
+   which file and which rows or pages each one came from (not in the paper's text). What the data cannot support, or what only
+   the author can interpret, becomes a question for them, not a sentence. No em or en dashes.
+5. Show the draft to the user. Only after they agree, put it in the file with `Edit` (the section's place, `\label`s untouched),
+   then `overleaf_sync` when they ask to send it. If the section already has text, change it in place rather than replacing it.
+
 ## Implementing advisor/reviewer comments
 
 When the user brings a comment/correction from an advisor, thesis

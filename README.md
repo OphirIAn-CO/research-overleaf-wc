@@ -220,8 +220,9 @@ notes (text, Markdown), JSON, a notebook, or code (Python, R, MATLAB, Julia, SQL
   ("pages 3 to 4 · Methods", "rows 26 to 50"). Scanned PDFs have no text: the app says so.
 - **Code and results around the paper.** Without adding anything, the app also reads data and code files inside your paper's folder
   (tables, JSON, notebooks, scripts, notes; never `.env`, keys, hidden or build folders, or links). If your analysis lives elsewhere, list
-  its folders under **Your files > Code and results in other folders** (inside Docker the folder must be shared first with
-  `./ui.sh folders add <folder>`, then `./ui.sh down` and `./ui.sh up`).
+  its folders under **Your files > Code and results in other folders**. The app runs in Docker, which sees only what you share with it, so
+  share the folder first, **read-only** (the app can read the code and results, never change them):
+  `./ui.sh folders add --read-only ~/code/analysis`, then `./ui.sh down` and `./ui.sh up`.
 - **When a request uses them.** Never silently. By default ("when I mention them") a request uses your files when it names one
   (`rewrite the results using results.csv`), or talks about them ("based on my data", "check it against my files", the **Use my files** chip).
   Everyday words do not count: a file called `results.csv` is not named by "improve the results". The request card says how many parts go
@@ -230,7 +231,14 @@ notes (text, Markdown), JSON, a notebook, or code (Python, R, MATLAB, Julia, SQL
 - **Numbers from your files.** The check that stops a rewrite from inventing numbers accepts a number that stands in the parts that went
   with the request, and points it out in the answer ("Numbers that came from your files: 0.82. Check them against the source"). A number
   found nowhere is still refused. The model is told to copy numbers exactly, never to invent a value, and not to copy long stretches of an article.
-- **Claude Code** can read the same parts: `paper_query` with `kind: "source"` (added files) or `kind: "project"` (everything else).
+- **Claude Code (in your terminal) does not need Docker or sharing.** It runs on your computer and can read any folder you point it at, with its own
+  file tools, and through the same parts: `paper_query` with `kind: "source"` (added files) or `kind: "project"` (everything else). To make a
+  folder part of the paper's index for good: `python3 scripts/writing.py settings --paper NAME --link-folder ~/code/analysis`; see what is
+  readable with `writing.py files` (and `--parts FILE`). The web app and Claude Code share the same list.
+- **Which one writes a new Discussion?** The web app rewrites and improves text that already exists (a Discussion with a few notes in it, a
+  Results paragraph) using your files; it does not yet draft a section from nothing. Drafting a section from your results is something to ask
+  Claude Code (SKILL.md, "Writing a section from the author's own results"): it reads the results, the paper and the cited references, writes
+  the text into `main.tex` for you to approve, and sends it with the usual **Send to Overleaf**.
 
 **Sending to Overleaf, and why it sometimes says "Overleaf has newer changes".** If you (or a coauthor) edited the project in Overleaf since you last
 got the latest, Overleaf refuses a send. Your change is then a *saved change* that never arrived. The header counts these ("1 saved change not

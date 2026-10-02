@@ -191,7 +191,7 @@
       h('h3', { text: 'When a request may use them' }),
       h('div', { class: 'row' }, modeSel, h('span', { class: 'small secondary', text: 'Nothing goes to OpenAI unless a request uses it, and the request shows which parts.' })),
       h('h3', { text: 'Code and results in other folders' }),
-      h('p', { class: 'small secondary', text: 'If your analysis lives outside the Overleaf project, list its folders here (one full path per line). Inside Docker, the folder must be shared first: ./ui.sh folders add <folder>. Passwords, keys and hidden folders are never read.' }),
+      h('p', { class: 'small secondary', text: 'If your analysis lives outside the Overleaf project, list its folders here (one full path per line). Inside Docker, the folder must be shared first (read-only is enough, and safest): ./ui.sh folders add --read-only <folder>. Passwords, keys and hidden folders are never read.' }),
       folderBox, folderOut,
       guarded(h('button', { type: 'button', text: 'Save the folders' }), async () => {
         const r = await api.post('/api/files/folders', { paper: name, folders: folderBox.value.split('\n').map((x) => x.trim()).filter(Boolean) });

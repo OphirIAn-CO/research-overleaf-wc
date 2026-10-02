@@ -19,7 +19,9 @@
         ChatGPT correction pass for ONE passage -> a validated proposal (never edits files). While the paper's dry-run setting is on
         (default) this only prints the exact payload and a hash; send it with --send <hash> after you have read it.
   writing.py proposals [--paper P] | proposal <id> [--paper P]
-  writing.py settings [--paper P] [--dry-run on|off]
+  writing.py settings [--paper P] [--dry-run on|off] [--use-files auto|always|never] [--link-folder PATH] [--unlink-folder PATH]
+        --link-folder: let this paper read the code and results in a folder on this computer (nothing is copied or changed there).
+  writing.py files [--paper P] [--parts FILE]     the author's files this paper can read (added files, data, code, notes) and their parts
   writing.py stats [--paper P] [--days 30]       the Monitor page's numbers in a terminal
   writing.py doctor
 
@@ -32,7 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common  # noqa: E402
-from writing_core import book_eval, book_index, chunk_book, config, openai_client, paper_index, retrieve, revise, rule_cards, stats  # noqa: E402
+from writing_core import book_eval, book_index, chunk_book, config, files, openai_client, paper_index, retrieve, revise, rule_cards, stats  # noqa: E402
 
 COMMANDS = {}
 
@@ -202,7 +204,35 @@ def cmd_settings(args):
     name, proj = resolve_paper(args)
     if args.dry_run:
         config.set_paper_setting(proj, "dry_run", args.dry_run == "on")
-    print(json.dumps({"paper": name, **config.paper_settings(proj)}, indent=2))
+    if args.use_files:
+        config.set_paper_setting(proj, "use_files", args.use_files)
+    try:
+        if args.link_folder:
+            st = files.link_folder(proj, args.link_folder)
+            print(f"linked {st['path']}" + ("" if st["ok"] else f" ({st['note']})"))
+        if args.unlink_folder:
+            files.unlink_folder(proj, args.unlink_folder)
+            print(f"unlinked {args.unlink_folder}")
+    except files.FileProblem as e:
+        raise SystemExit(str(e))
+    print(json.dumps({"paper": name, **config.paper_settings(proj), "linked_folders": files.folders(proj)}, indent=2))
+
+
+@command("files")
+def cmd_files(args):
+    name, proj = resolve_paper(args)
+    paper_index.refresh(name, proj, trigger="manual", source="cli")
+    if args.parts:
+        for x in files.parts_of_file(name, proj, args.parts):
+            print(f"{x['id']}\n  {x['where']} (~{x['tokens']} tokens)\n  {x['preview']}")
+        return
+    rows = files.listing(name, proj)
+    if not rows:
+        print("no files besides the manuscript. Put articles and tables in references/, or link a folder: writing.py settings --link-folder PATH")
+    for f in rows:
+        print(f"{f['kind']:8} {f['parts']:3} parts  ~{int(f['tokens'] * 0.75):6} words  {f['file']}" + (f"   [{f['note']}]" if f.get("note") else ""))
+    for f in files.folders(proj):
+        print(f"folder   {'ok ' if f['ok'] else 'NO '}  {f['path']}" + (f"   [{f['note']}]" if f["note"] else ""))
 
 
 @command("stats")
@@ -274,6 +304,12 @@ def build_parser():
     p = add("settings")
     p.add_argument("--paper")
     p.add_argument("--dry-run", choices=["on", "off"])
+    p.add_argument("--use-files", choices=["auto", "always", "never"])
+    p.add_argument("--link-folder", metavar="PATH")
+    p.add_argument("--unlink-folder", metavar="PATH")
+    p = add("files")
+    p.add_argument("--paper")
+    p.add_argument("--parts", metavar="FILE", help="list the parts of one file")
     p = add("stats")
     p.add_argument("--paper")
     p.add_argument("--days", type=int, default=30)

@@ -367,3 +367,42 @@ class InTheCorrectionPass(ReviseBase):
         r = self.request("rewrite the results sentence using results.csv")
         self.assertNotIn("source_material", json.dumps(self.srv.requests[0]["body"]))
         self.assertEqual(r["proposal"]["sources"], [])
+
+
+class FromTheTerminal(FilesBase):
+    """Claude Code and the terminal read the same files on this computer, no Docker in between, and can link a folder without the web app."""
+
+    def cli(self, *args):
+        import subprocess
+        import sys
+        env = {**os.environ, "OVERLEAF_SKILL_HOME": str(common.HOME), "OLS_BROWSER": "off"}
+        return subprocess.run([sys.executable, str(Path(__file__).resolve().parent.parent / "scripts" / "writing.py"), *args, "--paper", self.name], capture_output=True, text=True, env=env, cwd=self.root)
+
+    def test_a_folder_is_linked_listed_and_unlinked_from_the_terminal(self):
+        other = Path(self._tmp.name) / "soil" / "analysis"
+        (other / "src").mkdir(parents=True)
+        (other / "src" / "model.py").write_text("def fit(x):\n    return x\n")
+        (other / "out").mkdir()
+        (other / "out" / "table2.csv").write_text("model,rmse\nA,0.81\nB,0.77\n")
+        r = self.cli("settings", "--link-folder", str(other))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"linked {other.resolve()}", r.stdout)
+        r = self.cli("files")
+        self.assertIn(str(other / "out" / "table2.csv"), r.stdout)
+        self.assertRegex(r.stdout, r"project\s+2 parts .*table2\.csv")
+        r = self.cli("files", "--parts", str(other / "out" / "table2.csv"))
+        self.assertIn("Summary of the table", r.stdout)
+        q = self.cli("query", "rmse of model", "--kind", "project", "--no-text")
+        self.assertIn("table2.csv", q.stdout)
+        r = self.cli("settings", "--unlink-folder", str(other))
+        self.assertNotIn(str(other / "out"), self.cli("files").stdout)
+
+    def test_a_folder_that_is_too_broad_or_missing_is_refused_with_the_reason(self):
+        for bad, word in (("/", "broad"), ("/usr/lib", "system"), (str(self.tmp / "nope"), "not a folder")):
+            r = self.cli("settings", "--link-folder", bad)
+            self.assertNotEqual(r.returncode, 0, bad)
+            self.assertIn(word, r.stderr + r.stdout)
+
+    def test_the_setting_for_when_requests_use_files(self):
+        r = self.cli("settings", "--use-files", "never")
+        self.assertIn('"use_files": "never"', r.stdout)

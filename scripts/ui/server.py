@@ -1274,14 +1274,10 @@ def api_files_folders(r):
     raw = r.body.get("folders")
     if not isinstance(raw, list) or len(raw) > 8:
         raise ApiError(400, "folders must be a list of at most 8 paths")
-    cleaned = []
-    for x in raw:
-        x = str(x or "").strip()
-        if x and x not in cleaned:
-            if len(x) > 500 or "\n" in x or "\0" in x:
-                raise ApiError(400, "that does not look like a folder path")
-            cleaned.append(x)
-    config.set_paper_setting(p, "data_folders", cleaned)
+    try:
+        files.set_folders(p, raw)
+    except files.FileProblem as e:
+        raise ApiError(400, str(e)) from None
     paper_index.refresh(n, p, trigger="files", source="web")
     return {"folders": files.folders(p), "files": [_file_view(f) for f in files.listing(n, p)]}
 
