@@ -36,6 +36,15 @@ PAGE = b"""<!doctype html><title>Stand-in site</title><body style="margin:0;font
 <button id=copy style="position:absolute;left:330px;top:260px;width:100px;height:40px"
   onclick="navigator.clipboard.writeText(document.getElementById('b').value)">Copy</button>
 </body>"""
+EDITOR = b"""<!doctype html><title>Editor</title><body><p>the editor is loading</p>
+<script>
+// like the real editor: the buttons are drawn a moment after the page has loaded
+setTimeout(() => {
+  const make = (text, id, disabled) => { const b = document.createElement('button'); b.id = id; b.innerHTML = text; b.disabled = !!disabled;
+    b.onclick = () => fetch('/log?pressed=' + id); document.body.append(b); };
+  make('Recompile from scratch', 'scratch'); make('<span>  Re</span><span>compile </span>', 'recompile');
+}, 600);
+</script></body>"""
 PICKY = b"""<!doctype html><title>Picky</title><body style="margin:0">
 <form method=post action="/login" style="margin:30px">
 <input type=email name=email id=e style="display:block;width:300px;height:30px;margin:10px">
@@ -90,6 +99,8 @@ class Site(BaseHTTPRequestHandler):
             return self._send(LOGIN)
         if u.path == "/picky":
             return self._send(PICKY)
+        if u.path == "/editor":
+            return self._send(EDITOR)
         if u.path == "/challenge":
             return self._send(CHALLENGE)
         if u.path == "/seen":   # for the browser demo: what the page has reported so far
@@ -192,6 +203,15 @@ class BuiltInBrowser(unittest.TestCase):
         Site.log.clear()
         self.b.input("quillbot", [{"t": "down", "x": 60, "y": 280}, {"t": "up", "x": 60, "y": 280}])
         self.assertEqual(wait_for(lambda: Site.log[-1] if Site.log else None), {"b": "replaced"})
+
+    def test_recompile_presses_only_the_recompile_button_and_only_once_it_exists(self):
+        self.b.open("overleaf", self.url + "editor", 1100, 700, force=True)
+        self.assertEqual(self.b.recompile("overleaf"), {"clicked": False}, "the editor has not drawn its buttons yet")
+        self.assertTrue(wait_for(lambda: self.b.recompile("overleaf")["clicked"], 6))
+        self.assertTrue(wait_for(lambda: Site.log, 3))
+        self.assertEqual(Site.log, [{"pressed": "recompile"}], "not 'Recompile from scratch'")
+        with self.assertRaises(webview.BrowserError):                            # a site that is not open has nothing to press
+            webview.Browsers(self.tmp / "none", exe=chromium(), allow_private=True).recompile("overleaf")
 
     def test_what_the_page_copied_with_its_own_copy_button_can_be_read_back(self):
         self.b.open("quillbot", self.url, 1100, 700, force=True)
@@ -401,6 +421,10 @@ class BrowserContainer(unittest.TestCase):
         self.assertIn("running", self.remote.status()["sites"]["overleaf"])
         self.remote.close("overleaf")
         self.assertFalse(self.remote.state("overleaf")["running"])
+
+    def test_recompile_goes_through_the_service(self):
+        self.remote.open("overleaf", self.url + "editor", 1100, 700, force=True)
+        self.assertTrue(wait_for(lambda: self.remote.recompile("overleaf")["clicked"], 6))
 
     def test_wrong_token_and_unknown_calls_are_refused(self):
         bad = webview.RemoteBackend(f"http://127.0.0.1:{self.svc.server_address[1]}", "x" * 40)

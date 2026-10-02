@@ -62,6 +62,14 @@ class FakeBrowser:
         self.calls.append(("signin", site, email, password))
         return {"filled": self.filled, "failed": self.failed}
 
+    def state(self, site):
+        return {"running": site in self.up, "url": self.up.get(site, "")}
+
+    def recompile(self, site):
+        self.calls.append(("recompile", site))
+        self.recompile_tries = getattr(self, "recompile_tries", 0) + 1
+        return {"clicked": self.recompile_tries > getattr(self, "recompile_after", 0)}
+
     def close(self, site):
         self.up.pop(site, None)
         return {"ok": True}

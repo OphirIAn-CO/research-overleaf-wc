@@ -5,7 +5,7 @@ QuillBot and Overleaf pages run third-party code, so Chromium never runs in the 
 OpenAI key, the Overleaf token, the papers or the book. It holds only the two sign-in profile folders. The web app calls it over a private
 Docker network with a shared token (`X-Browser-Token`); nothing is published on the computer's network.
 
-  POST /call/<name>       JSON arguments -> {"result": ...} or {"error": "..."}   (status, open, resize, input, nav, selection, clipboard, insert, signin, state, close)
+  POST /call/<name>       JSON arguments -> {"result": ...} or {"error": "..."}   (status, open, resize, input, nav, selection, clipboard, insert, signin, recompile, state, close)
   GET  /frame/<site>      ?after=<seq>&wait=<seconds> -> the newest picture (JPEG, X-Seq header) once it differs from <seq>, else 204
   GET  /healthz           "ok"
 """
@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from writing_core import config, webview  # noqa: E402
 
 MAX_BODY = 2 << 20
-CALLS = ("status", "open", "resize", "input", "nav", "selection", "clipboard", "insert", "signin", "state", "close")
+CALLS = ("status", "open", "resize", "input", "nav", "selection", "clipboard", "insert", "signin", "recompile", "state", "close")
 
 
 class Handler(BaseHTTPRequestHandler):

@@ -102,11 +102,22 @@
       loadOverview();
       await window.OLS.loadState();
       if (window.OLS.panes && window.OLS.panes.refreshText) window.OLS.panes.refreshText();
-      if (r.push && r.push.level === 'ok' && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend();
+      if (r.push && r.push.sent && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend(r.push);
     });
+    // Overleaf's editor does not follow a send by itself: the page that is open keeps showing the old text until it is loaded again, and so does the PDF until Recompile
+    const sentNote = (r) => {
+      const panes = window.OLS.panes;
+      if (r.pane && r.pane.reloading) return h('p', { class: 'small muted', text: 'The Overleaf pane is reloading and pressing Recompile. In a few seconds it shows your new text and the PDF.' });
+      if (panes && panes.has && panes.has('overleaf')) {
+        return h('div', { class: 'row tight' }, h('span', { class: 'small muted', text: 'Overleaf shows a sent change once its page is loaded again.' }),
+          h('button', { type: 'button', class: 'small', text: 'Show Overleaf', onclick: () => panes.show('overleaf') }));
+      }
+      return h('p', { class: 'small muted', text: 'Overleaf shows a sent change once its page is loaded again: reload the Overleaf window.' });
+    };
     const gitNotice = (r) => {
       if (r.friendly) return notice('warn', r.friendly, ' ', h('a', { href: '#/settings', text: 'Open Settings' }));
       const box = h('div', { class: 'stack' }, notice(r.level === 'bad' ? 'bad' : r.level === 'warn' ? 'warn' : 'ok', r.summary || r.output));
+      if (r.sent && r.level === 'ok') box.append(sentNote(r));
       if (r.needs === 'latest') box.append(h('div', { class: 'row' }, catchUp(box)));
       if (r.output && r.output !== r.summary) box.append(h('details', null, h('summary', { text: 'Details' }), h('pre', { class: 'small payload', text: r.output })));
       return box;
@@ -128,7 +139,7 @@
       loadOverview();
       await window.OLS.loadState();
       if (window.OLS.panes && window.OLS.panes.refreshText) window.OLS.panes.refreshText();
-      if (action === 'sync' && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend();
+      if (action === 'sync' && r.sent && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend(r);
     });
     loadOverview();
     const head = h('header', { class: 'chat-head' }, h('div', { class: 'grow' }, h('h1', { text: paper }), sub),
@@ -424,7 +435,7 @@
             h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Send to Overleaf' }), async () => {
               const r = await api.post('/api/papers/sync', { name: paper, message: 'Writing assistant: ' + (p.instruction || '').slice(0, 60) });
               showGit(notices, r);
-              if (r.level === 'ok' && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend();
+              if (r.sent && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend(r);
             }))));
         }
         return;
@@ -478,7 +489,7 @@
         toast('Saved in ' + r.files.join(', '));
         if (r.push) showGit(into, r);
         if (window.OLS.panes && window.OLS.panes.refreshText) window.OLS.panes.refreshText(true);
-        if (r.push && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend();
+        if (r.push && r.push.sent && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend(r.push);
         await window.OLS.loadState();
         await reload();
         return r;

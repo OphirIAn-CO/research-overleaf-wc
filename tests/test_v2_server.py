@@ -98,14 +98,15 @@ class CatchUp(UiBase):
         ui.overleaf_mcp.tool_sync = lambda a: self.calls.append("sync") or "committed\npush: ok"
         st, r = self.c.post("/api/papers/catchup", {"name": "alpha", "message": "Writing assistant: update"})
         self.assertEqual(st, 200)
-        self.assertEqual(self.calls, ["pull", "sync"])
-        self.assertEqual((r["pull"]["level"], r["push"]["level"], r["push"]["summary"]), ("ok", "ok", "Sent to Overleaf."))
+        self.assertEqual(self.calls, ["sync", "pull", "sync"], "what is waiting is saved first, then Overleaf's latest comes in, then it is sent")
+        self.assertEqual((r["pull"]["level"], r["push"]["level"]), ("ok", "ok"))
+        self.assertTrue(r["push"]["sent"])
 
     def test_when_the_two_sides_cannot_be_joined_it_stops_before_sending(self):
         self.pull_says = "pull failed: fatal: Not possible to fast-forward, aborting."
         st, r = self.c.post("/api/papers/catchup", {"name": "alpha"})
-        self.assertEqual((r["pull"]["needs"], r["push"]), ("claude", None))
-        self.assertEqual(self.calls, ["pull"], "nothing was sent")
+        self.assertEqual((r["pull"]["needs"], r["push"]), ("latest", None), "the plain pull offers the catch-up; only a real clash goes to Claude")
+        self.assertEqual(self.calls, ["sync", "pull"], "nothing was sent")
 
     def test_without_the_sign_in_it_says_so_and_sends_nothing(self):
         self.pull_says = "pull failed: fatal: could not read Password for 'https://git@git.overleaf.com'"
@@ -125,8 +126,12 @@ class PlainGit(unittest.TestCase):
         r = pg("pull", "Updating 1a2b3c4..5d6e7f8\nFast-forward\n main.tex       | 4 ++--\n refs/new.bib   | 10 ++++++++++\n 2 files changed, 12 insertions(+), 2 deletions(-)")
         self.assertEqual((r["level"], r["summary"]), ("ok", "Got the latest from Overleaf: main.tex, refs/new.bib."))
         r = pg("pull", "pull failed: fatal: Not possible to fast-forward, aborting.")
-        self.assertEqual((r["level"], r["needs"]), ("warn", "claude"))
+        self.assertEqual((r["level"], r["needs"]), ("warn", "latest"), "both sides changed: the catch-up joins them safely")
         self.assertNotIn("fatal", r["summary"])
+        r = pg("pull", "pull failed: could not join the changes in Overleaf with the ones saved here: CONFLICT (content): Merge conflict in main.tex")
+        self.assertEqual((r["level"], r["needs"]), ("warn", "claude"))
+        self.assertIn("Nothing was overwritten", r["summary"])
+        self.assertEqual(pg("pull", "joined: Successfully rebased and updated refs/heads/master.")["level"], "ok")
         self.assertEqual(pg("pull", "pull failed: fatal: unable to access 'https://git.overleaf.com/x/': Could not resolve host")["level"], "bad")
 
     def test_status_and_sync_sentences(self):

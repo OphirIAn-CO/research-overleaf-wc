@@ -545,6 +545,10 @@ class _Session:
             (filled if ok else failed).append(kind)
         return {"filled": filled, "failed": failed}
 
+    def _do_recompile(self):
+        """Presses the page's own Recompile button when it is on screen. -> {clicked: bool}"""
+        return {"clicked": bool(self._js(RECOMPILE_JS))}
+
     def _do_close(self):
         self._stop = True
         return {"ok": True}
@@ -592,6 +596,15 @@ FOCUS_FIELD_JS = """(kind) => {
   return true;
 }"""
 
+
+RECOMPILE_JS = """() => {
+  const shown = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+  for (const el of document.querySelectorAll('button, [role="button"]')) {
+    const t = String(el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+    if ((t === 'recompile' || t === 'compile') && shown(el) && !el.disabled && el.getAttribute('aria-disabled') !== 'true') { el.click(); return true; }
+  }
+  return false;
+}"""
 
 KEPT_JS = """(n) => { const el = document.activeElement; return !!el && el.tagName === 'INPUT' && el.value.length === n; }"""
 
@@ -724,6 +737,9 @@ class Browsers:
     def signin(self, site, email="", password=""):
         return self._live(site).call("signin", str(email or ""), str(password or ""))
 
+    def recompile(self, site):
+        return self._live(site).call("recompile")
+
     def state(self, site):
         s = self.sessions.get(self._site(site))
         return s.state() if s else {"running": False}
@@ -765,7 +781,7 @@ class Unavailable:
 
     def _no(self, *a, **k):
         raise BrowserError(self.reason)
-    open = resize = input = nav = selection = clipboard = insert = signin = next_frame = close = state = _no
+    open = resize = input = nav = selection = clipboard = insert = signin = recompile = next_frame = close = state = _no
 
 
 class RemoteBackend:
@@ -831,6 +847,9 @@ class RemoteBackend:
 
     def signin(self, site, email="", password=""):
         return self._call("signin", site=site, email=email, password=password)
+
+    def recompile(self, site):
+        return self._call("recompile", site=site)
 
     def state(self, site):
         return self._call("state", site=site)

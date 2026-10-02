@@ -533,7 +533,13 @@
     await renderArea(true);
     toast(TITLES[site] + ' now opens in a window beside the app. You can change this in Settings.');
   }
-  async function afterSend() { const m = A.mounted.overleaf; if (m) { try { await m.api.reload(); } catch (e) { /* it will show on the next reload */ } } }
+  /* After something was sent. The server has already reloaded the paper's Overleaf page in the built-in browser (and pressed Recompile), even when its tab is not showing;
+     only when it could not tell is the visible pane reloaded from here. A window of the author's own browser cannot be reloaded from the app. */
+  async function afterSend(r) {
+    if (r && r.pane && r.pane.reloading) return;
+    const m = A.mounted.overleaf;
+    if (m) { try { await m.api.reload(); } catch (e) { /* it will show on the next reload */ } }
+  }
   async function knows(paper) { try { await addressesFor(paper || S.paper); } catch (e) { /* no panes known */ } return has('quillbot'); }
 
   window.OLS.panes = { openBeside, framePane, bar, onRoute, setTargetFromThread, refreshText, has, sendText, takeFrom, afterSend, knows, copyAsync, useWindow, show };

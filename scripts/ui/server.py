@@ -215,13 +215,17 @@ def api_set_active(r):
 _AUTH_MARKERS = ("could not read password", "terminal prompts disabled", "authentication failed", "invalid username or password", "could not read username")
 
 
-def git_action(name, action, message=None):
+def git_action(name, action, message=None, join=False, push=True):
     """pull | status | sync through the same code Claude uses. -> {output, [hint, friendly]}; the index follows a pull or sync."""
     paper_ref(name)
     args = {"repo_path": name, "_source": "ui"}
     fn = {"pull": overleaf_mcp.tool_pull, "status": overleaf_mcp.tool_status, "sync": overleaf_mcp.tool_sync}[action]
     if action == "sync":
         args["message"] = str(message or "Update via the Overleaf skill web app")[:200]
+        if not push:
+            args["push"] = False
+    if action == "pull" and join:
+        args["join"] = True
     out = fn(args)
     if any(m in out.lower() for m in _AUTH_MARKERS):
         have = (config.data_dir() / "overleaf_git.json").exists()
@@ -234,7 +238,70 @@ def git_action(name, action, message=None):
             paper_index.refresh(n, p, trigger="after_pull" if action == "pull" else "after_sync", source="web")
         except Exception:  # noqa: BLE001
             pass
-    return {"output": out, **plain_git(action, out)}
+    res = {"output": out, **plain_git(action, out)}
+    if action == "sync" and res.get("sent"):
+        try:
+            res.update(_remote_has_it(common.resolve(name)[1]["path"]))
+        except Exception:  # noqa: BLE001  (the check is a bonus: a push that git called ok is still reported as sent)
+            pass
+        if res.get("verified") is True:
+            res["summary"] = f"Sent to Overleaf. Checked: Overleaf now has your change ({res['commit']})."
+        elif res.get("verified") is False:
+            res.update(level="warn", summary="Overleaf took your change, but its newest version is different now (was it edited there at the same moment?). Press \"Get latest from Overleaf\" and check.")
+    return res
+
+
+def _remote_has_it(path):
+    """After a push git called ok: ask Overleaf which version it has now and compare. -> {commit, [verified]}; no 'verified' when Overleaf could not be asked."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+    def git(*a):
+        r = subprocess.run(["git", "-C", path, *a], capture_output=True, text=True, timeout=25, env=env)
+        return r.stdout.strip() if r.returncode == 0 else ""
+
+    head, branch = git("rev-parse", "HEAD"), git("rev-parse", "--abbrev-ref", "HEAD")
+    if not head or not branch:
+        return {}
+    out = {"commit": head[:7]}
+    url = git("remote", "get-url", "--push", "origin")
+    try:
+        theirs = git("ls-remote", url or "origin", f"refs/heads/{branch}").split()
+    except subprocess.TimeoutExpired:
+        return out
+    if theirs:
+        out["verified"] = theirs[0] == head
+    return out
+
+
+REFRESH_WAIT = 1.5      # seconds between looks for the Recompile button after the page is loaded again
+
+
+def refresh_overleaf(app, name):
+    """Overleaf's editor does not follow a push by itself: a page that was open before still shows the old text, and so does its PDF. Reload the paper's Overleaf
+    page in the built-in browser (whether or not its tab is on screen) and press Recompile once the editor is back. -> True when there was such a page."""
+    try:
+        if not config.ui_cfg().get("builtin_overleaf", True):
+            return False
+        n, p = common.resolve(name)
+        b = app.browser()
+        st = b.state("overleaf")
+        pid = panes.overleaf_project_id(p)
+        if not st.get("running") or not pid or f"/project/{pid}" not in (st.get("url") or ""):
+            return False                                  # nothing open, or open on something else: nothing to bring up to date
+    except Exception:  # noqa: BLE001
+        return False
+
+    def work():
+        try:
+            b.nav("overleaf", "reload")
+            for _ in range(24):                           # the editor needs some seconds to come back; press Recompile as soon as its button exists
+                time.sleep(REFRESH_WAIT)
+                if b.recompile("overleaf").get("clicked"):
+                    return
+        except Exception:  # noqa: BLE001
+            pass
+    threading.Thread(target=work, daemon=True, name="overleaf-refresh").start()
+    return True
 
 
 _STATUS_WORDS = {"M": "edited", "A": "new", "D": "deleted", "R": "renamed", "?": "new", "U": "in conflict"}
@@ -246,11 +313,17 @@ def plain_git(action, out):
     first = next((ln for ln in out.splitlines() if ln.strip()), "")
     if action == "pull":
         if low.startswith("pull failed"):
-            if any(k in low for k in ("fast-forward", "diverg", "conflict", "overwritten")):
+            if "could not join" in low:
+                return {"summary": "The same lines were changed in Overleaf and here, so I could not join them. Nothing was overwritten or lost. Ask Claude to merge them safely, or choose which version to keep.", "level": "warn", "needs": "claude"}
+            if any(k in low for k in ("fast-forward", "diverg")):
+                return {"summary": "Overleaf and this computer both have changes. Press the button to bring Overleaf's latest in and put your saved changes on top of it; if the same lines were changed on both sides it stops and tells you.", "level": "warn", "needs": "latest"}
+            if any(k in low for k in ("conflict", "overwritten")):
                 return {"summary": "Overleaf and this computer both have changes, and I did not mix them. Ask Claude to merge them safely; it never overwrites either side.", "level": "warn", "needs": "claude"}
             return {"summary": "I could not get the latest from Overleaf: " + first.replace("pull failed:", "").strip()[:200], "level": "bad", "needs": None}
         if "already up to date" in low:
             return {"summary": "You already have the latest from Overleaf.", "level": "ok", "needs": None}
+        if low.startswith("joined:"):
+            return {"summary": "Got the latest from Overleaf and put the changes saved here on top of it. Nothing was overwritten.", "level": "ok", "needs": None}
         files = re.findall(r"^\s*(\S.*?)\s+\|\s+\d+", out, re.M)
         more = "…" if len(files) > 6 else ""
         return {"summary": "Got the latest from Overleaf" + (": " + ", ".join(files[:6]) + more if files else "") + ".", "level": "ok", "needs": None}
@@ -265,9 +338,11 @@ def plain_git(action, out):
             return {"summary": "Nothing to send: everything is already in Overleaf.", "level": "ok", "needs": None}
         if low.startswith("commit failed"):
             return {"summary": "I could not prepare the changes for Overleaf: " + first[:200], "level": "bad", "needs": None}
+        if low.startswith("committed") and "push:" not in out:
+            return {"summary": "Saved here, not sent yet.", "level": "ok", "needs": None}
         push = out.split("push:", 1)[1].strip() if "push:" in out else ""
         if push.startswith("ok"):
-            return {"summary": "Sent to Overleaf.", "level": "ok", "needs": None}
+            return {"summary": "Sent to Overleaf." if not low.startswith("nothing new to save") else "Sent to Overleaf, including changes saved earlier that had not been sent.", "level": "ok", "needs": None, "sent": True}
         if any(k in push.lower() for k in ("rejected", "fetch first", "non-fast-forward", "behind")):
             return {"summary": "Overleaf has newer changes, so it did not accept this yet. Press \"Get latest from Overleaf\", then send again.", "level": "warn", "needs": "latest"}
         return {"summary": "Your changes are saved here but could not be sent: " + (push.splitlines() or [""])[0][:200], "level": "bad", "needs": None}
@@ -275,17 +350,27 @@ def plain_git(action, out):
 
 
 def api_catchup(r):
-    """'Overleaf has newer changes': get the latest, then send again, in one go. Stops with the reason when the two sides cannot be joined safely."""
-    name = r.body.get("name", "")
-    pull = git_action(name, "pull")
-    if pull.get("hint") or pull.get("needs") == "claude" or pull.get("level") == "bad":
+    """'Overleaf has newer changes': save what is waiting here, bring Overleaf's latest in underneath it, then send, in one go. Nothing is overwritten on either side;
+    when the same lines were changed in both places it stops before sending and says so."""
+    name, msg = r.body.get("name", ""), r.body.get("message")
+    saved = git_action(name, "sync", msg, push=False)           # first a saved change, so joining the two sides can never lose it
+    if saved.get("hint") or saved.get("level") == "bad":
+        return {"pull": saved, "push": None}
+    pull = git_action(name, "pull", join=True)
+    if pull.get("hint") or pull.get("level") != "ok":            # anything but a clean join stops here, before anything is sent
         return {"pull": pull, "push": None}
-    return {"pull": pull, "push": git_action(name, "sync", r.body.get("message"))}
+    push = git_action(name, "sync", msg)
+    if push.get("sent"):
+        push["pane"] = {"reloading": refresh_overleaf(r.app, name)}
+    return {"pull": pull, "push": push}
 
 
 def api_git(r, action):
     (name,) = need(r.body, "name")
-    return git_action(name, action, r.body.get("message"))
+    res = git_action(name, action, r.body.get("message"))
+    if res.get("sent"):
+        res["pane"] = {"reloading": refresh_overleaf(r.app, name)}     # the open Overleaf page would otherwise keep showing the old text
+    return res
 
 
 def api_paper_outline(r):
@@ -1045,6 +1130,8 @@ def api_proposal_approve(r):
         prop = revise.get_proposal(p, pid)
         what = ", ".join(taxonomy.label(x) for x in prop.get("part") or []) or "text"
         res["push"] = git_action(n, "sync", f"Writing assistant: improve {what}")
+        if res["push"].get("sent"):
+            res["push"]["pane"] = {"reloading": refresh_overleaf(r.app, n)}
         if cid and "hint" not in res["push"] and res["push"].get("level") == "ok":      # only when Overleaf really took it
             try:
                 chat.append(p, cid, "assistant", "note", "Sent to Overleaf.", proposal=pid)
@@ -1098,13 +1185,16 @@ def api_overview(r):
     """Cheap, local facts for the chat header: what is waiting to be sent, and when Overleaf was last asked."""
     n, p = paper_ref(r.arg("paper", ""))
     rows = pending_files(p)
+    unsent = overleaf_mcp.unsent_commits(p["path"])       # saved here, but Overleaf does not have them (a rejected send leaves them behind)
     fh = Path(p["path"]) / ".git" / "FETCH_HEAD"
     last = fh.stat().st_mtime if fh.exists() else None
+    bits = []
     if rows:
-        sentence = f"{len(rows)} file{'s' if len(rows) != 1 else ''} changed here, not sent yet"
-    else:
-        sentence = "Nothing waiting to be sent to Overleaf"
-    return {"paper": n, "pending": rows[:30], "pending_count": len(rows), "sentence": sentence, "last_checked": last, "index": paper_index.peek(p)}
+        bits.append(f"{len(rows)} file{'s' if len(rows) != 1 else ''} changed here, not sent yet")
+    if unsent:
+        bits.append(f"{unsent} saved change{'s' if unsent != 1 else ''} not in Overleaf yet")
+    sentence = ", ".join(bits) if bits else "Nothing waiting to be sent to Overleaf"
+    return {"paper": n, "pending": rows[:30], "pending_count": len(rows), "unsent": unsent, "sentence": sentence, "last_checked": last, "index": paper_index.peek(p)}
 
 
 def _panes_settings(r):

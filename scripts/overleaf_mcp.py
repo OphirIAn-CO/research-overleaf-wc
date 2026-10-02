@@ -62,11 +62,31 @@ def run_git(repo, *args):
     return r.returncode, r.stdout.strip(), r.stderr.strip()
 
 
+def unsent_commits(repo):
+    """How many saved changes (commits) this computer has that Overleaf does not: they are not in the working tree status any more, so a clean tree proves nothing."""
+    for upstream in ("@{u}", "origin/" + (run_git(repo, "rev-parse", "--abbrev-ref", "HEAD")[1] or "master")):
+        code, out, _ = run_git(repo, "rev-list", "--count", upstream + "..HEAD")
+        if code == 0 and out.isdigit():
+            return int(out)
+    return 0
+
+
+DIVERGED = ("not possible to fast-forward", "diverg", "cannot fast-forward")
+
+
 def tool_pull(args):
+    """Get the latest from Overleaf without ever overwriting either side. With join=true (the author asked to catch up) and saved changes here that Overleaf
+    does not have, they are put on top of Overleaf's newest version; if the same lines were changed on both sides it stops, undoes the attempt and says so."""
     repo, err = resolve_repo(args)
     if err:
         return err
     code, out, err = run_git(repo, "pull", "--ff-only")
+    if code != 0 and args.get("join") and any(k in (err + out).lower() for k in DIVERGED):
+        code, out2, err2 = run_git(repo, "pull", "--rebase", "--no-autostash")
+        if code != 0:
+            run_git(repo, "rebase", "--abort")        # nothing is left half-done
+            return f"pull failed: could not join the changes in Overleaf with the ones saved here: {err2 or out2}"
+        return "joined: " + (out2 or "your saved changes were put on top of Overleaf's newest version")
     if code != 0:
         return f"pull failed: {err or out}"
     return out or "already up to date"
@@ -84,6 +104,11 @@ JUNK = (".aux", ".log", ".out", ".toc", ".fls", ".fdb_latexmk", ".bbl", ".bcf", 
         ".synctex.gz", ".lof", ".lot", ".nav", ".snm", ".vrb", ".pdf")
 
 
+def _push(repo):
+    code, out, err = run_git(repo, "push")
+    return "ok" if code == 0 else (err or out)
+
+
 def tool_sync(args):
     repo, err = resolve_repo(args)
     if err:
@@ -91,8 +116,14 @@ def tool_sync(args):
     message = args.get("message") or "Update via MCP"
     push = args.get("push", True)
     code, out, err = run_git(repo, "status", "--short")
+    waiting = unsent_commits(repo)
+
+    def only_push(note=""):
+        # nothing new to save, but earlier saved changes never reached Overleaf (a rejected push leaves them here): send those
+        return f"nothing new to save; {waiting} earlier saved change{'s' if waiting != 1 else ''} had not been sent to Overleaf yet{note}\npush: {_push(repo)}"
+
     if not out:
-        return "nothing to sync"
+        return only_push() if push and waiting else "nothing to sync"
     # never push LaTeX build output that is not already tracked (Overleaf compiles its own)
     _, new, _ = run_git(repo, "ls-files", "--others", "--exclude-standard")  # before staging
     junk = [f for f in new.splitlines() if f.endswith(JUNK)]
@@ -101,14 +132,13 @@ def tool_sync(args):
         run_git(repo, "reset", "-q", "--", f)
     skipped = f"\n(skipped {len(junk)} untracked build files)" if junk else ""
     if run_git(repo, "diff", "--cached", "--quiet")[0] == 0:
-        return "nothing to sync" + skipped
+        return only_push(skipped) if push and waiting else "nothing to sync" + skipped
     code, out, err = run_git(repo, "commit", "-m", message)
     if code != 0:
         return f"commit failed: {out or err}"
     result = f"committed: {out}{skipped}"
     if push:
-        code, out2, err2 = run_git(repo, "push")
-        result += f"\npush: {'ok' if code == 0 else (err2 or out2)}"
+        result += f"\npush: {_push(repo)}"
     return result
 
 

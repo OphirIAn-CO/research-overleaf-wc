@@ -119,6 +119,11 @@ class RealBrowser(unittest.TestCase):
         self.b.input("overleaf", [{"t": "key", "key": "Enter"}])
         self.assertEqual(wait_for(lambda: Site.posts[-1] if Site.posts else None), {"email": "me@example.org", "password": "pw one"})
 
+    def test_recompile_is_pressed_in_the_real_browser_too(self):
+        self.open("editor", site="overleaf")
+        self.assertTrue(wait_for(lambda: self.b.recompile("overleaf")["clicked"], 8))
+        self.assertEqual(wait_for(lambda: Site.log[-1] if Site.log else None), {"pressed": "recompile"})
+
     def test_back_forward_reload_stop_and_home(self):
         self.open()
         self.b.next_frame("quillbot", -1, 2)                                      # somebody is looking, so the address is kept up to date
