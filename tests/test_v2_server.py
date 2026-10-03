@@ -70,8 +70,12 @@ class FriendlySignIn(UiBase):
 
     def test_a_refused_token_says_so(self):
         common.save("overleaf_git.json", {"token": "olp_abcdefgh1234"})
+        from writing_core import overleaf_auth
+        old = overleaf_auth._git
+        overleaf_auth._git = lambda path, *args, stdin=None, timeout=40: (0, "password=olp_abcdefgh1234\n", "") if args[0] == "credential" else (128, "", "fatal: Authentication failed for 'x'")
+        self.addCleanup(setattr, overleaf_auth, "_git", old)
         st, r = self.c.post("/api/papers/pull", {"name": "alpha"})
-        self.assertIn("not accepted", r["friendly"])
+        self.assertIn("refused it", r["friendly"])
 
 
 class CatchUp(UiBase):

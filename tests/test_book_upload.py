@@ -78,7 +78,13 @@ class Upload(UiBase):
         s.sendall((f"POST /api/book/upload?name=cut.pdf HTTP/1.0\r\nHost: 127.0.0.1:{self.c.port}\r\nCookie: {self.c.cookie}\r\nX-Requested-With: ols\r\n"
                    "Content-Type: application/pdf\r\nContent-Length: 5000\r\n\r\n%PDF-1.4 only a little").encode())
         s.shutdown(socket.SHUT_WR)
-        reply = s.recv(4096).decode("latin-1")
+        chunks = []
+        while True:                                  # the server sends the headers and the body separately: read until it closes
+            part = s.recv(4096)
+            if not part:
+                break
+            chunks.append(part)
+        reply = b"".join(chunks).decode("latin-1")
         s.close()
         self.assertIn("400", reply.split("\r\n")[0])
         self.assertIn("cut off", reply)

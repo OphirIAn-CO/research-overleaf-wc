@@ -7,6 +7,18 @@
 
   const badge = (ok, yes, no) => h('span', { class: 'badge ' + (ok ? 'ok' : 'warn'), text: ok ? yes : no });
   function result(box, r) { clear(box).append(notice(r.ok ? 'ok' : 'bad', r.message)); }
+  // The Overleaf test says which of several different problems it is, what to try, and for a password written into the paper's address offers to remove it.
+  function gitResult(box, r, paper, again) {
+    const kids = [r.message.length < 100 ? h('strong', { text: r.message }) : h('p', { text: r.message })];       // a long explanation is read, not shouted
+    if ((r.steps || []).length) kids.push(h('ul', { class: 'small' }, r.steps.map((x) => h('li', { text: x }))));
+    if (r.fix === 'clean_address') {
+      kids.push(h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Remove it from the address' }), async () => {
+        const x = await api.post('/api/papers/clean-address', { paper });
+        toast('Done'); await again(); return x;
+      })));
+    }
+    clear(box).append(notice(r.ok ? 'ok' : 'bad', ...kids));
+  }
 
   const slug = (name) => (name.replace(/\.pdf$/i, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'handbook');
 
@@ -131,7 +143,7 @@
       h('p', { class: 'small secondary', text: 'Lets this app get the latest from Overleaf and send your changes. In Overleaf: Account Settings, then Git Integration, then create a token.' }),
       h('label', { class: 'field' }, h('span', { text: 'Overleaf Git token' }), glKey),
       h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Save' }), async () => { await api.post('/api/secrets/git', { token: glKey.value }); glKey.value = ''; toast('Saved'); window.OLS.route(); }),
-        paper ? guarded(h('button', { type: 'button', text: 'Test with ' + paper }), async () => { clear(glOut).append(busy('Asking Overleaf...')); result(glOut, await api.post('/api/test/git', { paper })); }) : null), glOut);
+        paper ? guarded(h('button', { type: 'button', text: 'Test with ' + paper }), async function testGit() { clear(glOut).append(busy('Asking Overleaf...')); gitResult(glOut, await api.post('/api/test/git', { paper }), paper, testGit); }) : null), glOut);
 
     const wm = h('input', { type: 'text', value: c.cleaner.url || '', placeholder: 'http://host.docker.internal:PORT', 'aria-label': 'Text-cleaning service address', class: 'grow' });
     const wmOut = h('div');

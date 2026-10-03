@@ -33,8 +33,8 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (activity, book_index, chat, chunk_book, config, draft, events, files, gitmerge, health, latex_mask, latexbuild, library, openai_client, panes, paper_index, preferences,  # noqa: E402
-                          retrieve, review, revise, rule_cards, stats, taxonomy, watermark, webview)
+from writing_core import (activity, book_index, chat, chunk_book, config, draft, events, files, gitmerge, health, latex_mask, latexbuild, library, openai_client, overleaf_auth, panes, paper_index,  # noqa: E402
+                          preferences, retrieve, review, revise, rule_cards, stats, taxonomy, watermark, webview)
 
 STATIC = Path(__file__).resolve().parent / "static"
 FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
@@ -239,9 +239,11 @@ def git_action(name, action, message=None, join=False, push=True, paths=None):
     out = fn(args)
     if any(m in out.lower() for m in _AUTH_MARKERS):
         have = (config.data_dir() / "overleaf_git.json").exists()
-        return {"output": out, "hint": "token", "friendly": (
-            "Overleaf did not accept the sign-in. Your Overleaf Git token is not accepted: create a new one in Overleaf (Account Settings, Git Integration) and paste it in Settings."
-            if have else "This app is not signed in to Overleaf yet. In Settings, paste your Overleaf Git token once (Overleaf: Account Settings, Git Integration, create a token).")}
+        if not have:
+            return {"output": out, "hint": "token", "friendly": "This app is not signed in to Overleaf yet. In Settings, paste your Overleaf Git token once (Overleaf: Account Settings, Git Integration, create a token)."}
+        why = _git_diagnosis(name)
+        return {"output": out, "hint": "token", "friendly": ((why["message"] + " In Settings, press Test next to the Overleaf token to see what to do.") if why and not why["ok"] else
+                "Overleaf did not accept the sign-in. Your Overleaf Git token is not accepted: create a new one in Overleaf (Account Settings, Git Integration) and paste it in Settings.")}
     if action in ("pull", "sync", "files"):
         try:  # keep the paper's index in step with what Overleaf just gave us
             n, p = common.resolve(name)
@@ -1717,16 +1719,38 @@ def api_test_openai(r):
     return {"ok": True, "message": f"OpenAI accepted your key and knows the model {res['model']}."}
 
 
+def _git_diagnosis(name):
+    """Why Overleaf does not take the sign-in for this paper (see overleaf_auth), or None when that cannot be found out."""
+    try:
+        n, p = common.resolve(name)
+        token = str((common.load("overleaf_git.json", {}) or {}).get("token") or "")
+        return overleaf_auth.diagnose(p["path"], common.remote_url(p["path"]), token)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def api_test_git(r):
     n, p = paper_ref(r.body.get("paper", ""))
-    code, out, err = overleaf_mcp.run_git(p["path"], "ls-remote", "--heads", "origin")
-    text = (err or out or "")
-    if code == 0:
-        return {"ok": True, "message": "Overleaf accepted the sign-in for this paper."}
-    if any(m in text.lower() for m in _AUTH_MARKERS):
-        have = (config.data_dir() / "overleaf_git.json").exists()
-        return {"ok": False, "message": "Overleaf did not accept the sign-in." if have else "No Overleaf token is saved yet."}
-    return {"ok": False, "message": "I could not reach Overleaf: " + (text.strip().splitlines() or ["no answer"])[-1][:200]}
+    d = _git_diagnosis(n)
+    if d is None:
+        return {"ok": False, "message": "I could not test the Overleaf sign-in for this paper.", "steps": [], "fix": None}
+    return {"ok": d["ok"], "message": d["message"], "steps": d["steps"], "fix": d["fix"], "kind": d["kind"]}
+
+
+def api_clean_address(r):
+    """Take a user name and password out of the paper's Overleaf address (git would use them instead of the token saved in Settings)."""
+    n, p = paper_ref(r.body.get("paper", ""))
+    new = overleaf_auth.clean_address(common.remote_url(p["path"]))
+    if not new:
+        raise ApiError(409, "This paper's address has no user name or password in it.")
+    code, out, err = overleaf_mcp.run_git(p["path"], "remote", "set-url", "origin", new)
+    if code != 0:
+        raise ApiError(500, "I could not change the address: " + (err or out)[-150:])
+    reg = common.registry()
+    if n in reg["projects"]:
+        reg["projects"][n]["remote"] = new
+        common.save("projects.json", reg)
+    return {"ok": True, "message": f"The address is now {new}. Press Test again.", "address": new}
 
 
 def api_test_cleaner(r):
@@ -2179,7 +2203,7 @@ ROUTES = [
     ("GET", r"^/api/library$", api_library), ("POST", r"^/api/library/folders$", api_library_folders), ("POST", r"^/api/library/index$", api_library_index),
     ("GET", r"^/api/library/parts$", api_library_parts), ("GET", r"^/api/library/search$", api_library_search), ("POST", r"^/api/library/cite$", api_library_cite),
     ("GET", r"^/api/overview$", api_overview), ("GET", r"^/api/connections$", api_connections), ("POST", r"^/api/test/openai$", api_test_openai),
-    ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/test/cleaner$", api_test_cleaner),
+    ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/papers/clean-address$", api_clean_address), ("POST", r"^/api/test/cleaner$", api_test_cleaner),
     ("GET", r"^/api/papers/discover$", api_discover), ("POST", r"^/api/papers/add$", api_add_paper),
     ("GET", r"^/api/chat/threads$", api_chat_threads), ("POST", r"^/api/chat/new$", api_chat_new), ("POST", r"^/api/chat/rename$", api_chat_rename),
     ("POST", r"^/api/chat/delete$", api_chat_delete), ("POST", r"^/api/chat/clear$", api_chat_clear), ("POST", r"^/api/chat/issue$", api_chat_issue), ("GET", r"^/api/chat$", api_chat_get), ("POST", r"^/api/chat/send$", api_chat_send),
