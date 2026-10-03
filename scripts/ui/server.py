@@ -1724,7 +1724,7 @@ def _git_diagnosis(name):
     try:
         n, p = common.resolve(name)
         token = str((common.load("overleaf_git.json", {}) or {}).get("token") or "")
-        return overleaf_auth.diagnose(p["path"], common.remote_url(p["path"]), token)
+        return overleaf_auth.diagnose(p["path"], common.remote_url(p["path"]), token, overleaf_id=panes.overleaf_id(config.paper_settings(p).get("overleaf_url")))
     except Exception:  # noqa: BLE001
         return None
 
@@ -1735,6 +1735,53 @@ def api_test_git(r):
     if d is None:
         return {"ok": False, "message": "I could not test the Overleaf sign-in for this paper.", "steps": [], "fix": None}
     return {"ok": d["ok"], "message": d["message"], "steps": d["steps"], "fix": d["fix"], "kind": d["kind"]}
+
+
+def _clone_overleaf(target, project_id):
+    """git clone of an Overleaf project into `target`. -> (code, error text)"""
+    import shutil
+    r = subprocess.run(["git", "clone", "--quiet", overleaf_auth.git_address(project_id), str(target)], capture_output=True, text=True, timeout=900,
+                       env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "LC_ALL": "C", "LANG": "C"})
+    if r.returncode != 0 and Path(target).exists():
+        shutil.rmtree(target, ignore_errors=True)                  # no half-made folder is left behind
+    return r.returncode, (r.stderr or r.stdout).strip()
+
+
+def api_clone_overleaf(r):
+    """Make a copy of the paper's Overleaf project that comes straight from Overleaf (a paper cloned from GitHub cannot send to Overleaf), in a folder shared with the app, and add it as a paper."""
+    n, p = paper_ref(r.body.get("paper", ""))
+    pid = panes.overleaf_id(r.body.get("overleaf") or config.paper_settings(p).get("overleaf_url") or "")
+    if not pid:
+        raise ApiError(400, "I need the Overleaf project's web address (https://www.overleaf.com/project/...). Save it for this paper in Settings, further down on the page, and try again.")
+    roots = common.workspace_roots()
+    if not roots:
+        raise ApiError(409, "No folder is shared with the app for new copies yet. In Terminal run   ./ui.sh folders add ~/Documents/overleaf   (any folder you like), then   ./ui.sh down   and   ./ui.sh up , and press the button again.")
+    if not (config.data_dir() / "overleaf_git.json").exists():
+        raise ApiError(409, "Paste your Overleaf Git token above and press Save first.")
+    base = re.sub(r"[^A-Za-z0-9_.-]", "_", str(r.body.get("name") or f"{n}-overleaf"))[:60] or "paper-overleaf"
+    name, k = base, 2
+    reg = common.registry()["projects"]
+    while name in reg or (Path(roots[0]) / name).exists():
+        name, k = f"{base}-{k}", k + 1
+    target = Path(roots[0]) / name
+    group = p.get("mendeley_group")
+
+    def work(progress, set_steps):
+        steps = revise.Steps(set_steps)
+        steps.start("clone", "Copying the project from Overleaf")
+        code, err = _clone_overleaf(target, pid)
+        if code != 0:
+            kind = overleaf_auth.classify(err)
+            why = {"rejected": "Overleaf refused the token.", "no_credentials": "The app had no sign-in to give Overleaf (restart it with ./ui.sh down and ./ui.sh up).",
+                   "forbidden": "Overleaf accepted the token but did not let it into this project: it must be made in an account that can open the project.",
+                   "not_found": "Overleaf does not know a project with that address for this token.", "unreachable": "I could not reach Overleaf: " + (err.splitlines() or [""])[-1][:150]}.get(kind, (err.splitlines() or ["no answer"])[-1][:200])
+            steps.finish("clone", why, state="failed")
+            raise ValueError(why)
+        steps.finish("clone", "done")
+        steps.add("register", "Adding it as a paper", detail=name)
+        new = common.register(str(target), name, group)
+        return {"name": new}
+    return {"job": r.app.jobs.submit(f"Copying {n} from Overleaf", work, with_steps=True, meta={"paper": n}), "name": name, "folder": str(target)}
 
 
 def api_clean_address(r):
@@ -2203,7 +2250,7 @@ ROUTES = [
     ("GET", r"^/api/library$", api_library), ("POST", r"^/api/library/folders$", api_library_folders), ("POST", r"^/api/library/index$", api_library_index),
     ("GET", r"^/api/library/parts$", api_library_parts), ("GET", r"^/api/library/search$", api_library_search), ("POST", r"^/api/library/cite$", api_library_cite),
     ("GET", r"^/api/overview$", api_overview), ("GET", r"^/api/connections$", api_connections), ("POST", r"^/api/test/openai$", api_test_openai),
-    ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/papers/clean-address$", api_clean_address), ("POST", r"^/api/test/cleaner$", api_test_cleaner),
+    ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/papers/clean-address$", api_clean_address), ("POST", r"^/api/papers/clone$", api_clone_overleaf), ("POST", r"^/api/test/cleaner$", api_test_cleaner),
     ("GET", r"^/api/papers/discover$", api_discover), ("POST", r"^/api/papers/add$", api_add_paper),
     ("GET", r"^/api/chat/threads$", api_chat_threads), ("POST", r"^/api/chat/new$", api_chat_new), ("POST", r"^/api/chat/rename$", api_chat_rename),
     ("POST", r"^/api/chat/delete$", api_chat_delete), ("POST", r"^/api/chat/clear$", api_chat_clear), ("POST", r"^/api/chat/issue$", api_chat_issue), ("GET", r"^/api/chat$", api_chat_get), ("POST", r"^/api/chat/send$", api_chat_send),

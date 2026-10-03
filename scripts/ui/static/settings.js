@@ -17,6 +17,17 @@
         toast('Done'); await again(); return x;
       })));
     }
+    if (r.fix === 'clone_overleaf') {
+      const out = h('div');
+      kids.push(h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Clone it from Overleaf' }), async () => {
+        clear(out).append(busy('Copying the project from Overleaf...'));
+        try {
+          const x = await api.post('/api/papers/clone', { paper });
+          await waitJob(x.job);
+          toast('Added ' + x.name); await window.OLS.loadState(); await window.OLS.setPaper(x.name);
+        } catch (e) { clear(out).append(notice('bad', e.message)); }                // the reason stays on the page: it can say what to type
+      })), out);
+    }
     clear(box).append(notice(r.ok ? 'ok' : 'bad', ...kids));
   }
 

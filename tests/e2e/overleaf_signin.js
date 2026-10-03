@@ -52,6 +52,32 @@ const SECRET = 'olp_OLDOLDOLDOLD';
   ok(!fs.readFileSync(`${home}/projects.json`, 'utf8').includes(SECRET), 'and the old password is gone from the app\'s own list too');
   await (await page.$(card)).screenshot({ path: `${out}/overleaf-signin-after.png` });
 
+  // a paper that was cloned from GitHub: named as such, with the real Overleaf address built from the saved project address, and a button for a copy that comes from Overleaf
+  const PID = '6ac15fc3b1b29fb3a1b2c3d4';
+  execFileSync('git', ['-C', dir, 'remote', 'set-url', 'origin', 'https://github.com/Someone/RiskPerception_MIND.git']);
+  const reg2 = JSON.parse(fs.readFileSync(`${home}/projects.json`, 'utf8'));
+  reg2.projects[name].remote = 'https://github.com/Someone/RiskPerception_MIND.git';
+  fs.writeFileSync(`${home}/projects.json`, JSON.stringify(reg2));
+  await page.evaluate(async ([paper, pid]) => { await window.OLS.api.post('/api/settings', { paper, overleaf_url: 'https://www.overleaf.com/project/' + pid }); }, [name, PID]);
+  await page.goto(url);
+  await page.waitForSelector('.chat-page');
+  await page.click('#nav a:has-text("Settings")');
+  await page.waitForSelector(card);
+  await page.click(card + ' button:has-text("Test with")');
+  await page.waitForSelector(card + ' .notice.bad');
+  const gh = await page.$eval(card, (e) => e.innerText);
+  ok(/cloned from GitHub/.test(gh), 'a paper cloned from GitHub is named as such');
+  ok(gh.includes(`https://git.overleaf.com/${PID}`), 'and the Overleaf address comes from the saved project address');
+  ok(!gh.includes('RiskPerception_MIND'), 'not from the GitHub repository\'s name');
+  ok(await page.isVisible(card + ' button:has-text("Clone it from Overleaf")'), 'a button offers a copy that comes from Overleaf');
+  await (await page.$(card)).screenshot({ path: `${out}/overleaf-signin-github.png` });
+  await page.click(card + ' button:has-text("Clone it from Overleaf")');
+  await page.waitForSelector(card + ' .notice.bad .notice.bad', { timeout: 60000 });
+  const why = await page.$eval(card + ' .notice.bad .notice.bad', (e) => e.innerText);
+  ok(/ui\.sh folders add|could not reach Overleaf|Paste your Overleaf Git token/.test(why), 'when the copy cannot be made the page says why, in words: ' + why.slice(0, 90));
+  ok(await page.isVisible(card + ' button:has-text("Clone it from Overleaf")'), 'and the button is still there to try again');
+  await (await page.$(card)).screenshot({ path: `${out}/overleaf-signin-github-failed.png` });
+
   await browser.close();
   const real = errors.filter((e) => !/Failed to load resource/i.test(e));
   ok(real.length === 0, 'no console errors' + (real.length ? ': ' + real.join(' | ') : ''));

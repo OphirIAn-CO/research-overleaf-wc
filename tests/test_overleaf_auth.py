@@ -53,6 +53,35 @@ class Causes(unittest.TestCase):
         self.assertIn("git.overleaf.example.edu", r["message"])
         self.assertEqual(self.d("")["kind"], "no_remote")
 
+    PID = "6ac15fc3b1b29fb3a1b2c3d4"
+
+    def test_a_paper_cloned_from_github_is_named_as_such_and_given_the_real_overleaf_address(self):
+        r = oa.diagnose("/x", "https://github.com/Someone/RiskPerception_MIND.git", TOKEN, overleaf_id=self.PID)
+        self.assertEqual((r["ok"], r["kind"], r["fix"]), (False, "other_host", "clone_overleaf"))
+        self.assertIn("cloned from GitHub", r["message"])
+        joined = " ".join(r["steps"])
+        self.assertIn(f"https://git.overleaf.com/{self.PID}", joined)
+        self.assertNotIn("RiskPerception_MIND", joined, "the project's name in GitHub is not an Overleaf project id")
+        self.assertIn("Pull GitHub changes into Overleaf", joined)
+        self.assertNotIn("university", joined)
+
+    def test_without_the_projects_web_address_it_says_where_to_find_the_id_and_offers_no_button(self):
+        r = oa.diagnose("/x", "https://github.com/Someone/RiskPerception_MIND.git", TOKEN)
+        self.assertEqual((r["kind"], r["fix"]), ("other_host", None))
+        self.assertIn("after /project/", " ".join(r["steps"]))
+
+    def test_another_overleaf_server_is_not_github(self):
+        r = oa.diagnose("/x", "https://git.overleaf.example.edu/abc123", TOKEN, overleaf_id=self.PID)
+        self.assertNotIn("GitHub", r["message"])
+        self.assertIn("university", " ".join(r["steps"]))
+
+    def test_the_project_id_from_an_address_or_on_its_own(self):
+        from writing_core import panes
+        for value in (f"https://www.overleaf.com/project/{self.PID}", f"https://www.overleaf.com/project/{self.PID}/", self.PID, self.PID.upper()):
+            self.assertEqual(panes.overleaf_id(value), self.PID, value)
+        for value in ("", "https://github.com/a/b", "https://www.overleaf.com/read/abc", "not an id", "http://www.overleaf.com/project/" + self.PID + "x"):
+            self.assertIsNone(panes.overleaf_id(value), value)
+
     def test_no_token_saved(self):
         self.assertEqual(self.d(token="")["kind"], "no_token")
 
@@ -154,6 +183,103 @@ class InTheApp(UiBase):
         self.assertNotIn("OLDOLDOLD", (common.HOME / "projects.json").read_text())
         st, r = self.c.post("/api/papers/clean-address", {"paper": "alpha"})
         self.assertEqual(st, 409)
+
+    def github_paper(self):
+        """alpha now looks like a clone made from GitHub, with the Overleaf project's web address saved for it."""
+        import subprocess
+        from writing_core import config
+        subprocess.run(["git", "-C", self.proj["path"], "remote", "set-url", "origin", "https://github.com/Someone/RiskPerception_MIND.git"], check=True)
+        reg = common.registry()
+        reg["projects"]["alpha"]["remote"] = "https://github.com/Someone/RiskPerception_MIND.git"
+        reg["projects"]["alpha"]["mendeley_group"] = {"id": "g1", "name": "PhD Paper 1"}
+        common.save("projects.json", reg)
+        config.set_paper_setting(self.proj, "overleaf_url", f"https://www.overleaf.com/project/{Causes.PID}")
+
+    def overleaf_remote(self, base, files=None):
+        """A bare repository standing in for the Overleaf project, found where the app looks for git.overleaf.com."""
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        base = Path(base)
+        bare = base / Causes.PID
+        subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+        work = Path(tempfile.mkdtemp(dir=base.parent))
+        subprocess.run(["git", "clone", "-q", str(bare), str(work / "w")], check=True, capture_output=True)
+        w = work / "w"
+        (w / "main.tex").write_text("\\documentclass{article}\\begin{document}Hello\\end{document}\n")
+        (w / "references.bib").write_text("@article{a, title={T}}\n")
+        for cmd in (["config", "user.email", "t@example.com"], ["config", "user.name", "t"], ["add", "-A"], ["commit", "-qm", "init"], ["push", "-q", "origin", "HEAD:master"]):
+            subprocess.run(["git", "-C", str(w), *cmd], check=True, capture_output=True)
+        return bare
+
+    def share_folder(self):
+        from pathlib import Path
+        root = Path(self.tmp) / "clones"
+        root.mkdir()
+        common.save("ui.json", {"workspace_roots": [str(root)]})
+        return root
+
+    def test_the_test_names_github_and_offers_to_clone_the_project_from_overleaf(self):
+        self.github_paper()
+        common.save("overleaf_git.json", {"token": TOKEN})
+        st, r = self.c.post("/api/test/git", {"paper": "alpha"})
+        self.assertEqual((r["kind"], r["fix"]), ("other_host", "clone_overleaf"))
+        self.assertIn(f"https://git.overleaf.com/{Causes.PID}", " ".join(r["steps"]))
+
+    def test_cloning_from_overleaf_makes_a_new_paper_that_keeps_the_mendeley_group(self):
+        from pathlib import Path
+        self.github_paper()
+        common.save("overleaf_git.json", {"token": TOKEN})
+        root = self.share_folder()
+        base = Path(self.tmp) / "overleaf-server"
+        base.mkdir()
+        self.overleaf_remote(base)
+        old = oa.GIT_BASE
+        oa.GIT_BASE = str(base) + "/"
+        self.addCleanup(setattr, oa, "GIT_BASE", old)
+        st, r = self.c.post("/api/papers/clone", {"paper": "alpha"})
+        self.assertEqual(st, 200, r)
+        self.assertEqual(r["name"], "alpha-overleaf")
+        done = self.wait_job(r["job"])
+        self.assertEqual(done["status"], "done", done)
+        self.assertEqual(done["result"], {"name": "alpha-overleaf"})
+        self.assertTrue((root / "alpha-overleaf" / "main.tex").exists())
+        reg = common.registry()["projects"]
+        self.assertEqual(Path(reg["alpha-overleaf"]["path"]), (root / "alpha-overleaf").resolve())
+        self.assertEqual(reg["alpha-overleaf"]["mendeley_group"], {"id": "g1", "name": "PhD Paper 1"})
+        self.assertEqual(reg["alpha-overleaf"]["bib"], "references.bib")
+        self.assertIn("alpha", reg, "the GitHub copy stays as it is")
+        st, again = self.c.post("/api/papers/clone", {"paper": "alpha"})
+        self.assertEqual(again["name"], "alpha-overleaf-2", "a second copy gets a new name instead of overwriting")
+
+    def test_a_failed_clone_says_why_and_leaves_no_folder(self):
+        self.github_paper()
+        common.save("overleaf_git.json", {"token": TOKEN})
+        root = self.share_folder()
+        old = oa.GIT_BASE
+        oa.GIT_BASE = str(self.tmp) + "/nothing-here/"
+        self.addCleanup(setattr, oa, "GIT_BASE", old)
+        st, r = self.c.post("/api/papers/clone", {"paper": "alpha"})
+        done = self.wait_job(r["job"])
+        self.assertEqual(done["status"], "error")
+        self.assertIn("does not know a project", done["error"])
+        self.assertEqual(list(root.iterdir()), [])
+
+    def test_the_clone_needs_the_address_a_shared_folder_and_the_token(self):
+        self.github_paper()
+        st, r = self.c.post("/api/papers/clone", {"paper": "alpha"})
+        self.assertEqual(st, 409)
+        self.assertIn("ui.sh folders add", r["error"])
+        self.share_folder()
+        st, r = self.c.post("/api/papers/clone", {"paper": "alpha"})
+        self.assertEqual(st, 409)
+        self.assertIn("token", r["error"])
+        common.save("overleaf_git.json", {"token": TOKEN})
+        from writing_core import config
+        config.set_paper_setting(self.proj, "overleaf_url", "")
+        st, r = self.c.post("/api/papers/clone", {"paper": "alpha"})
+        self.assertEqual(st, 400)
+        self.assertIn("web address", r["error"])
 
     def test_a_refused_pull_says_why_and_points_to_the_test(self):
         common.save("overleaf_git.json", {"token": TOKEN})

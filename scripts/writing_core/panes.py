@@ -21,6 +21,17 @@ def overleaf_project_id(proj):
     return last if _ID.match(last) else None
 
 
+def overleaf_id(value):
+    """'https://www.overleaf.com/project/6ac15fc3b1b29fb3...' or a bare project id -> the id (lower case), or None."""
+    v = str(value or "").strip()
+    if _ID.match(v.lower()):
+        return v.lower()
+    if not valid_overleaf(v):
+        return None
+    last = urllib.parse.urlsplit(v).path.rstrip("/").rsplit("/", 1)[-1].lower()
+    return last if _ID.match(last) else None
+
+
 def _parts(url):
     try:
         u = urllib.parse.urlsplit(str(url))

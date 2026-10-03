@@ -24,7 +24,7 @@ def _git(path, *args, stdin=None, timeout=40):
 def parse(url):
     u = urllib.parse.urlsplit(url or "")
     return {"scheme": u.scheme, "host": (u.hostname or "").lower(), "user": urllib.parse.unquote(u.username or ""), "has_password": u.password is not None,
-            "project": u.path.strip("/").split("/")[-1] if u.path.strip("/") else ""}
+            "project": re.sub(r"\.git$", "", u.path.strip("/").split("/")[-1]) if u.path.strip("/") else ""}
 
 
 def clean_address(url):
@@ -48,9 +48,9 @@ def classify(stderr):
         return "rejected"
     if "error: 403" in t or "forbidden" in t:
         return "forbidden"
-    if "error: 404" in t or "not found" in t:
+    if "error: 404" in t or "not found" in t or "does not exist" in t:
         return "not_found"
-    if "could not resolve" in t or "timed out" in t or "connection" in t or "network is unreachable" in t or "ssl" in t:
+    if "could not resolve" in t or "timed out" in t or "connection" in t or "network is unreachable" in t or "ssl" in t or "tunnel failed" in t or "failed to connect" in t:
         return "unreachable"
     return "unknown"
 
@@ -59,9 +59,17 @@ def _last(text):
     return (text.strip().splitlines() or ["no answer"])[-1][:200]
 
 
-def diagnose(path, remote, token, git=None):
+GIT_BASE = "https://git.overleaf.com/"          # a test points this at a folder of local repositories
+
+
+def git_address(project_id):
+    return f"{GIT_BASE}{project_id}"
+
+
+def diagnose(path, remote, token, git=None, overleaf_id=None):
     """path: the paper's folder; remote: its `origin` address; token: the saved Overleaf Git token or ''. git: (args, stdin) -> (code, out, err), replaced in tests.
-    -> {ok, kind, message, steps: [what to try], fix: 'clean_address' | None, facts}"""
+    overleaf_id: the id of the paper's Overleaf project, from the web address saved for it (Settings), when there is one.
+    -> {ok, kind, message, steps: [what to try], fix: 'clean_address' | 'clone_overleaf' | None, facts}"""
     run = git or (lambda args, stdin=None: _git(path, *args, stdin=stdin))
     a = parse(remote)
     token = token or ""
@@ -72,9 +80,22 @@ def diagnose(path, remote, token, git=None):
         return _result(False, "not_https", "This paper's Overleaf address is not a web address (https), and the app can only sign in to those.",
                        ["Overleaf's Git address looks like https://git.overleaf.com/<project id>. Clone the project that way."], **shape)
     if a["host"] != HOST:
-        return _result(False, "other_host", f"This paper's address points to {a['host']}, and the token saved here is only sent to {HOST}.",
-                       [f"If the project is on overleaf.com, its Git address is https://git.overleaf.com/{a['project'] or '<project id>'}.",
-                        "If your university runs its own Overleaf, this app cannot sign in to it yet."], **shape)
+        github = a["host"] == "github.com" or a["host"].endswith(".github.com")
+        addr = git_address(overleaf_id) if overleaf_id else None
+        steps = ([f"Overleaf's own Git address for this project is {addr} (the id comes from the project's web address saved for this paper, in Settings)."] if addr else
+                 ["Overleaf gives every project its own Git address, https://git.overleaf.com/<project id>, where the id is the part after /project/ in the project's web address. "
+                  "Save that web address for this paper (Settings, further down on this page) and press Test again."])
+        if addr:
+            steps.append("Easiest: press \"Clone it from Overleaf\" below. It makes a copy of the project that comes straight from Overleaf, in a folder shared with the app, and adds it as a paper. "
+                         "Use that copy from now on; this GitHub copy stays as it is.")
+        if github:
+            steps.append("If you would rather keep working through GitHub: Overleaf only takes up what is on GitHub when you choose Menu, Sync, \"Pull GitHub changes into Overleaf\" inside Overleaf. "
+                         "This app cannot do that step for you.")
+        else:
+            steps.append("If your university runs its own Overleaf, this app cannot sign in to it yet.")
+        msg = (f"This paper's folder was cloned from GitHub ({a['host']}), not from Overleaf, so sending from this app goes to GitHub, where the Overleaf token cannot be used." if github else
+               f"This paper's address points to {a['host']}, and the token saved here is only sent to {HOST}.")
+        return _result(False, "other_host", msg, steps, fix="clone_overleaf" if addr else None, **shape)
     if a["has_password"]:
         return _result(False, "url_password", "The address this paper was cloned from has a password (or token) written into it. Git uses that one and never looks at the token saved in Settings, "
                        "so a new token cannot help until it is removed.",
