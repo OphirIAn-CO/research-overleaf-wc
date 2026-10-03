@@ -100,7 +100,7 @@
     const wm = h('input', { type: 'text', value: c.cleaner.url || '', placeholder: 'http://host.docker.internal:PORT', 'aria-label': 'Text-cleaning service address', class: 'grow' });
     const wmOut = h('div');
     const cleaner = h('section', { class: 'card', 'aria-label': 'Text cleaning' }, h('div', { class: 'row' }, h('h2', { text: 'Text-cleaning service' }), badge(c.cleaner.state === 'ok', 'working', c.cleaner.url ? 'not answering' : 'not set up')),
-      h('p', { class: 'small secondary', text: 'Your watermark-removal step that cleans text before it is saved. With its address here, "Approve and save" works from this app. Without it, "Let Claude apply it" is used instead.' }),
+      h('p', { class: 'small secondary', text: 'Optional. A local service that post-processes new text before it is saved (for example one that removes hidden characters or fixes typography). Leave it empty to save text exactly as you approved it.' }),
       h('label', { class: 'field' }, h('span', { text: 'Address' }), wm),
       h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Save' }), async () => { await api.post('/api/settings', { ui: { watermark_url: wm.value.trim() } }); toast('Saved'); window.OLS.route(); }),
         guarded(h('button', { type: 'button', text: 'Test' }), async () => { clear(wmOut).append(busy('Asking...')); result(wmOut, await api.post('/api/test/cleaner', {})); })), wmOut);

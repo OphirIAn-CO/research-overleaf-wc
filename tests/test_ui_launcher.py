@@ -108,8 +108,8 @@ class Launcher(IsolatedHome):
         return r.stdout
 
     def test_mount_arguments_survive_colons_spaces_commas_and_quotes(self):
-        # the real-world failure: a paper under ".../Investigacion/2026:27/research_proposal/doc_overleaf"
-        p = "/Users/me/Documents/DOCTORADO/Investigacion/2026:27/research_proposal/doc_overleaf"
+        # the real-world failure: a paper under ".../Projects/2026:27/paper_one/overleaf_copy"
+        p = "/Users/me/Documents/Research/Projects/2026:27/paper_one/overleaf_copy"
         self.assertEqual(self.mount_arg(p, p), f'type=bind,"source={p}","target={p}"')
         self.assertEqual(self.mount_arg("/a/scripts", "/app", "readonly"), 'type=bind,"source=/a/scripts","target=/app",readonly')
         self.assertEqual(self.mount_arg('/odd, name/a"b:c', '/odd, name/a"b:c'), 'type=bind,"source=/odd, name/a""b:c","target=/odd, name/a""b:c"')

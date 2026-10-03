@@ -16,6 +16,7 @@ allowed-tools:
   - mcp__overleaf__mendeley_add_reference
   - mcp__overleaf__book_query
   - mcp__overleaf__paper_query
+  - mcp__overleaf__library_query
   - mcp__overleaf__chatgpt_revise
   - mcp__overleaf__revise_record
   - WebSearch
@@ -53,8 +54,10 @@ One MCP server (`overleaf`, registered at user scope, script at
 - `mendeley_catalog_search`, `mendeley_add_reference`: look up a paper in
   Mendeley's canonical catalog and add it to a Mendeley group/library, then
   fetch it into the bib file.
-- `paper_query`, `book_query`, `chatgpt_revise`, `revise_record`: the writing coach
-  (see "Writing coach" below).
+- `paper_query`, `book_query`, `library_query`, `chatgpt_revise`, `revise_record`: the writing coach
+  (see "Writing coach" below). `library_query` searches the author's literature library (folders of books and
+  articles read once on this computer) and returns the best parts with document, page and, when a paper is in
+  context, the `\cite` key if the paper's bibliography has that document.
 (Mendeley tools wrap `<skill>/scripts/mendeley_sync.py`; shared state lives in
 `scripts/common.py`; the writing coach lives in `scripts/writing_core/` with a CLI,
 `scripts/writing.py`.)
@@ -154,22 +157,12 @@ with `overleaf_projects` or `python3 scripts/common.py list|add|rm|default`.
    restructure the sentence if needed rather than reaching for a dash. This
    is a standing style rule for this skill, not something to ask about each
    time. Check any freshly written/edited sentence for this before moving
-   on; if one slips in, fix it before the watermark pass in 6b, not after.
-6b. **Strip AI provenance marks from new/rewritten prose — mandatory, not
-   optional.** This is the user's own research content; Claude is only used
-   to draft faster/clearer phrasing and LaTeX implementation, not to
-   originate the ideas. So, for any substantial prose Claude wrote or
-   rewrote in this step (not for boilerplate LaTeX/citation keys), always
-   run the `watermarks-remover` skill's Layer A clean on that text before it
-   goes to Overleaf — every time, no need to ask, and never skip it just
-   because the change felt small. Use `/inspect` then `/clean` against the
-   running service (see that skill for the API); if the service isn't
-   reachable, say so and skip cleaning rather than editing the file with an
-   unclean pass — but treat that as the exception that blocks the edit
-   until resolved, not a routine opt-out. Also mention Layer B (paraphrase/
-   humanize rewrite) is available on request for that same text, per the
-   watermarks-remover workflow — don't run it silently since it changes
-   wording more aggressively.
+   on; if one slips in, fix it before the optional cleaning pass in 6b, not after.
+6b. **Optional text-cleaning step.** Some authors run a local text-cleaning service (or a skill such as
+   `watermarks-remover`) on new or rewritten prose before it goes to Overleaf. If this user has one set up (an address
+   in the app's Settings > Text-cleaning service, or a cleaning skill installed), run it on any substantial prose you
+   wrote or rewrote in this step (not on boilerplate LaTeX or citation keys), every time, without asking, and if it is
+   unreachable say so and stop rather than editing with an unclean pass. If the user has none, skip this step silently.
 7. **Check before syncing** — `overleaf_status` with `repo_path` to see
    which files changed (git status --short) before pushing.
 8. **Sync** — `overleaf_sync` with `repo_path` and an optional commit
@@ -206,8 +199,11 @@ Use this when the user wants new text grounded in their analysis, which can be a
 1. Resolve the paper (step 0), `overleaf_pull`. Ask the user where the analysis lives if it is not obvious
    ("which folder holds the code and results for this paper?"). Read what they point to with `Read`/`Grep`/`Glob`
    (result tables, logs, notebooks' output cells, the scripts that produced them). Do not run their code unless asked.
-   To make a folder part of the paper's searchable files for later (and for the web app):
-   `python3 <skill>/scripts/writing.py settings --paper NAME --link-folder PATH`; `writing.py files` lists what is readable.
+   To make a folder part of the paper's searchable files for later (and for the web app): `python3 <skill>/scripts/writing.py settings
+   --paper NAME --link-analysis PATH` for the code, tables, logs and figures of the analysis (the web app then writes the Results and Discussion
+   from them on request), or `--link-folder PATH` for notes, articles and reports; `writing.py files` lists what is readable.
+   Search the author's reading with `library_query` (or `writing.py library --search "text" --paper NAME`): it returns the best parts with
+   document, page and the `\cite` key when the paper's bibliography has the document.
 2. Read the paper itself first: `paper_query` for the Introduction (aims, research questions), Methods and Results (what was
    measured, how it is named, the paper card's notation and tense), then the section you are about to write.
 3. Read the articles the user added (`paper_query` with `kind: "source"`) or the entries of `references.bib` for what the
@@ -290,8 +286,8 @@ earlier refused push left behind; files in `references/` are never dropped as bu
    around it.
 5. Apply only the hunks the user accepts, with native `Edit` in place (old text -> new
    text, as in "Implementing advisor/reviewer comments"). Steps 6 (no dashes) and 6b
-   (watermark clean) apply to the new text exactly as for any prose you write; clean
-   before inserting. If a hunk's old text no longer matches the file, stop and re-run.
+   (the optional cleaning step, when the user has one) apply to the new text exactly as for any prose you write;
+   clean before inserting. If a hunk's old text no longer matches the file, stop and re-run.
    If the user says they handed a proposal over from the web app ("apply what I chose"), call
    `chatgpt_revise` with no instruction to list what is waiting, then with `proposal_id` to
    see it: apply exactly the changes the author chose, nothing else.
@@ -307,7 +303,12 @@ container (no access to keys or papers; the author's optional QuillBot/Overleaf 
 `sites.json`, filled in only on request), and so can the paper text. A LaTeX pane shows the paper's source and the PDF
 compiled on the author's computer (`latexmk`, no shell escape, output outside what is sent to Overleaf); what you save to
 the files appears there. Peer-review comments are followed one by one in the chat (completed, set aside, skipped) until all are
-handled. Suggestions the author
+handled. The chat app also writes NEW text:
+"write the results from my analysis", "draft the discussion", "add a paragraph about the sampling to the methods". It places the text (end or
+start of a part, or before or after a figure or table), sends the analysis (Settings > Code and results: code, tables, logs and figures as
+pictures), the author's notes, the literature library and the book's advice for that part, and returns paragraphs the author keeps one
+by one, each saying which source it rests on; numbers must be in the sources and a library source is cited only if the bibliography has it.
+In Claude Code, for the same job, follow "Writing a section from the author's own results" below. Suggestions the author
 hands over ("Let Claude apply it") arrive as `chatgpt_revise` proposals, as described above.
 When the user asks to "open the UI / app / dashboard", run `ui.sh up` and give them the printed
 URL (it carries a one-time access token; do not repeat it anywhere else).
