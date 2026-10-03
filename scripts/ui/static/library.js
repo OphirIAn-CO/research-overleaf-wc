@@ -175,10 +175,17 @@
     });
     q.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); search.click(); } });
 
+    // ---- when a request may use the library (a setting of the open paper)
+    const mine = paper && window.OLS.paperObj(paper);
+    const modeSel = h('select', { 'aria-label': 'When requests use my library' }, [['auto', 'When I ask for sources, citations or my reading (recommended)'], ['always', 'In every request'], ['never', 'Never']].map(([v, t]) => h('option', { value: v, text: t })));
+    modeSel.value = (mine && mine.settings && mine.settings.use_library) || 'auto';
+    modeSel.addEventListener('change', async () => { try { await api.post('/api/settings', { paper, use_library: modeSel.value }); await window.OLS.loadState(); toast('Saved'); } catch (e) { toast(e.message); } });
+
     const card = h('section', { class: 'card', 'aria-label': 'Literature library' },
       h('div', { class: 'row' }, h('h2', { text: 'Literature library' }), badgeBox),
       h('p', { class: 'small secondary', text: 'Point the app at the folder where you keep books, articles and PDFs (subfolders are fine). It reads each file once on this computer, cuts it into small labelled parts with their pages, and keeps a search of them. A request can then draw on the right parts of your reading, say where they come from, and cite them. Your files are only read, never changed, and nothing is sent to OpenAI except the few parts a request uses, and the request shows which.' }),
       picker.el, state, h('div', { class: 'row' }, readBtn, bar), out,
+      paper ? h('div', { class: 'row' }, h('label', { class: 'row tight small' }, 'Use the library for ' + paper + ':', modeSel), h('span', { class: 'small secondary', text: 'Sources can be cited only if they are in the paper\'s bibliography.' })) : null,
       h('details', null, h('summary', { text: 'Documents' }), h('div', { class: 'stack' }, h('div', { class: 'row' }, filter), docsBox)),
       h('details', null, h('summary', { text: 'Try a search' }), h('div', { class: 'stack' }, h('div', { class: 'row' }, q, search), searchOut)),
       h('details', null, h('summary', { text: 'More' }), h('div', { class: 'row' }, startOver, h('span', { class: 'small secondary', text: 'Use it if the results look wrong or you moved many files.' }))));

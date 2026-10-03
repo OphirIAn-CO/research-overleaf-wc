@@ -347,11 +347,18 @@
         const names = [...new Set(src.map((x) => x.file.split('/').pop()))];
         lines.push(h('p', { class: 'small secondary', text: `${plural(src.length, 'part')} of your files go with it (${names.slice(0, 3).join(', ')}${names.length > 3 ? '...' : ''}), labelled so the answer can say where a number came from. Numbers taken from them are pointed out for you to check.` }));
       }
+      const lib = pl.library || [];
+      if (lib.length) {
+        const cites = lib.filter((x) => x.tag).length;
+        lines.push(h('p', { class: 'small secondary', text: `${plural(lib.length, 'part')} of your library go with it (${[...new Set(lib.map((x) => x.label))].slice(0, 3).join(', ')}${new Set(lib.map((x) => x.label)).size > 3 ? '...' : ''}). ` +
+          (cites ? `${plural(cites, 'source')} can be cited, because ${cites === 1 ? 'it is' : 'they are'} in your bibliography.` : 'None of them is in your bibliography yet, so none will be cited.') }));
+      }
       (pl.warnings || []).forEach((x) => lines.push(notice('warn', x)));
       const exact = h('div');
       const details = h('details', null, h('summary', { text: 'What goes out' }),
         h('ul', { class: 'small' }, pl.passages.map((x) => h('li', { text: `${x.file}, lines ${x.lines[0]} to ${x.lines[1]} · ${x.section} · about ${x.words} words` })),
-          src.map((x) => h('li', { text: `From your files: ${x.where} · about ${fmtTok(x.tokens * 0.75)} words` }))),
+          src.map((x) => h('li', { text: `From your files: ${x.where} · about ${fmtTok(x.tokens * 0.75)} words` })),
+          lib.map((x) => h('li', { text: `From your library: ${x.label}, ${x.where} · about ${fmtTok(x.tokens * 0.75)} words` }))),
         h('button', { type: 'button', class: 'small', text: 'Show the exact text', onclick: async (ev) => {
           ev.target.disabled = true;
           const r = await api.post('/api/revise/preview', { paper, instruction: pl.instruction, chunk_ids: pl.chunk_ids, book_id: pl.book });
@@ -577,6 +584,30 @@
       return assistant(h('p', { class: 'small secondary', text: added ? `Added ${plural(added, 'reference')}.` : 'Nothing new was added.' }), ...kids);
     }
 
+    // ---- a look into the library: the best parts, where they are from, and how to cite them
+    function libraryBubble(m) {
+      const d = m.data, cmd = d.command || '\\cite';
+      if (!d.hits.length) return assistant(h('p', { text: `Nothing in your library (${plural(d.total, 'document')}) matches "${d.topic}". Try other words, or check that the folder with that reading is added in Settings.` }));
+      const rows = d.hits.map((c) => {
+        const out = h('div', { class: 'small' });
+        const cite = (key) => `${cmd}{${key}}`;
+        const copy = (text) => h('button', { type: 'button', class: 'small', text: 'Copy ' + text, onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch (e) { toast('Select it and copy by hand'); } } });
+        const actions = h('div', { class: 'row tight' });
+        if (c.in_bib) actions.append(h('code', { class: 'cite', text: cite(c.cite_key) }), copy(cite(c.cite_key)), h('span', { class: 'small secondary', text: 'already in your bibliography' }));
+        else if (c.can_add || c.has_entry) {
+          actions.append(guarded(h('button', { type: 'button', class: 'small', text: 'Add to my bibliography' }), async () => {
+            const r = await api.post('/api/library/cite', { paper, doc: c.doc });
+            clear(actions).append(h('code', { class: 'cite', text: r.cite }), copy(r.cite), h('span', { class: 'small secondary', text: r.message }));
+            await window.OLS.loadState();
+          }));
+        } else actions.append(h('span', { class: 'small secondary', text: 'No DOI and no entry in a .bib file: paste its DOI here to add it to your bibliography.' }));
+        return h('div', { class: 'hit' }, h('div', { class: 'row tight' }, h('strong', { text: c.label }), h('span', { class: 'small secondary', text: c.where })),
+          c.title && c.title !== c.label ? h('div', { class: 'small secondary', text: c.title }) : null, h('div', { class: 'small', text: c.text }), actions, out);
+      });
+      return assistant(h('p', { class: 'small secondary', text: `Here is what your library says about "${d.topic}" (${plural(d.hits.length, 'part')} of ${plural(d.docs, 'document')}, searched on this computer; nothing was sent to OpenAI).` }), ...rows,
+        h('p', { class: 'small secondary', text: 'To use these in your text, ask for it: for example "add support from my library to the introduction".' }));
+    }
+
     // ---- the suggestion
     function resultBubble(m) {
       const holder = h('div', null, busy('Loading the suggestion...'));
@@ -603,6 +634,10 @@
         const per = new Map();
         p.sources.forEach((x) => per.set(x.file.split('/').pop(), (per.get(x.file.split('/').pop()) || 0) + 1));
         holder.append(h('p', { class: 'small secondary', text: 'Used parts of your files: ' + [...per].map(([f, n]) => `${f} (${plural(n, 'part')})`).join(', ') }));
+      }
+      if ((p.library || []).length) {
+        const cited = [...new Set(p.units.flatMap((u) => u.added_cites || []))];
+        holder.append(h('p', { class: 'small secondary', text: 'Used from your library: ' + [...new Set(p.library.map((x) => `${x.label} (${x.where})`))].join('; ') + '.' + (cited.length ? ` Citations added: ${cited.join(', ')}.` : '') }));
       }
       if (m.data.steps && m.data.steps.length) holder.append(h('details', null, h('summary', { text: 'What I did' }), stepList(m.data.steps)));
       (p.warnings || []).forEach((w) => holder.append(notice('warn', w)));
@@ -634,6 +669,7 @@
         });
         const bad = (u.validators || []).filter((v) => !v.ok);
         if (bad.length) why.append(notice('warn', 'Heads up: ', bad.map((v) => v.detail || v.name).join('; ')));
+        if ((u.added_cites || []).length) why.append(notice('ok', h('strong', { text: 'Citations from your library: ' }), u.added_cites.join(', '), '. They stand in your bibliography already. Check each one supports the claim it sits next to.'));
         if ((u.from_files || []).length) why.append(notice('warn', h('strong', { text: 'Numbers that came from your files: ' }), u.from_files.join(', '), '. Check them against the source before you keep the change.'));
         u.hunks.forEach((hk) => changes.append(hunkCard(hk, sel, () => { count.textContent = `${sel.size} of ${nHunks} changes selected`; }, locked, p.rule_labels)));
         if (!u.hunks.length && u.status !== 'failed') changes.append(h('p', { class: 'muted small', text: 'No changes in this passage.' }));
@@ -922,6 +958,7 @@
       if (m.kind === 'ask') return askBubble(m);
       if (m.kind === 'result') return resultBubble(m);
       if (m.kind === 'refs') return refsBubble(m);
+      if (m.kind === 'library') return libraryBubble(m);
       if (m.kind === 'review_plan') return reviewPlanBubble(m);
       if (m.kind === 'review') return reviewBubble(m);
       if (m.kind === 'review_done') return reviewDoneBubble(m);

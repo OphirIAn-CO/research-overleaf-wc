@@ -175,19 +175,23 @@ def _words(text):
     return len(re.findall(r"[A-Za-z]{2,}", PH.sub(" ", re.sub(r"\\[A-Za-z]+", " ", text))))
 
 
-def validate(original, revised, min_ratio=0.5, max_ratio=1.6, context=""):
+def validate(original, revised, min_ratio=0.5, max_ratio=1.6, context="", extra_tags=()):
     """Compare masked texts. -> list of {name, ok, severity ('error'|'warn'), detail}. A passage is acceptable iff no error fails.
-    `context` is text the revision may legitimately draw on (parts of the author's own files): numbers, acronyms and names that stand there are not new."""
+    `context` is text the revision may legitimately draw on (parts of the author's own files): numbers, acronyms and names that stand there are not new.
+    `extra_tags` are tags that were offered to the model on purpose (a citation of a source the author's library holds): they may appear in the revision although the
+    original has none, but only the ones listed, and never in a form that is not a tag."""
     res = []
 
     def add(name, ok, detail="", severity="error"):
         res.append({"name": name, "ok": bool(ok), "severity": severity, "detail": detail if not ok else ""})
 
-    po, pr = Counter(placeholders(original)), Counter(placeholders(revised))
+    offered = set(extra_tags or ())
+    kept = [t for t in placeholders(revised) if t not in offered or t in placeholders(original)]
+    po, pr = Counter(placeholders(original)), Counter(kept)
     missing, extra = sorted((po - pr).elements()), sorted((pr - po).elements())
     add("placeholders_intact", not missing and not extra,
         "; ".join(filter(None, [f"missing or dropped: {', '.join(missing)}" if missing else "", f"duplicated or invented: {', '.join(extra)}" if extra else ""])))
-    add("placeholder_order", placeholders(original) == placeholders(revised) or po != pr,
+    add("placeholder_order", placeholders(original) == kept or po != pr,
         "citations/formulas/refs changed their relative order; check they still sit next to the claim they support", "warn")
     new_nums = sorted(number_tokens(revised) - number_tokens(original) - (number_tokens(context) if context else set()))
     add("no_new_numbers", not new_nums, f"numbers not in the original: {', '.join(new_nums)}")
@@ -353,9 +357,10 @@ def normalize_tags(text):
     return _LOOSE_TAG.sub(lambda m: f"[[LX{m.group(1) or m.group(2)}]]", text)
 
 
-def restore_literals(text, mapping, original):
+def restore_literals(text, mapping, original, extra_tags=()):
     """If a protected piece is missing as a tag but its LaTeX appears in the text as it is (the author pasted the 'as LaTeX' version),
-    turn that occurrence back into its tag. Only tags the original had, and only pieces that are really missing."""
+    turn that occurrence back into its tag. Only tags the original had (and the offered extra ones, when their LaTeX is there more times than the original's
+    own pieces account for), and only pieces that are really missing."""
     have = Counter(placeholders(text))
     want = Counter(placeholders(original))
     for key in sorted(want):
@@ -365,6 +370,13 @@ def restore_literals(text, mapping, original):
         if literal and literal in text:
             text = text.replace(literal, f"[[{key}]]", 1)
             have[key] += 1
+    for key in sorted(set(extra_tags or ())):
+        literal = mapping.get(key)
+        if not literal or key in have or key in want:
+            continue
+        owned = sum(1 for k, v in mapping.items() if v == literal and k in want)
+        if text.count(literal) > owned:
+            text = text.replace(literal, f"[[{key}]]", 1)
     return text
 
 
@@ -383,12 +395,12 @@ def missing_details(original, text, mapping, context_words=6):
     return out
 
 
-def check_author_text(original, text, mapping, context=""):
+def check_author_text(original, text, mapping, context="", extra_tags=()):
     """The author's own version of a masked passage. -> (normalized text, validator results, missing-piece details).
     Same validators as for the model's answer, run on the text after forgiving tag spellings."""
-    fixed = restore_literals(normalize_tags(text), mapping, original)
+    fixed = restore_literals(normalize_tags(text), mapping, original, extra_tags)
     fixed, doubled = collapse_doubled(original, fixed)
-    results = validate(original, fixed, context=context)
+    results = validate(original, fixed, context=context, extra_tags=extra_tags)
     if doubled:
         results.append({"name": "doubled_backslashes_fixed", "ok": False, "severity": "warn", "detail": f"I turned {', '.join(dict.fromkeys(doubled))} back into a single backslash, as in your paper (a doubled one would break the LaTeX)"})
     return fixed, results, missing_details(original, fixed, mapping)

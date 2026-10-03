@@ -101,6 +101,8 @@ def main():
         user = body["input"] if "input" in body else body["messages"][-1]["content"]
         answered = "<author_answers>" in user                       # the author replied to the question below: use the reply
         t = t.replace("We sampled 40 farms by stratified random sampling.", "We drew a stratified random sample of 40 farms.")
+        if "Cite it with [[LX901]]" in user:          # the request offered a source from the author's library: cite it where the frame is described
+            t = t.replace("sorted by size before sampling.", "sorted by size before sampling [[LX901]].")
         t = t.replace("Informed consent was obtained from all farmers.", "All farmers gave informed consent.")
         t = t.replace("We fitted", "We estimated")
         t = t.replace("Yield rose with moisture in all three regions", "Yield rose with moisture in each of the three regions" + (", judged on wells with at least 6 months of data" if answered else ""))

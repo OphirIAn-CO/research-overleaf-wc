@@ -102,6 +102,9 @@ class Reading(Base):
         g = self.docs()["Garcia - 2018 - Water use in maize.txt"]
         self.assertEqual((g["authors"], g["year"], g["title"], g["source"]), ("Garcia", "2018", "Water use in maize", "name"))
         self.assertEqual(g["label"], "Garcia 2018")
+        (self.lib / "Smith et al. - 2020 - Roots.txt").write_text("Roots reach deeper water in dry years when soils are sandy and deep.\n\n" * 3)
+        library.update()
+        self.assertEqual((self.docs()["Smith et al. - 2020 - Roots.txt"]["authors"], self.docs()["Smith et al. - 2020 - Roots.txt"]["label"]), ("Smith et al.", "Smith et al. 2020"))
 
     def test_a_bib_file_gives_the_right_details_and_does_not_show_twice(self):
         (self.lib / "refs.bib").write_text(BIB)
@@ -292,6 +295,14 @@ class Citing(Base):
         self.assertEqual(library.add_entry_from_record(doc["id"], bib["path"]), "smith2020soilb")
         self.assertIn("@article{smith2020soilb,", Path(bib["path"]).read_text())
 
+    def test_the_citation_command_is_the_one_the_paper_uses_most(self):
+        root = Path(self.proj["path"])
+        self.assertEqual(library.cite_command(self.proj), "\\cite", "none used yet")
+        (root / "a.tex").write_text("One \\citep{a} and two \\citep[p.~3]{b} and \\citet{c} and \\cite{d}. \\nocite{x}")
+        (root / ".hidden").mkdir()
+        (root / ".hidden" / "z.tex").write_text("\\citet{a}" * 20)
+        self.assertEqual(library.cite_command(self.proj), "\\citep")
+
     def test_names_are_split_the_way_people_write_them(self):
         self.assertEqual(library.author_list("Smith, J. and Lee, K."), ["Smith, J.", "Lee, K."])
         self.assertEqual(library.author_list("Smith, John"), ["Smith, John"])
@@ -300,6 +311,8 @@ class Citing(Base):
         self.assertEqual([library.surname(x) for x in ("Smith, J.", "John Smith")], ["Smith", "Smith"])
         self.assertEqual(library._label("Smith, J.; Lee, K.; Wu, X.", "2020", "T", "f"), "Smith et al. 2020")
         self.assertEqual(library._label("", "", "A long title about things", "file"), "A long title about things")
+        self.assertEqual(library._label("Smith et al.", "2020", "T", "f"), "Smith et al. 2020")
+        self.assertEqual(library._label("Smith, J., et al.", "2020", "T", "f"), "Smith et al. 2020")
 
 
 class Formats(Base):

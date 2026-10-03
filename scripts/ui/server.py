@@ -1142,6 +1142,8 @@ def api_chat_send(r):
         out.append(chat.append(p, cid, "assistant", "text", HELP_TEXT))
     elif kind == "refs":
         job = _start_refs(r.app, n, p, cid, chat.find_dois(text)[:20])
+    elif kind == "library":
+        out.append(_library_answer(n, p, cid, text))
     elif kind == "review":
         if config.openai_status()[0] != "ok":
             out.append(chat.append(p, cid, "assistant", "error", "ChatGPT is not set up yet. Open Settings and add your OpenAI key and model, then ask again."))
@@ -1184,6 +1186,24 @@ def api_chat_send(r):
                 job = _start_pass(r.app, n, p, cid, m["id"])
                 out[-1] = chat.get_message(p, cid, m["id"])
     return {"messages": out, "job": job}
+
+
+def _library_answer(n, p, cid, text):
+    """"What do my articles say about X?": the best parts of the library, with where they are from and how to cite them. Local and free: nothing goes to OpenAI."""
+    topic = chat.library_topic(text)
+    st = library.status()
+    if not topic:
+        return chat.append(p, cid, "assistant", "text", "What should I look for in your library? For example: what do my articles say about well data curation?")
+    if not any(f["ok"] for f in st["folders"]) or not st["docs"]:
+        why = "Your literature library is empty." if any(f["ok"] for f in st["folders"]) else "You have not chosen a folder for your literature library yet."
+        return chat.append(p, cid, "assistant", "text", why + " Open Settings, add the folder where you keep your articles and books, and press \"Read the folders\". Then ask again.")
+    res = library.query(topic, k=6, budget=3000, per_doc=2)
+    hits = library.annotate(res["chunks"], p)
+    cmd = library.cite_command(p)
+    slim = [{"id": c["id"], "doc": c["doc"], "label": c["label"], "title": c["title"], "authors": c["authors"], "year": c["year"], "doi": c["doi"], "where": c["where"], "pages": c["pages"],
+             "text": c["text"][:700] + ("..." if len(c["text"]) > 700 else ""), "in_bib": c["in_bib"], "cite_key": c["cite_key"], "can_add": c["can_add"],
+             "has_entry": bool(library.get_doc(c["doc"])["bibtex"])} for c in hits]
+    return chat.append(p, cid, "assistant", "library", "", topic=topic, hits=slim, command=cmd, docs=res["docs"], total=st["docs"])
 
 
 def _start_refs(app, n, p, cid, dois):
@@ -1482,6 +1502,32 @@ def api_library_parts(r):
     return {"doc": {k: d[k] for k in ("id", "rel", "title", "authors", "year", "doi", "label", "pages", "parts", "note")}, "parts": library.parts(doc)}
 
 
+def api_library_cite(r):
+    """Make a document of the library citable in a paper: its entry from a .bib in the library is copied into the paper's bibliography, or its DOI is added the usual way."""
+    n, p = paper_ref(r.body.get("paper", ""))
+    (doc_id,) = need(r.body, "doc")
+    d = library.get_doc(str(doc_id))
+    if not d:
+        raise ApiError(404, "that document is not in the library")
+    cmd = library.cite_command(p)
+    have = library.cite_for(d, library.paper_bib(p))
+    if have:
+        return {"status": "in_bib", "key": have["key"], "cite": f"{cmd}{{{have['key']}}}", "message": f"It is already in your bibliography as {have['key']}."}
+    bib = common.bib_path(p)
+    if d["bibtex"]:
+        key = library.add_entry_from_record(d["id"], str(bib))
+        paper_index.refresh(n, p, trigger="after_edit", source="web")
+        return {"status": "added", "key": key, "cite": f"{cmd}{{{key}}}", "message": f"Added {key} to {Path(bib).name}. It goes to Overleaf with your next send."}
+    if d["doi"]:
+        common.set_active(n, "ui")
+        out = add_references(n, p, [d["doi"]], mirror="auto")
+        res = out["results"][0]
+        if res["status"] not in ("added", "duplicate"):
+            raise ApiError(400, res["message"])
+        return {"status": res["status"], "key": res.get("key", ""), "cite": res.get("cite", ""), "message": res["message"], "push": out["push"], "result": res}
+    raise ApiError(400, "This document has no DOI and no entry in a .bib file, so I cannot add it to your bibliography. Paste its DOI in the chat instead.")
+
+
 def api_library_search(r):
     q = r.arg("q", "").strip()
     if not q:
@@ -1618,6 +1664,10 @@ def api_settings(r):
             if body["use_files"] not in ("auto", "always", "never"):
                 raise ApiError(400, "use_files must be auto, always or never")
             config.set_paper_setting(p, "use_files", body["use_files"])
+        if "use_library" in body:
+            if body["use_library"] not in ("auto", "always", "never"):
+                raise ApiError(400, "use_library must be auto, always or never")
+            config.set_paper_setting(p, "use_library", body["use_library"])
         if "overleaf_url" in body:
             v = str(body["overleaf_url"] or "").strip()
             if v and not panes.valid_overleaf(v):
@@ -2004,7 +2054,7 @@ ROUTES = [
     ("POST", r"^/api/browser/(quillbot|overleaf)/close$", api_browser_close),
     ("GET", r"^/api/panes$", api_panes), ("POST", r"^/api/test/frames$", api_test_frames),
     ("GET", r"^/api/library$", api_library), ("POST", r"^/api/library/folders$", api_library_folders), ("POST", r"^/api/library/index$", api_library_index),
-    ("GET", r"^/api/library/parts$", api_library_parts), ("GET", r"^/api/library/search$", api_library_search),
+    ("GET", r"^/api/library/parts$", api_library_parts), ("GET", r"^/api/library/search$", api_library_search), ("POST", r"^/api/library/cite$", api_library_cite),
     ("GET", r"^/api/overview$", api_overview), ("GET", r"^/api/connections$", api_connections), ("POST", r"^/api/test/openai$", api_test_openai),
     ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/test/cleaner$", api_test_cleaner),
     ("GET", r"^/api/papers/discover$", api_discover), ("POST", r"^/api/papers/add$", api_add_paper),

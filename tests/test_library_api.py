@@ -9,6 +9,7 @@ from tests.test_files import docx
 from tests.test_library import BIB, IRRIGATION, SOIL
 from tests.test_paper import paper
 from tests.test_ui_server import UiBase
+from tests.test_v2_refs import Stubs
 from writing_core import library
 
 
@@ -143,6 +144,101 @@ class WritingMaterial(UiBase):
         make_pdf(proj_dir / "fig1.pdf", IRRIGATION)
         st, g = self.c.get("/api/files?paper=alpha")
         self.assertNotIn("fig1.pdf", [f["name"] for f in g["files"]])
+
+
+@needs_pdf
+class InTheChat(UiBase, Stubs):
+    """"What do my articles say about...?" is answered from the library on this computer, with how to cite what it finds."""
+
+    def setUp(self):
+        super().setUp()
+        self.install()
+        self.name, self.proj = paper(self)
+        self.c.login()
+        self.lib = self.tmp / "Documents" / "Literature"
+        self.lib.mkdir(parents=True)
+        make_pdf(self.lib / "Smith et al. - 2020 - Soil moisture.pdf", SOIL)
+        make_pdf(self.lib / "irrigation.pdf", IRRIGATION)
+
+    def tearDown(self):
+        self.restore()
+        super().tearDown()
+
+    def ask(self, text):
+        st, r = self.c.post("/api/chat/send", {"paper": "alpha", "text": text})
+        self.assertEqual(st, 200, r)
+        return r["messages"][-1]
+
+    def read_library(self, *extra):
+        self.c.post("/api/library/folders", {"folders": [str(self.lib)]})
+        for f in extra:
+            f()
+        st, r = self.c.post("/api/library/index", {})
+        self.assertEqual(self.wait_job(r["job"])["status"], "done")
+
+    def doc(self, rel):
+        return next(d for d in self.c.get("/api/library")[1]["docs"] if d["rel"] == rel)
+
+    def test_without_a_library_it_says_where_to_set_one_up(self):
+        m = self.ask("what do my articles say about soil moisture?")
+        self.assertEqual(m["kind"], "text")
+        self.assertIn("Settings", m["text"])
+        self.read_library()
+        self.assertEqual(self.ask("search my library")["kind"], "text", "asked to search for nothing, it asks what for")
+
+    def test_the_answer_lists_parts_with_where_they_are_from_and_nothing_goes_to_openai(self):
+        self.read_library()
+        m = self.ask("what do my articles say about stratified random sampling?")
+        self.assertEqual(m["kind"], "library")
+        d = m["data"]
+        self.assertEqual(d["topic"], "stratified random sampling")
+        top = d["hits"][0]
+        self.assertEqual((top["label"], top["where"]), ("Smith et al. 2020", "page 2 · Methods"))
+        self.assertIn("capacitance probes", top["text"])
+        self.assertEqual((top["in_bib"], top["can_add"], top["has_entry"]), (False, True, False), "it has a DOI, so it can be added")
+        self.assertEqual(d["command"], "\\cite")
+        self.assertEqual(self.c.get("/api/library/search?q=nothing+matches+qqqq")[1]["chunks"], [])
+        self.assertEqual(self.ask("which of my books mention zebrafish genomes")["data"]["hits"], [])
+
+    def test_a_document_with_a_doi_is_added_the_usual_way_and_is_cited_afterwards(self):
+        self.read_library()
+        doc = self.doc("Smith et al. - 2020 - Soil moisture.pdf")
+        st, r = self.c.post("/api/library/cite", {"paper": "alpha", "doc": doc["id"]})
+        self.assertEqual(st, 200, r)
+        self.assertEqual(r["status"], "added")
+        self.assertTrue(r["cite"].startswith("\\cite{") and r["key"], r)
+        self.assertIn("10.1234/abc.2020.001", Path(common.bib_path(self.proj)).read_text())
+        top = self.ask("what do my articles say about stratified random sampling?")["data"]["hits"][0]
+        self.assertEqual((top["in_bib"], top["cite_key"]), (True, r["key"]))
+        st, again = self.c.post("/api/library/cite", {"paper": "alpha", "doc": doc["id"]})
+        self.assertEqual((st, again["status"]), (200, "in_bib"))
+
+    def test_an_entry_from_a_bib_file_in_the_library_is_copied_without_asking_anyone(self):
+        (self.lib / "refs.bib").write_text(BIB)
+        self.read_library()
+        calls = len(self.mendeley_calls) + len(self.pushes)
+        doc = self.doc("Smith et al. - 2020 - Soil moisture.pdf")
+        st, r = self.c.post("/api/library/cite", {"paper": "alpha", "doc": doc["id"]})
+        self.assertEqual((st, r["status"], r["key"]), (200, "added", "smith2020soil"), r)
+        self.assertIn("@article{smith2020soil", Path(common.bib_path(self.proj)).read_text())
+        self.assertEqual(len(self.mendeley_calls) + len(self.pushes), calls, "nothing was looked up or sent")
+        self.assertIn("next send", r["message"])
+
+    def test_a_document_that_cannot_be_cited_says_why_and_bad_ids_are_refused(self):
+        self.read_library()
+        st, r = self.c.post("/api/library/cite", {"paper": "alpha", "doc": self.doc("irrigation.pdf")["id"]})
+        self.assertEqual(st, 400)
+        self.assertIn("no DOI", r["error"])
+        self.assertEqual(self.c.post("/api/library/cite", {"paper": "alpha", "doc": "nope"})[0], 404)
+        self.assertEqual(self.c.post("/api/library/cite", {"paper": "nope", "doc": "x"})[0], 404)
+        self.assertEqual(self.c.post("/api/library/cite", {"paper": "alpha"})[0], 400)
+
+    def test_the_library_setting_of_a_paper_is_saved_and_checked(self):
+        self.assertEqual(self.c.post("/api/settings", {"paper": "alpha", "use_library": "sometimes"})[0], 400)
+        self.assertEqual(self.c.post("/api/settings", {"paper": "alpha", "use_library": "never"})[0], 200)
+        self.assertEqual(common.resolve("alpha")[0], "alpha")
+        from writing_core import config
+        self.assertEqual(config.paper_settings(self.proj)["use_library"], "never")
 
 
 if __name__ == "__main__":

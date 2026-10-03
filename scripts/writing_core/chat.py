@@ -238,14 +238,35 @@ def find_dois(text):
     return [d.rstrip(".,;)") for d in _DOI.findall(text or "")]
 
 
+_READING = r"(?:library|literature|readings?|articles|books|sources|pdfs|reading list|references|papers)"
+_SHELF = r"(?:library|literature|readings?|articles|books|sources|pdfs|reading list)"                      # "my papers" and "my references" may mean the manuscript and its bibliography
+_LIBRARY_ASK = re.compile(
+    rf"\b(?:search|look\s*(?:up|in|through)|find|check|scan|query|show)\b.*\b(?:my|the|our)\s+{_SHELF}\b|"
+    rf"\bwhat\s+(?:do|does|did)\s+(?:my|the|our)\s+{_READING}\s+(?:say|tell|show|mention|have|cover|report)\b|"
+    r"\bwhat\s+(?:does|did)\s+(?:the\s+)?literature\s+(?:say|show|tell)\b|"
+    rf"\b(?:which|what)\s+(?:of\s+)?(?:my\s+)?{_READING}\b.*\b(?:about|on|mention|discuss|cover|report|show)\b|"
+    r"\b(?:is|are)\s+there\s+(?:anything|something|evidence|a source|any)\b.*\b(?:in|from)\s+(?:my|the)\s+(?:library|literature|readings?|articles|books|sources)\b", re.I)
+_LIBRARY_EDIT = {"add", "insert", "include", "put", "improve", "rewrite", "revise", "edit", "write", "draft", "cite", "citation", "citations", "support", "tighten", "shorten", "fix", "polish"}
+_LIBRARY_NOISE = re.compile(rf"\b(?:please|can you|could you|search|look\s*(?:up|in|through)|find|check|scan|query|show|what|which|do|does|did|is|are|there|anything|something|my|the|our|of|in|from|"
+                            rf"{_READING}|say|says|tell|mention|mentions|have|cover|covers|report|reports|about|on|for|me|us|any|evidence|a source)\b", re.I)
+
+
+def library_topic(text):
+    """'what do my articles say about well data curation?' -> 'well data curation'"""
+    t = _LIBRARY_NOISE.sub(" ", text or "")
+    return re.sub(r"\s+", " ", re.sub(r"[?!.:;,]+", " ", t)).strip()
+
+
 def intent(text):
-    """-> 'refs' | 'review' | 'help' | 'edit'"""
+    """-> 'refs' | 'review' | 'help' | 'library' | 'edit'"""
     if find_dois(text):
         return "refs"
     if _HELP.match(text or ""):
         return "help"
     if _REVIEW.search(text or ""):
         return "review"
+    if _LIBRARY_ASK.search(text or "") and not (set(taxonomy.words((text or "").lower())) & (_INTENT_WORDS | _LIBRARY_EDIT)):
+        return "library"
     return "edit"
 
 
@@ -555,7 +576,8 @@ def plan(name, proj, instruction, chunk_ids, book_id=None, facts=""):
     res = revise.run(name, proj, instruction, chunk_ids=chunk_ids, book_id=book_id, dry_run=True, source="web", facts=facts)
     return {"instruction": instruction, "facts": (facts or "").strip()[:3000], "chunk_ids": chunk_ids, "units": res["units"], "passages": res["passages"], "est_tokens_in": res["est_tokens_in"],
             "est_cost": res["est_cost"], "manuscript_tokens": res["manuscript_tokens"], "model": res["model"], "tips": len(res["rules"]),
-            "payload_hash": res["payload_hash"], "warnings": res["warnings"], "book": res["book"], "parts": res["parts"], "sources": res.get("sources", [])}
+            "payload_hash": res["payload_hash"], "warnings": res["warnings"], "book": res["book"], "parts": res["parts"], "sources": res.get("sources", []),
+            "library": res.get("library", [])}
 
 
 # ------------------------------------------------------------------------------------------- peer review: which part?

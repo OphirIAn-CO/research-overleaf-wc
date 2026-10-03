@@ -219,9 +219,10 @@ def surname(author):
 
 
 def _label(authors, year, title, name):
-    people = author_list(authors)
+    etal = bool(re.search(r"\bet\s+al\.?\s*$", authors or "", re.I))
+    people = author_list(re.sub(r"[\s,]*\bet\s+al\.?\s*$", "", authors or "", flags=re.I))
     if people and surname(people[0]) and year:
-        return f"{surname(people[0])}{' et al.' if len(people) > 2 else (' and ' + surname(people[1]) if len(people) == 2 else '')} {year}"
+        return f"{surname(people[0])}{' et al.' if etal or len(people) > 2 else (' and ' + surname(people[1]) if len(people) == 2 else '')} {year}"
     return (title or name)[:60]
 
 
@@ -233,7 +234,7 @@ def _from_name(stem):
     for rx in _NAME_RE:
         m = rx.match(stem.replace("%20", " "))
         if m:
-            au = re.sub(r"\s+et\s+al\.?$", "", m.group("au").strip(), flags=re.I)
+            au = re.sub(r"\s+et\s+al\.?$", " et al.", m.group("au").strip(), flags=re.I)
             return {"authors": au, "year": m.group("yr"), "title": _clean_title(m.group("ti").replace("_", " "))}
     return {"title": _clean_title(stem.replace("_", " "))}
 
@@ -872,3 +873,65 @@ def add_entry_from_record(doc_id, bib_path):
     entry = d["bibtex"].replace("{" + d["bib_key"] + ",", "{" + key + ",", 1)
     Path(bib_path).write_text(text.rstrip("\n") + "\n\n" + entry + "\n", encoding="utf-8")
     return key
+
+
+# ------------------------------------------------------------------------------------------------ for a request
+
+WANTS_LIBRARY = re.compile(
+    r"\b(?:my|our|the)\s+(?:library|literature|readings?|articles|books|sources|references|bibliography|pdfs|reading list)\b"
+    r"|\b(?:according to|based on|supported by|backed up by|support (?:this|it|that|these) with|back (?:this|it|that|these) up with|ground (?:this|it|that) in|"
+    r"cite|citations?|add (?:a |some )?(?:source|reference|citation)s?|find (?:a |some )?(?:source|reference|evidence|literature)s?|evidence (?:for|from)|literature (?:says|shows|on|about))\b"
+    r"|\bwhat does (?:the )?literature say\b", re.I)
+FIRST_TAG = 901                      # tags LX901, LX902, ...: the citations a request may add (the original text never has this many protected pieces)
+MAX_CITABLE = 9
+
+
+def wants(instruction):
+    return bool(WANTS_LIBRARY.search(instruction or ""))
+
+
+_CITE_USED = re.compile(r"\\(cite[a-z]*|parencite|textcite|autocite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{")
+
+
+def cite_command(proj):
+    """The citation command the paper uses most (\\citep, \\cite, ...), so a citation added for the author reads like the others. \\cite when the paper has none yet."""
+    from collections import Counter
+    n, root = Counter(), Path(proj["path"])
+    try:
+        for i, p in enumerate(sorted(root.rglob("*.tex"))):
+            if i >= 60:
+                break
+            if any(part.startswith(".") for part in p.relative_to(root).parts):
+                continue
+            n.update(m.group(1) for m in _CITE_USED.finditer(p.read_text(encoding="utf-8", errors="replace")[:400000]) if m.group(1) != "nocite")
+    except OSError:
+        pass
+    return "\\" + (n.most_common(1)[0][0] if n else "cite")
+
+
+def relevant(proj, instruction, passage="", mode="auto", k=4, budget=1600):
+    """The parts of the library a request should see, or None. In "auto" a request uses the library when it asks for sources, citations or the author's reading; "always"
+    searches for every request; "never" for none. -> {chunks: [hit with in_bib / cite_key], why}"""
+    if mode == "never" or (mode != "always" and not wants(instruction)) or not _db_path().exists():
+        return None
+    res = query(f"{instruction} {passage[:800]}", k=k, budget=budget, per_doc=2)
+    if not res["chunks"]:
+        return None
+    return {"chunks": annotate(res["chunks"], proj), "why": "always" if mode == "always" else "asked", "command": cite_command(proj)}
+
+
+def request_block(lib):
+    """The library's parts as they go into a request. -> (text, tags {LX901: '\\cite{key}'}, shown [{id, label, where, doc, cite_key, tag}])
+    A source that is in the paper's bibliography is offered with a tag the model may write to cite it; any other can inform the wording and cannot be cited."""
+    tags, shown, lines = {}, [], []
+    for n, c in enumerate(lib["chunks"], 1):
+        tag = ""
+        if c.get("cite_key"):
+            tag = next((t for t, v in tags.items() if v.endswith("{" + c["cite_key"] + "}")), "")
+            if not tag and len(tags) < MAX_CITABLE:
+                tag = f"LX{FIRST_TAG + len(tags)}"
+                tags[tag] = (lib.get("command") or "\\cite") + "{" + c["cite_key"] + "}"
+        how = f"Cite it with [[{tag}]]." if tag else "Not in the paper's bibliography: it can inform the wording but must not be cited."
+        lines.append(f"[S{n}] {c['label']}, {c['where']}. {how}\n{c['text']}")
+        shown.append({"id": c["id"], "doc": c["doc"], "label": c["label"], "where": c["where"], "tokens": c["tokens"], "cite_key": c.get("cite_key", ""), "tag": tag, "title": c["title"]})
+    return "\n\n".join(lines), tags, shown

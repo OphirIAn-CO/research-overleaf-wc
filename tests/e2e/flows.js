@@ -330,6 +330,26 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   ok(!fs.existsSync(`${home}/papers/soil-yield/references/results.csv`), 'removing a file takes it out of the project');
   await page.click('#nav a:has-text("Chat")');
   await page.waitForSelector('.chat-page');
+
+  // ---- the library in the chat: a question is answered from the reading, a citation can be added, and a request for support cites it
+  await page.fill('#composer', 'what do my articles say about stratified random sampling?');
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('.msg.assistant .hit', { timeout: 20000 });
+  const libHit = await text(page, '.msg.assistant .hit >> nth=0');
+  ok(/Smith and Lee 2020/.test(libHit) && /capacitance probes/.test(libHit) && /page 2/.test(libHit), 'a question about the reading is answered from the library, with the page it comes from');
+  ok(!JARGON.test(await text(page, '.thread')), 'and uses no jargon');
+  await page.click('.msg.assistant .hit >> nth=0 >> button:has-text("Add to my bibliography")');
+  await page.waitForSelector('.msg.assistant .hit code.cite', { timeout: 20000 });
+  ok(/\\cite\{smith2020soil\}/.test(await text(page, '.msg.assistant .hit >> nth=0')) && /smith2020soil/.test(fs.readFileSync(`${home}/papers/soil-yield/references.bib`, 'utf8')), 'one press adds the source to the bibliography and gives the \\cite to paste');
+  await shot(page, '06d-library-in-chat');
+  await page.fill('#composer', 'support the sampling frame in the methods with my library and cite it');
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('.msg.assistant:has-text("Used from your library")', { timeout: 30000 });
+  const libUse = await text(page, '.msg.assistant:has-text("Used from your library")');
+  ok(/Citations added: \\cite\{smith2020soil\}/.test(libUse), 'the suggestion says which citation it adds');
+  ok(/Citations from your library/.test(await text(page, '.thread')), 'and points at it next to the change');
+  await shot(page, '06e-library-citation');
+
   await page.click('#nav a:has-text("Activity")');
   await page.waitForSelector('.feed-card');
   const act = await text(page, '#main');
