@@ -1,6 +1,7 @@
 ---
 name: research-overleaf-wc
-description: Sync and edit any locally-cloned Overleaf project backed by its Overleaf Git bridge, anywhere on disk, including pulling new references from Mendeley, citing them, and running a peer-review pass on the draft. Use when the user says "overleaf", "sync the paper", "pull/push overleaf", "edit main.tex", "update the paper on overleaf", "pull references from Mendeley", "fetch new citations", "review my paper", "peer review this draft", or asks to read/edit/find/review something in an Overleaf project's LaTeX or bibliography. Also use for the writing coach: "improve / polish / tighten / rewrite my methods (abstract, introduction, ...)", "follow the book", "check this section against the writing book", "what does the book say about ...".
+description: >-
+  Sync and edit any locally-cloned Overleaf project backed by its Overleaf Git bridge, anywhere on disk, including pulling new references from Mendeley, citing them, and running a peer-review pass on the draft. Use when the user says "overleaf", "sync the paper", "pull/push overleaf", "edit main.tex", "update the paper on overleaf", "pull references from Mendeley", "fetch new citations", "review my paper", "peer review this draft", or asks to read/edit/find/review something in an Overleaf project's LaTeX or bibliography. Also use for the writing coach: "improve / polish / tighten / rewrite my methods (abstract, introduction, ...)", "follow the book", "check this section against the writing book", "what does the book say about ...".
 allowed-tools:
   - Read
   - Edit
