@@ -50,6 +50,7 @@ def main():
     ap.add_argument("--port", type=int, default=8799)
     ap.add_argument("--browser", action="store_true")
     ap.add_argument("--real", action="store_true")
+    ap.add_argument("--no-book", action="store_true")
     args = ap.parse_args()
     ui = load_ui_server()
     import doi_bot
@@ -139,16 +140,20 @@ def main():
     common.save("ui.json", {"watermark_url": wm.url, "idle_minutes": 240, "workspace_roots": [str(papers_dir)]})
 
     pdf = ROOT / "tests" / "fixtures" / "mini_book.pdf"
-    config.inbox_dir().mkdir(parents=True, exist_ok=True)
-    (config.inbox_dir() / "mini_book.pdf").write_bytes(pdf.read_bytes())
-    book_index.ingest(pdf, "mini")
+    NO_BOOK = "--no-book" in sys.argv                        # --no-book: nothing imported yet, to try uploading the book from Settings
+    if not NO_BOOK:
+        config.inbox_dir().mkdir(parents=True, exist_ok=True)
+        (config.inbox_dir() / "mini_book.pdf").write_bytes(pdf.read_bytes())
+        book_index.ingest(pdf, "mini")
 
     # real activity
     for n, (name, proj) in names.items():
         paper_index.query(name, proj, "improve my methods", source="claude")
-        retrieve.book_query("mini", "how do I describe the statistical analysis", paper=name, paper_scope=config.paper_dir(proj), source="claude")
+        if not NO_BOOK:
+            retrieve.book_query("mini", "how do I describe the statistical analysis", paper=name, paper_scope=config.paper_dir(proj), source="claude")
         paper_index.query(name, proj, "tense and passive voice in the discussion", source="claude")
-    retrieve.book_query("mini", "what to put in limitations", source="ui")
+    if not NO_BOOK:
+        retrieve.book_query("mini", "what to put in limitations", source="ui")
     soil = names["soil-yield"]
 
     # ten days of synthetic history (metadata only, like the real logs)

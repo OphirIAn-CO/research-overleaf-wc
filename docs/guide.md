@@ -20,8 +20,9 @@ Install the app first (see the README: `./install.sh ui`, then `./ui.sh up`). Ev
 1. **OpenAI**: paste your API key and the model name you want to use; press **Test** (it is a read-only check, no cost).
 2. **Overleaf**: paste your Overleaf Git token (Overleaf: Account Settings, Git Integration) so the app can get the latest and
    send your changes; press **Test**.
-3. **Writing book**: put the PDF (selectable text) in `~/.config/overleaf-skill/inbox/` and press **Prepare the book**. It is read
-   once. Optionally press **See the cost**, then **Make the summaries once**: a one-time step that makes every later request
+3. **Writing book**: press **Choose the book PDF** and pick the file (a PDF with selectable text, up to 200 MB). It is sent to the app's private folder
+   on your computer (with a progress bar) and read straight away; reading is local and costs nothing. (A PDF you put in `~/.config/overleaf-skill/inbox/` by hand is still
+   offered under "Or use a PDF that is already in the inbox folder".) Optionally press **See the cost**, then **Make the summaries once**: a one-time step that makes every later request
    cheaper and sharper (it sends the book text to OpenAI once, shows the estimate first, and can resume).
 4. **Text-cleaning service** (optional): the address of a local service that post-processes new text before it is saved (for example one that removes
    hidden characters or fixes typography). Leave it empty to save text exactly as you approved it; the card then says so. The service must answer

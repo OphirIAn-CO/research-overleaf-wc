@@ -52,7 +52,7 @@ Then, **in the app, under Settings** (nothing to edit by hand):
 1. **OpenAI**: paste your key and the model name, press *Test*.
 2. **Overleaf**: paste your Git token, press *Test*.
 3. **Papers**: clone your Overleaf project (Overleaf: Menu, Git) into a folder, share that folder with the app once (`./ui.sh folders add ~/path/to/your/papers`, then `./ui.sh down && ./ui.sh up`), and press *Add* next to it.
-4. **Writing book**: put the PDF in `~/.config/overleaf-skill/inbox/` and press *Prepare the book*.
+4. **Writing book**: press *Choose the book PDF* and pick the file (a PDF with selectable text). The app copies it into its private folder and reads it; nothing to find or move by hand.
 5. Optional: **Literature library** and **Code and results** (point them at your folders; in Docker share them read-only: `./ui.sh folders add --read-only ~/Documents/Literature`).
 
 Then open the **Chat** and ask for something. The [guide](docs/guide.md) explains every part.

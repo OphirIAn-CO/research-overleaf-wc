@@ -11,6 +11,7 @@ Meant to run in Docker on demand (`./ui.sh up`), published on 127.0.0.1 only. Sa
 import argparse
 import base64
 import binascii
+import hashlib
 import hmac
 import json
 import os
@@ -47,6 +48,7 @@ CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' 
 MAX_BODY = 1 << 20
 UPLOAD_BODY = (files.MAX_UPLOAD * 4) // 3 + 8192      # a file arrives as base64 inside the JSON body
 LATEX_BODY = latexbuild.MAX_FILE * 2 + 8192             # a saved .tex or .bib file arrives as JSON text (quotes and newlines are escaped, so it can grow)
+BOOK_MAX = 200 << 20                                    # bytes: the writing book's PDF, uploaded from Settings (streamed to disk, never held in memory)
 PID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
@@ -506,6 +508,41 @@ def api_book_outline_save(r):
     o = {**o, "entries": keep}
     book_index.write_outline(b, o)
     return {"saved": len(keep)}
+
+
+def _sha_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def api_book_upload(r):
+    """The writing book's PDF, chosen in Settings: checked, given a safe name and put in the inbox, where Prepare the book reads it. (The body was already written to a temporary file.)"""
+    tmp = Path(str(r.body.get("_tmp", "")))
+    try:
+        inbox = config.inbox_dir()
+        if tmp.parent != inbox or not tmp.name.startswith(".upload-") or not tmp.is_file():
+            raise ApiError(400, "no file arrived")
+        with open(tmp, "rb") as fh:
+            if b"%PDF-" not in fh.read(1024):
+                raise ApiError(400, "That does not look like a PDF. Choose the book as a PDF file with selectable text.")
+        raw = os.path.basename(str(r.arg("name", "") or "").replace("\\", "/"))
+        stem = re.sub(r"\s+", " ", re.sub(r"[^\w.,()+\- ]", "_", raw.rsplit(".", 1)[0], flags=re.U)).strip(" .")[:100] or "book"
+        digest = _sha_file(tmp)
+        name, k = f"{stem}.pdf", 2
+        while (inbox / name).exists():
+            if _sha_file(inbox / name) == digest:
+                tmp.unlink(missing_ok=True)                                  # the same file again: nothing to do
+                return {"name": name, "size": r.body["_size"], "duplicate": True, "inbox": sorted(p.name for p in inbox.glob("*.pdf"))}
+            name, k = f"{stem} ({k}).pdf", k + 1
+        os.replace(tmp, inbox / name)
+        os.chmod(inbox / name, 0o600)
+        return {"name": name, "size": r.body["_size"], "duplicate": False, "inbox": sorted(p.name for p in inbox.glob("*.pdf"))}
+    finally:
+        if tmp.name.startswith(".upload-"):
+            tmp.unlink(missing_ok=True)
 
 
 def api_ingest(r):
@@ -2120,7 +2157,7 @@ ROUTES = [
     ("GET", r"^/api/proposals$", api_proposals), ("GET", r"^/api/proposal$", api_proposal),
     ("POST", r"^/api/proposal/apply$", api_apply), ("POST", r"^/api/proposal/record$", api_record),
     ("GET", r"^/api/monitor$", api_monitor), ("GET", r"^/api/events$", api_events),
-    ("GET", r"^/api/files$", api_files), ("GET", r"^/api/files/parts$", api_files_parts), ("POST", r"^/api/files/upload$", api_files_upload),
+    ("GET", r"^/api/files$", api_files), ("GET", r"^/api/files/parts$", api_files_parts), ("POST", r"^/api/files/upload$", api_files_upload), ("POST", r"^/api/book/upload$", api_book_upload),
     ("POST", r"^/api/files/remove$", api_files_remove), ("POST", r"^/api/files/folders$", api_files_folders),
     ("GET", r"^/api/health$", api_health), ("POST", r"^/api/settings$", api_settings),
     ("GET", r"^/api/paper/([^/]+)/card$", api_card_get), ("POST", r"^/api/paper/([^/]+)/card$", api_card_save),
@@ -2237,15 +2274,41 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get("X-Requested-With") != "ols":
                 return self._err(403, "missing X-Requested-With")
             n = int(self.headers.get("Content-Length") or 0)
+            if path == "/api/book/upload":                                   # a raw PDF, not JSON: written to disk as it arrives
+                if n <= 0:
+                    return self._err(400, "The file is empty.")
+                if n > BOOK_MAX:
+                    return self._err(413, f"That PDF is over the {BOOK_MAX >> 20} MB limit.")
+                inbox = config.inbox_dir()
+                inbox.mkdir(parents=True, exist_ok=True)
+                tmp = inbox / f".upload-{secrets.token_hex(6)}.part"
+                left = n
+                try:
+                    with open(tmp, "wb") as fh:
+                        while left:
+                            chunk = self.rfile.read(min(1 << 20, left))
+                            if not chunk:
+                                break
+                            fh.write(chunk)
+                            left -= len(chunk)
+                except OSError as e:
+                    tmp.unlink(missing_ok=True)
+                    return self._err(500, f"I could not save the file ({e.__class__.__name__}).")
+                if left:
+                    tmp.unlink(missing_ok=True)
+                    return self._err(400, "The upload was cut off. Try again.")
+                body = {"_tmp": str(tmp), "_size": n}
+                n = 0
             if n > (UPLOAD_BODY if path == "/api/files/upload" else LATEX_BODY if path == "/api/latex/save" else MAX_BODY):
                 return self._err(413, "request too large" if path != "/api/files/upload" else f"That file is over the {files.MAX_UPLOAD >> 20} MB limit.")
-            raw = self.rfile.read(n) if n else b""
-            try:
-                body = json.loads(raw.decode("utf-8")) if raw else {}
-                if not isinstance(body, dict):
-                    raise ValueError
-            except ValueError:
-                return self._err(400, "body must be a JSON object")
+            if path != "/api/book/upload":
+                raw = self.rfile.read(n) if n else b""
+                try:
+                    body = json.loads(raw.decode("utf-8")) if raw else {}
+                    if not isinstance(body, dict):
+                        raise ValueError
+                except ValueError:
+                    return self._err(400, "body must be a JSON object")
         bm = BROWSER_GET.match(path) if method == "GET" else None
         if bm:
             return self._browser_picture(bm.group(1), query)

@@ -10,11 +10,31 @@
 
   const slug = (name) => (name.replace(/\.pdf$/i, '').toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 30) || 'handbook');
 
+  // The book's PDF goes from the browser straight to the app's private folder (streamed, with a progress bar), so nobody has to find ~/.config.
+  const MAX_BOOK_MB = 200;
+  function uploadBook(file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open('POST', '/api/book/upload?name=' + enc(file.name));
+      x.setRequestHeader('X-Requested-With', 'ols');
+      x.setRequestHeader('Content-Type', 'application/pdf');
+      x.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+      x.onload = () => {
+        let d = null;
+        try { d = JSON.parse(x.responseText); } catch (e) { /* not json */ }
+        if (x.status >= 200 && x.status < 300 && d) resolve(d); else reject(new Error((d && d.error) || `The upload failed (${x.status}).`));
+      };
+      x.onerror = () => reject(new Error('The upload did not reach the app. Is it still running?'));
+      x.send(file);
+    });
+  }
+
   async function bookCard(st) {
     const card = h('section', { class: 'card', 'aria-label': 'Writing book' });
     const book = (st.books || [])[0];
     const out = h('div', { class: 'stack' });
-    const prepare = (pdf, id, mode, label) => guarded(h('button', { type: 'button', class: 'primary', text: label }), async () => {
+    const bar = h('div', { class: 'progress', hidden: true, role: 'progressbar', 'aria-label': 'Uploading the book' }, h('span'));
+    const ingest = async (pdf, id, mode) => {
       clear(out).append(busy('Reading the book. A long one takes about a minute...'));
       try {
         const r = await api.post('/api/book/ingest', { pdf, id, mode });
@@ -22,20 +42,36 @@
         toast(res.status === 'skipped' ? 'It was already prepared' : 'The book is ready');
         await window.OLS.loadState(); window.OLS.route();
       } catch (e) { clear(out).append(notice('bad', e.message)); throw e; }
-    });
+    };
+    // "Choose the book PDF": pick the file, send it, then read it (reading is local and costs nothing). after(name) says how to read what arrived.
+    const chooser = (label, after) => {
+      const input = h('input', { type: 'file', accept: '.pdf,application/pdf', hidden: true, 'aria-hidden': 'true', tabindex: '-1' });
+      const btn = guarded(h('button', { type: 'button', class: 'primary', text: label }), async () => { input.click(); });
+      input.addEventListener('change', async () => {
+        const f = input.files && input.files[0];
+        input.value = '';
+        if (!f) return;
+        if (!/\.pdf$/i.test(f.name)) { toast('Choose the book as a PDF file.'); return; }
+        if (f.size > MAX_BOOK_MB * 1048576) { toast(`${f.name} is over ${MAX_BOOK_MB} MB. Use a smaller copy of the book.`); return; }
+        btn.disabled = true;
+        bar.hidden = false; bar.firstChild.style.width = '0%';
+        clear(out).append(busy(`Sending ${f.name} (${(f.size / 1048576).toFixed(1)} MB) to the app...`));
+        try {
+          const saved = await uploadBook(f, (q) => { bar.firstChild.style.width = Math.round(q * 100) + '%'; });
+          bar.hidden = true;
+          await after(saved.name);
+        } catch (e) { bar.hidden = true; clear(out).append(notice('bad', e.message)); } finally { btn.disabled = false; }
+      });
+      return h('span', { class: 'row tight' }, btn, input);
+    };
+    const prepare = (pdf, id, mode, label) => guarded(h('button', { type: 'button', class: 'primary', text: label }), () => ingest(pdf, id, mode));
     if (!book) {
-      card.append(h('p', { class: 'small secondary', text: 'The book is read once and cut into pieces of advice; each request then uses only the few pieces that apply. You never have to look at them.' }));
-      if (!st.inbox.length) {
-        card.append(notice('warn', 'No book yet. Put the PDF in this folder on your computer: ', h('code', { text: '~/.config/overleaf-skill/inbox/' }), ' (drag it in with Finder), then come back here. The PDF must have selectable text.'));
-      } else {
-        const sel = h('select', { 'aria-label': 'Book PDF' }, st.inbox.map((f) => h('option', { value: f, text: f })));
-        card.append(h('div', { class: 'row' }, sel, guarded(h('button', { type: 'button', class: 'primary', text: 'Prepare the book' }), async () => {
-          clear(out).append(busy('Reading the book. A long one takes about a minute...'));
-          try {
-            const r = await api.post('/api/book/ingest', { pdf: sel.value, id: slug(sel.value), mode: 'build' });
-            await waitJob(r.job); toast('The book is ready'); await window.OLS.loadState(); window.OLS.route();
-          } catch (e) { clear(out).append(notice('bad', e.message)); throw e; }
-        })));
+      card.append(h('p', { class: 'small secondary', text: 'The book is read once and cut into pieces of advice; each request then uses only the few pieces that apply. You never have to look at them.' }),
+        h('div', { class: 'row' }, chooser('Choose the book PDF', (name) => ingest(name, slug(name), 'build')), bar),
+        h('p', { class: 'small muted', text: `A PDF with selectable text (not a scan), up to ${MAX_BOOK_MB} MB. It is copied into this app's private folder on your computer and read there; nothing is sent anywhere until you ask for the one-time summaries below.` }));
+      if (st.inbox.length) {
+        const sel = h('select', { 'aria-label': 'Book PDF already in the inbox folder' }, st.inbox.map((f) => h('option', { value: f, text: f })));
+        card.append(h('details', null, h('summary', { text: 'Or use a PDF that is already in the inbox folder' }), h('div', { class: 'row' }, sel, guarded(h('button', { type: 'button', text: 'Prepare the book' }), () => ingest(sel.value, slug(sel.value), 'build')))));
       }
       card.append(out);
       return card;
@@ -45,7 +81,7 @@
     if (book.outdated) {
       const here = st.inbox.includes(book.source);
       card.append(notice('warn', h('strong', { text: 'The way advice is matched has improved. ' }), 'Preparing the book again takes about a minute and keeps any advice summaries already made. ',
-        here ? prepare(book.source, book.id, 'rebuild', 'Prepare again') : h('span', { class: 'small', text: `Put ${book.source} back in the inbox folder first.` })));
+        here ? prepare(book.source, book.id, 'rebuild', 'Prepare again') : chooser(`Choose ${book.source} again`, (name) => ingest(name, book.id, 'rebuild'))), bar);
     }
     // advice summaries: one-time, costs a little, makes every later request cheaper and sharper
     const rules = await api.get(`/api/book/${enc(book.id)}/rules`);
