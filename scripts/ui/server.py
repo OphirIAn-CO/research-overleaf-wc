@@ -245,6 +245,11 @@ def git_action(name, action, message=None, join=False, push=True, paths=None):
         except Exception:  # noqa: BLE001
             pass
     res = {"output": out, **plain_git(action, out)}
+    if action == "sync" and res.get("sent") and res.get("level") != "bad":
+        try:
+            revise.mark_sent(common.resolve(name)[1])          # the chat can now say 'sent to Overleaf' for what was saved before this
+        except Exception:  # noqa: BLE001
+            pass
     if action in ("sync", "files") and res.get("sent"):
         try:
             res.update(_remote_has_it(common.resolve(name)[1]["path"]))
@@ -655,6 +660,17 @@ def api_proposal_text(r):
 
 def api_record(r):
     n, p = paper_ref(r.body.get("paper", ""))
+    res = _record(n, p, r)
+    cid = r.body.get("chat")
+    if cid:
+        try:
+            chat.close_reviews(p, str(cid))             # setting aside the last open comment of a review finishes it
+        except ValueError:
+            pass
+    return res
+
+
+def _record(n, p, r):
     return revise.record(n, p, _pid(r), accepted=r.body.get("accepted"), rejected=r.body.get("rejected"),
                          applied=bool(r.body.get("applied")), synced=bool(r.body.get("synced")), source="web", note=str(r.body.get("note", ""))[:300])
 
@@ -1000,8 +1016,10 @@ def api_chat_delete(r):
 def api_chat_get(r):
     n, p, cid = _chat_ctx(r)
     ostate, omsg = config.openai_status()
-    return {"id": cid, "thread": chat.get_thread(p, cid), "chips": [{"label": a, "text": b} for a, b in chat.CHIPS],
-            "running": [{"job": j["id"], "label": j["label"]} for j in r.app.jobs.running(paper=n, chat=cid)],
+    thread = chat.get_thread(p, cid)
+    running = r.app.jobs.running(paper=n, chat=cid)
+    return {"id": cid, "thread": thread, "issues": chat.issue_states(p, thread, running=bool(running)), "chips": [{"label": a, "text": b} for a, b in chat.CHIPS],
+            "running": [{"job": j["id"], "label": j["label"]} for j in running],
             "openai": ostate, "can_apply": bool(config.ui_cfg()["watermark_url"]), "settings": config.paper_settings(p)}
 
 
@@ -1051,7 +1069,8 @@ def _start_pass(app, n, p, cid, plan_mid):
             chat.append(p, cid, "assistant", "error", PLAIN_OPENAI[api_kind])
             return {"proposal": prop["id"], "failed": api_kind}
         chat.append(p, cid, "assistant", "result", "", proposal=prop["id"], chunk_ids=plan["chunk_ids"], plan=plan_mid, status=prop["status"],
-                    usage=prop["usage"], steps=prop.get("steps", []))
+                    usage=prop["usage"], steps=prop.get("steps", []), **({"issue": msg["data"]["issue"]} if msg["data"].get("issue") else {}))
+        chat.close_reviews(p, cid)                      # a comment OpenAI would change nothing for can be the last one open
         return {"proposal": prop["id"]}
     return app.jobs.submit(f"Improving {n}", work, with_steps=True, meta={"paper": n, "chat": cid})
 
@@ -1066,6 +1085,37 @@ HELP_TEXT = ("Tell me what to do with your paper, in your own words. For example
              "You decide what to keep; nothing is saved until you approve it.")
 
 
+def _issue_ref(p, cid, ref):
+    """'Fix this' on comment `index` of a peer review: remember which comment the request is for, so its progress can be followed. -> {review, index} or None"""
+    if not isinstance(ref, dict):
+        return None
+    review_mid, i = str(ref.get("review", "")), ref.get("index")
+    m = chat.get_message(p, cid, review_mid)
+    if not m or m["kind"] != "review" or not isinstance(i, int) or not 0 <= i < len(m["data"].get("issues") or []):
+        return None
+    skipped = [x for x in (m["data"].get("skipped") or []) if x != i]
+    if skipped != (m["data"].get("skipped") or []):
+        chat.update(p, cid, review_mid, skipped=skipped)                     # trying a comment again takes it off the skipped list
+    return {"review": review_mid, "index": i}
+
+
+def api_chat_issue(r):
+    """Skip a comment of a peer review (it needs no change), or bring it back."""
+    n, p, cid = _chat_ctx(r)
+    (mid,) = need(r.body, "message")
+    action = r.body.get("action")
+    i = r.body.get("index")
+    m = chat.get_message(p, cid, str(mid))
+    if not m or m["kind"] != "review" or action not in ("skip", "reopen") or not isinstance(i, int) or not 0 <= i < len(m["data"].get("issues") or []):
+        raise ApiError(400, "that comment is not in this chat")
+    skipped = [x for x in (m["data"].get("skipped") or []) if x != i]
+    if action == "skip":
+        skipped.append(i)
+    chat.update(p, cid, m["id"], skipped=sorted(skipped), **({"closed": False} if action == "reopen" else {}))
+    closed = chat.close_reviews(p, cid) if action == "skip" else []
+    return {"ok": True, "closed": bool(closed)}
+
+
 def api_chat_send(r):
     n, p, cid = _chat_ctx(r)
     text = str(r.body.get("text", "")).strip()[:4000]
@@ -1073,7 +1123,8 @@ def api_chat_send(r):
     if not text and not ticked:
         raise ApiError(400, "say what you want")
     text = text or "Improve this."
-    out = [chat.append(p, cid, "user", "text", text, **({"chunk_ids": ticked} if ticked else {}))]
+    issue = _issue_ref(p, cid, r.body.get("issue"))
+    out = [chat.append(p, cid, "user", "text", text, **({"chunk_ids": ticked} if ticked else {}), **({"issue": issue} if issue else {}))]
     kind = chat.intent(text) if not ticked else "edit"
     job = None
     if kind == "help":
@@ -1115,7 +1166,8 @@ def api_chat_send(r):
             guard = config.ui_cfg()["guard_passages"]
             ask = config.paper_settings(p)["confirm_before_send"] or pl["units"] > guard
             reason = ("big" if pl["units"] > guard else "setting") if ask else None
-            m = chat.append(p, cid, "assistant", "plan", "", plan=pl, title=u["title"], notes=u["notes"], chunk_ids=u["chunk_ids"], state="waiting", confirm=reason)
+            m = chat.append(p, cid, "assistant", "plan", "", plan=pl, title=u["title"], notes=u["notes"], chunk_ids=u["chunk_ids"], state="waiting", confirm=reason,
+                            **({"issue": issue} if issue else {}))
             out.append(m)
             if not ask:
                 job = _start_pass(r.app, n, p, cid, m["id"])
@@ -1203,6 +1255,11 @@ def api_proposal_approve(r):
         try:
             chat.append(p, cid, "assistant", "note", f"Saved in {', '.join(files)}." + (" This is your own version." if texts is not None else "")
                         + ("" if cleaner else " Saved exactly as written: no text-cleaning service is set up."), proposal=pid)
+        except ValueError:
+            pass
+    if cid:
+        try:
+            chat.close_reviews(p, cid)                  # saving the last open comment of a review finishes it
         except ValueError:
             pass
     if r.body.get("push"):
@@ -1783,7 +1840,7 @@ ROUTES = [
     ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/test/cleaner$", api_test_cleaner),
     ("GET", r"^/api/papers/discover$", api_discover), ("POST", r"^/api/papers/add$", api_add_paper),
     ("GET", r"^/api/chat/threads$", api_chat_threads), ("POST", r"^/api/chat/new$", api_chat_new), ("POST", r"^/api/chat/rename$", api_chat_rename),
-    ("POST", r"^/api/chat/delete$", api_chat_delete), ("POST", r"^/api/chat/clear$", api_chat_clear), ("GET", r"^/api/chat$", api_chat_get), ("POST", r"^/api/chat/send$", api_chat_send),
+    ("POST", r"^/api/chat/delete$", api_chat_delete), ("POST", r"^/api/chat/clear$", api_chat_clear), ("POST", r"^/api/chat/issue$", api_chat_issue), ("GET", r"^/api/chat$", api_chat_get), ("POST", r"^/api/chat/send$", api_chat_send),
     ("POST", r"^/api/chat/run$", api_chat_run), ("POST", r"^/api/chat/count$", api_chat_count), ("POST", r"^/api/chat/cancel$", api_chat_cancel),
     ("POST", r"^/api/proposal/check$", api_proposal_check), ("POST", r"^/api/proposal/approve$", api_proposal_approve),
     ("POST", r"^/api/proposal/text$", api_proposal_text), ("POST", r"^/api/papers/catchup$", api_catchup),

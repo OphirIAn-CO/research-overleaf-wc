@@ -78,6 +78,7 @@ def main():
         t = t.replace("We sampled 40 farms by stratified random sampling.", "We drew a stratified random sample of 40 farms.")
         t = t.replace("Informed consent was obtained from all farmers.", "All farmers gave informed consent.")
         t = t.replace("We fitted", "We estimated")
+        t = t.replace("Yield rose with moisture in all three regions", "Yield rose with moisture in each of the three regions")
         t = t.replace("Each region has a distinct climate and soil.", "Each region has its own climate and soil.")
         t = t.replace("The study was conducted in three regions that differ in rainfall and elevation.", "The study covers three regions that differ in rainfall and elevation.")
         return {"approach": "The opening sentences were passive and repeated the same idea. I made the actor explicit and joined the two sentences so the paragraph reads in one line of thought.",

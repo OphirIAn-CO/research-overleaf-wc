@@ -37,6 +37,15 @@ each change and the new text). Nothing needs selecting by hand.
 Also in the chat: **"peer review my paper"** (it asks first, because it reads the whole paper) and **pasting a DOI**, which adds
 the reference to your bibliography, to your Mendeley group and to Overleaf, and gives you the `\cite{...}` to use.
 
+**Going through a peer review.** The review lists its comments; **Fix this** on one turns it into an ordinary suggestion. While a review with
+two or more comments still has open ones, a **Reviewer comments** panel stays above the message box with all of them, so after every decision you
+see what is left without scrolling back. Each comment shows where it stands, with a colour and a mark: *Working on it*, *Suggestion ready: your
+decision*, *Completed - saved here, not in Overleaf yet*, *Completed - sent to Overleaf*, *Set aside* (you pressed Not now), *OpenAI would change
+nothing here*, *Skipped* (you pressed Skip: this comment needs no change; **Bring it back** undoes it) or *Could not finish* (**Try again**).
+**Fix the next one** takes the next open comment. When the last comment is handled the panel goes away and the chat says so ("All 7 reviewer
+comments are handled ... Let's continue. What would you like to work on next?"), with a button to send what was saved but not sent yet. The
+review itself stays in the conversation with the final status of each comment, folded away.
+
 ## What it does
 
 | You want to... | What happens |
@@ -180,14 +189,16 @@ You sign in once and it stays signed in (the sign-in is kept in `~/.config/overl
   their desktop layout; **Aa** in the pane draws it narrower for bigger text. Back, forward, reload, stop and home are in the pane's toolbar.
 - **Copy and paste:** Cmd/Ctrl+V pastes your clipboard into the page, Cmd/Ctrl+C copies the text selected there to your clipboard, and
   **Copy what I selected** does the same with a button. Tab and Esc go to the page; click outside it to leave.
-- **The tone pass (QuillBot) step by step.** Under an answer press **Polish in QuillBot or by hand**; QuillBot opens beside the chat and the
-  panel lists four steps: (1) **Put it in QuillBot** types the suggestion into QuillBot's writing box (or **Copy for QuillBot**, then paste);
-  (2) adjust the tone there, or edit **Your final version** by hand; (3) **Take QuillBot's result** brings back what QuillBot copied with
-  its own Copy button, **Take the text I selected** brings back the text you selected there, **Paste what I copied** takes your
-  clipboard; (4) the notes under the box confirm every `[[LX001]]` tag (your citations and formulas) is still there, then **Save my version**
-  or **Save and send to Overleaf**. **Copy my version as LaTeX** copies what is in the box with the citations back in place.
-  Sending to Overleaf reloads the Overleaf pane so you see the update. (The QuillBot buttons are best effort on the real site; if one does
-  not land, click in QuillBot's box and paste with Cmd/Ctrl+V.)
+- **The tone pass (QuillBot) step by step.** Under an answer, press **Copy: for QuillBot** (it copies the text with your citations and formulas as
+  tags) or **Polish in QuillBot or by hand**. Either one opens a panel right above the message box, so you never scroll back up to the suggestion,
+  and QuillBot opens beside the chat. The panel shows four steps and marks the one you are on: (1) **Copy the text** (**Put it in QuillBot** types
+  it into QuillBot's writing box); (2) adjust the tone in QuillBot, or edit **Your final version** by hand; (3) **Bring the result back**:
+  **Take QuillBot's result** brings back what QuillBot copied with its own Copy button, **Take the text I selected** brings back the text you
+  selected there, **Paste what I copied** takes your clipboard; (4) the notes under the box confirm every `[[LX001]]` tag (your citations and
+  formulas) is still there, then **Save and send to Overleaf** (or **Save only**). Saving closes the panel and the conversation says what was saved
+  and sent. **Hide** folds the panel away without losing what you typed; **Close** drops it. **Copy my version as LaTeX** copies what is in the box
+  with the citations back in place. Sending to Overleaf reloads the Overleaf pane so you see the update. (The QuillBot buttons are best effort on
+  the real site; if one does not land, click in QuillBot's box and paste with Cmd/Ctrl+V.)
 - **"Hand to Claude Code instead"** is only for when you work in Claude Code: it leaves the ticked changes for Claude Code to apply (after your
   text-cleaning step). You never need it to save from the app.
 - **No text-cleaning service?** Saving then writes the text exactly as it was approved, and the card says so. With a service set up in Settings

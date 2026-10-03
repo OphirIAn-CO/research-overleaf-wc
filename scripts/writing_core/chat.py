@@ -153,6 +153,79 @@ def last_target(thread):
     return None
 
 
+# ------------------------------------------------------------------------------------------- the comments of a peer review
+
+HANDLED = ("saved", "sent", "rejected", "nothing", "skipped")     # the states in which a reviewer comment needs nothing more from the author
+_PLAN_STATE = {"waiting": "asking", "sent": "working", "failed": "failed", "cancelled": "open"}
+
+
+def issue_states(proj, thread, running=True):
+    """Where every comment of every peer review in this chat stands. -> {review message id: [{state, message?, proposal?}]}, one entry per comment, in order.
+
+    `running` is whether a request of this chat is being worked on right now; a request marked as sent that nobody is working on (the app was restarted) counts as failed.
+
+    States: open (nothing tried), asking (waiting for a go-ahead), working (OpenAI is on it), decide (a suggestion waits for the author), saved (in the files here),
+    sent (in Overleaf), rejected (the author set the suggestion aside), nothing (OpenAI would change nothing), failed (try again), skipped (the author skipped it)."""
+    msgs = (thread or {}).get("messages", [])
+    out = {}
+    for m in msgs:
+        if m["kind"] == "review":
+            n = len(m["data"].get("issues") or [])
+            out[m["id"]] = [{"state": "open"} for _ in range(n)]
+            for i in m["data"].get("skipped") or []:
+                if isinstance(i, int) and 0 <= i < n:
+                    out[m["id"]][i] = {"state": "skipped"}
+    for m in msgs:                                            # in the order things happened: a later try replaces an earlier one
+        ref = (m.get("data") or {}).get("issue")
+        if not isinstance(ref, dict) or ref.get("review") not in out or m["kind"] not in ("plan", "result"):
+            continue
+        slots = out[ref["review"]]
+        i = ref.get("index")
+        if not isinstance(i, int) or not 0 <= i < len(slots):
+            continue
+        if m["kind"] == "plan":
+            if m["data"].get("state") == "sent" and any(x["kind"] == "result" and x["data"].get("plan") == m["id"] for x in msgs):
+                continue                                      # its answer is there: the answer decides
+            state = _PLAN_STATE.get(m["data"].get("state"), "working")
+            slots[i] = {"state": "failed" if state == "working" and not running else state, "message": m["id"]}
+            continue
+        try:
+            prop = revise.get_proposal(proj, m["data"].get("proposal"))
+        except revise.ReviseError:
+            slots[i] = {"state": "failed", "message": m["id"]}
+            continue
+        status = prop.get("status")
+        state = {"applied": "sent" if prop.get("sent_at") else "saved", "rejected": "rejected", "no_changes": "nothing", "proposed": "decide"}.get(status, "failed")
+        slots[i] = {"state": state, "message": m["id"], "proposal": prop.get("id")}
+    return out
+
+
+def review_counts(states):
+    """-> (how many comments, how many are handled, {state: n})"""
+    by = {}
+    for s in states:
+        by[s["state"]] = by.get(s["state"], 0) + 1
+    return len(states), sum(n for k, n in by.items() if k in HANDLED), by
+
+
+def close_reviews(proj, cid):
+    """When the last comment of a review with several comments is handled, say so in the chat once, so the author knows the list is finished and what comes next.
+    -> the new messages (usually none)"""
+    thread = get_thread(proj, cid)
+    states = issue_states(proj, thread)
+    made = []
+    for m in (thread or {}).get("messages", []):
+        if m["kind"] != "review" or m["data"].get("closed") or len(m["data"].get("issues") or []) < 2:
+            continue
+        total, handled, by = review_counts(states.get(m["id"], []))
+        if total and handled == total:
+            update(proj, cid, m["id"], closed=True)
+            done = by.get("saved", 0) + by.get("sent", 0)
+            aside = by.get("rejected", 0) + by.get("skipped", 0) + by.get("nothing", 0)
+            made.append(append(proj, cid, "assistant", "review_done", "", review=m["id"], total=total, done=done, aside=aside, unsent=by.get("saved", 0), scope=m["data"].get("scope", "")))
+    return made
+
+
 # ------------------------------------------------------------------------------------------- what kind of message is it
 
 _DOI = re.compile(r"\b10\.\d{4,9}/[^\s\"<>]+", re.I)

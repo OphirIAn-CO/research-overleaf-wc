@@ -685,6 +685,23 @@ def record(name, proj, pid, accepted=None, rejected=None, applied=False, synced=
     return {"proposal": pid, "status": proposal["status"], "accepted": len(acc), "rejected": len(rej), "pending": len(pending)}
 
 
+def mark_sent(proj):
+    """Overleaf has the paper as it is now: every suggestion saved before this moment is in it. Remembered on the suggestion (`sent_at`), so the chat can say
+    'sent to Overleaf' and not only 'saved here'. -> how many suggestions were marked"""
+    n = 0
+    d = proposals_dir(proj)
+    for f in (d.glob("*.json") if d.is_dir() else []):
+        try:
+            prop = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if prop.get("status") == "applied" and not prop.get("sent_at"):
+            prop["sent_at"] = time.time()
+            _atomic_json(f, prop)
+            n += 1
+    return n
+
+
 def handoff(name, proj, pid, accept="all", source="web"):
     """The author chose which hunks to take but the text will be applied by Claude (who runs step 6b itself)."""
     proposal = get_proposal(proj, pid)

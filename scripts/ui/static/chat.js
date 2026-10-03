@@ -14,7 +14,7 @@
   function diffSpans(ops, side) {
     return ops.filter(([op]) => op === '=' || (side === 'old' ? op === '-' : op === '+')).map(([op, t]) => (op === '=' ? document.createTextNode(t) : h(op === '-' ? 'del' : 'ins', { class: 'd', text: t })));
   }
-  function readonlyBox(text) { const t = h('textarea', { rows: '8', readonly: true, class: 'mono', 'aria-label': 'Suggestion' }); t.value = text; return t; }
+  function readonlyBox(text) { const t = h('textarea', { rows: '4', readonly: true, class: 'mono', 'aria-label': 'Suggestion' }); t.value = text; return t; }
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + 's'}`;
   const icon = (level) => ({ ok: '✓', warn: '!', error: '✗' }[level] || '•');
 
@@ -194,6 +194,7 @@
       await window.OLS.loadState();
       if (window.OLS.panes && window.OLS.panes.refreshText) window.OLS.panes.refreshText();
       if (action === 'sync' && r.sent && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend(r);
+      if (action === 'sync') await reload().catch(() => {});                 // what was saved is now sent: the review comments say so
     });
     loadOverview();
     const head = h('header', { class: 'chat-head' }, h('div', { class: 'grow' }, h('h1', { text: paper }), sub),
@@ -209,13 +210,25 @@
     const attachBtn = h('button', { type: 'button', class: 'attach', text: 'Add a file', title: 'Add an article (PDF or Word), a table (CSV), notes, a notebook or code to this paper. It is saved in the references folder, sent to Overleaf, and split into parts a request can read.' });
     const adding = h('div', { class: 'row chips adding', role: 'status', 'aria-live': 'polite', hidden: true });
     const composer = h('form', { class: 'composer' }, chips, adding, h('div', { class: 'row top' }, attachBtn, ta, sendBtn), fileInput);
-    const setBusy = (b) => { st.busy = b; sendBtn.disabled = b; sendBtn.textContent = b ? 'Working...' : 'Send'; };
+    const setBusy = (b) => { st.busy = b; sendBtn.disabled = b; sendBtn.textContent = b ? 'Working...' : 'Send'; renderDock(); };
 
     async function reload() {
       const d = await api.get(`/api/chat?paper=${enc(paper)}&id=${enc(st.cid)}`);
       st.messages = d.thread.messages; st.data = d;
-      if (alive()) renderThread();
+      if (alive()) { renderThread(); await refreshCards(); }
       return d;
+    }
+    // A suggestion's card is drawn once; when its suggestion is saved, set aside or sent (here, from the QuillBot panel, or in Claude Code) the card is drawn again from the
+    // saved state, but only when that state changed, so ticks the author is making in another card are never lost.
+    st.cards = new Map();
+    async function refreshCards() {
+      for (const [id, c] of Array.from(st.cards)) {
+        if (!c.holder.isConnected || c.status === 'rejected' || c.status === 'failed' || c.status === 'no_changes' || (c.status === 'applied' && c.sent)) continue;
+        try {
+          const fresh = await api.get(`/api/proposal?paper=${enc(paper)}&id=${enc(id)}`);
+          if (fresh.status !== c.status || !!fresh.sent_at !== c.sent) renderSuggestion(clear(c.holder), fresh, c.m);
+        } catch (e) { /* the card keeps what it shows */ }
+      }
     }
 
     async function send(text, extra) {
@@ -418,23 +431,140 @@
         h('p', { class: 'small secondary', text: `A review reads far more of your paper at once than an edit does (about ${fmtTok(pl.tokens * 0.75)} words go to ${pl.model}${pl.est_cost != null ? ', roughly ' + pl.est_cost.toFixed(4) + ' in your price units' : ''}), so I always check with you first. Nothing in your paper is changed; the report is saved in the paper's notes folder.` }), foot);
     }
 
+    // The comments of a peer review: where each one stands (not tried, working, waiting for the author, completed, set aside...), in the review itself and in a
+    // panel above the composer, so after every decision the author sees what is left without scrolling back up.
+    const HANDLED = new Set(['saved', 'sent', 'rejected', 'nothing', 'skipped']);
+    const STATE = {
+      asking: ['warn', '●', 'Waiting for your go-ahead'], working: ['work', '', 'Working on it...'], decide: ['warn', '●', 'Suggestion ready: your decision'],
+      saved: ['ok', '✓', 'Completed · saved here, not in Overleaf yet'], sent: ['ok', '✓', 'Completed · sent to Overleaf'],
+      rejected: ['off', '✗', 'Set aside'], nothing: ['off', '–', 'OpenAI would change nothing here'], skipped: ['off', '–', 'Skipped'], failed: ['bad', '!', 'Could not finish'],
+    };
+    const slotsOf = (mid) => (st.data.issues || {})[mid] || [];
+    const tally = (slots) => {
+      const by = {};
+      slots.forEach((x) => { by[x.state] = (by[x.state] || 0) + 1; });
+      return { total: slots.length, handled: slots.filter((x) => HANDLED.has(x.state)).length, done: (by.saved || 0) + (by.sent || 0), aside: (by.rejected || 0) + (by.skipped || 0) + (by.nothing || 0), unsent: by.saved || 0 };
+    };
+    function showMessage(id) {                                          // bring the suggestion for a comment into view and mark it for a moment
+      const hit = st.cache.get(id);
+      if (!hit) return;
+      st.stuck = false;
+      hit.node.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      hit.node.classList.add('spot');
+      setTimeout(() => hit.node.classList.remove('spot'), 2400);
+    }
+    function fixIssue(m, i) {
+      if (st.busy) { toast('A request is still running. Wait for it to finish, then press the button again.'); return; }
+      const it = m.data.issues[i];
+      return send(`Address this reviewer comment${it.where ? ' about ' + it.where : ''}: ${it.problem} ${it.suggestion || ''}`.trim(), { chunk_ids: it.chunk_ids, issue: { review: m.id, index: i } });
+    }
+    async function issueAction(m, i, action) {
+      try { await api.post('/api/chat/issue', { paper, id: st.cid, message: m.id, index: i, action }); await reload(); } catch (e) { toast(e.message); }
+    }
+    function issueRow(m, i, compact) {
+      const it = m.data.issues[i], s = slotsOf(m.id)[i] || { state: 'open' };
+      const sev = { major: 'bad', minor: 'warn', suggestion: '' };
+      const info = STATE[s.state];
+      const chip = info ? h('span', { class: 'state ' + info[0], role: 'status' }, info[0] === 'work' ? h('span', { class: 'spinner', 'aria-hidden': 'true' }) : h('span', { class: 'mark', 'aria-hidden': 'true', text: info[1] }), h('span', { text: info[2] })) : null;
+      const can = !!(it.chunk_ids && it.chunk_ids.length);
+      const acts = [];
+      if (s.state === 'open' || s.state === 'failed') {
+        if (it.chunk_ids && it.chunk_ids.length) acts.push(h('button', { type: 'button', class: 'small' + (s.state === 'failed' ? '' : ' primary'), disabled: !can, text: s.state === 'failed' ? 'Try again' : 'Fix this', onclick: () => fixIssue(m, i) }));
+        acts.push(h('button', { type: 'button', class: 'small ghost', title: 'This comment needs no change', text: 'Skip', onclick: () => issueAction(m, i, 'skip') }));
+      } else if (s.state === 'rejected' || s.state === 'nothing') {
+        if (it.chunk_ids && it.chunk_ids.length) acts.push(h('button', { type: 'button', class: 'small', disabled: !can, text: 'Try again', onclick: () => fixIssue(m, i) }));
+      } else if ((s.state === 'decide' || s.state === 'asking') && s.message) {
+        acts.push(h('button', { type: 'button', class: 'small primary', text: 'Show it', onclick: () => showMessage(s.message) }));
+      } else if (s.state === 'skipped') {
+        acts.push(h('button', { type: 'button', class: 'small ghost', text: 'Bring it back', onclick: () => issueAction(m, i, 'reopen') }));
+      }
+      return h('li', { class: 'issue st-' + s.state + (compact ? ' compact' : '') },
+        h('div', { class: 'row tight' }, h('span', { class: 'badge ' + (sev[it.severity] || ''), text: it.severity }), it.where ? h('strong', { class: 'small', text: it.where }) : null, h('span', { class: 'grow' }), chip),
+        compact ? h('div', { class: 'small clamp', title: it.problem, text: it.problem }) : [
+          it.quote ? h('div', { class: 'small muted', text: '“' + it.quote + '”' }) : null, h('div', { text: it.problem }), it.suggestion ? h('div', { class: 'small secondary', text: it.suggestion }) : null],
+        acts.length ? h('div', { class: 'row tight' }, acts) : null);
+    }
+    const progressBar = (t) => {
+      const fill = h('span');
+      fill.style.width = `${t.total ? Math.round(100 * t.handled / t.total) : 0}%`;          // set from script: the page's policy does not allow style attributes
+      return h('div', { class: 'progress', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': String(t.total), 'aria-valuenow': String(t.handled), 'aria-label': 'Comments handled' }, fill);
+    };
+
     function reviewBubble(m) {
       const d = m.data;
-      const sev = { major: 'bad', minor: 'warn', suggestion: '' };
-      const issues = (d.issues || []).map((it) => h('li', { class: 'issue' },
-        h('div', { class: 'row tight' }, h('span', { class: 'badge ' + (sev[it.severity] || ''), text: it.severity }), it.where ? h('strong', { class: 'small', text: it.where }) : null),
-        it.quote ? h('div', { class: 'small muted', text: '“' + it.quote + '”' }) : null, h('div', { text: it.problem }), it.suggestion ? h('div', { class: 'small secondary', text: it.suggestion }) : null,
-        it.chunk_ids && it.chunk_ids.length ? h('div', null, h('button', { type: 'button', class: 'small', text: 'Fix this', onclick: () =>
-          send(`Address this reviewer comment${it.where ? ' about ' + it.where : ''}: ${it.problem} ${it.suggestion || ''}`.trim(), { chunk_ids: it.chunk_ids }) })) : null));
+      const slots = slotsOf(m.id), t = tally(slots);
+      const many = (d.issues || []).length >= 2;
+      const finished = many && t.total && t.handled === t.total;
+      const list = h('ul', { class: 'issues' }, (d.issues || []).map((it, i) => issueRow(m, i, false)));
       const scores = Object.entries(d.scores || {});
+      let issuesBlock = null;
+      if ((d.issues || []).length) {
+        issuesBlock = finished
+          ? h('details', null, h('summary', { text: `${plural(t.total, 'comment')} · ${t.done} completed${t.aside ? `, ${t.aside} set aside` : ''}` }), list)
+          : h('div', null, h('h4', { text: `Issues to look at (${t.total || d.issues.length})` }),
+            many ? h('div', { class: 'row tight' }, progressBar(t), h('span', { class: 'small muted', text: `${t.handled} of ${t.total} handled` })) : null, list);
+      }
       return assistant(
         h('div', { class: 'row' }, h('strong', { text: 'Peer review of ' + d.scope }), d.verdict ? h('span', { class: 'badge', text: d.verdict }) : null,
           h('span', { class: 'small secondary', text: `${d.model} · ${fmtTok(d.usage.input_tokens)} in / ${fmtTok(d.usage.output_tokens)} out${d.usage.cost != null ? ' · cost ' + d.usage.cost : ''}` })),
         scores.length ? h('div', { class: 'row chips' }, scores.map(([k, v]) => h('span', { class: 'chip static', text: `${k.replace(/_/g, ' ')}: ${v}` }))) : null,
-        issues.length ? h('div', null, h('h4', { text: `Issues to look at (${issues.length})` }), h('ul', { class: 'issues' }, ...issues)) : null,
-        h('details', { open: !issues.length }, h('summary', { text: 'Full report' }), mdLite(d.report)),
+        issuesBlock,
+        h('details', { open: !(d.issues || []).length }, h('summary', { text: 'Full report' }), mdLite(d.report)),
         h('div', { class: 'row' }, h('button', { type: 'button', class: 'small', text: 'Copy the report', onclick: () => copyText(d.report, 'Report') }), h('span', { class: 'small muted', text: 'Saved in ' + d.path })),
         h('p', { class: 'small muted', text: 'Nothing was changed in your paper. "Fix this" asks for an ordinary suggestion that you approve or set aside.' }));
+    }
+
+    // When the last comment of a review is handled: the list is done, and the chat asks what comes next.
+    function reviewDoneBubble(m) {
+      const d = m.data, t = tally(slotsOf(d.review));
+      const unsent = slotsOf(d.review).length ? t.unsent : d.unsent;
+      const sendBtn = unsent ? guarded(h('button', { type: 'button', class: 'primary', text: `Send ${plural(unsent, 'saved change')} to Overleaf` }), async () => {
+        const r = await api.post('/api/papers/sync', { name: paper, message: 'Writing assistant: reviewer comments' });
+        st.local.push({ node: gitNotice(r) });
+        await reload();
+        loadOverview();
+        if (r.sent && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend(r);
+      }) : null;
+      return assistant(h('div', { class: 'review-done' },
+        h('div', { class: 'row tight' }, h('span', { class: 'tick', 'aria-hidden': 'true', text: '✓' }), h('strong', { text: `All ${d.total} reviewer comments are handled` })),
+        h('p', { class: 'small secondary', text: `${d.done} completed${d.aside ? `, ${d.aside} set aside or skipped` : ''}.` + (d.done && !unsent ? ' Everything that was saved is in Overleaf.' : '') }),
+        sendBtn ? h('div', { class: 'row' }, sendBtn) : null,
+        h('p', { text: 'Let\'s continue. What would you like to work on next? Tell me if you need anything else.' })));
+    }
+
+    // The panel above the composer while a review with several comments still has some open.
+    const dock = h('section', { class: 'review-dock', hidden: true, 'aria-label': 'Reviewer comments still to go through' });
+    st.dockOpen = window.OLS.store.get('ols-dock-open') !== '0';
+    let dockSig = '';
+    function activeReview() {
+      for (let k = st.messages.length - 1; k >= 0; k--) {
+        const m = st.messages[k];
+        if (m.kind !== 'review' || (m.data.issues || []).length < 2) continue;
+        const slots = slotsOf(m.id);
+        if (!slots.length || slots.every((x) => HANDLED.has(x.state))) continue;
+        return m;
+      }
+      return null;
+    }
+    function renderDock() {
+      const m = activeReview();
+      const slots = m ? slotsOf(m.id) : [];
+      const showList = st.dockOpen && !st.banner;
+      const sig = m ? JSON.stringify([m.id, slots, showList, st.busy]) : '';
+      if (sig === dockSig) return;
+      dockSig = sig;
+      clear(dock);
+      dock.hidden = !m;
+      if (!m) return;
+      const t = tally(slots);
+      const nextAt = slots.findIndex((x, i) => (x.state === 'open' || x.state === 'failed') && (m.data.issues[i].chunk_ids || []).length);
+      const toggle = h('button', { type: 'button', class: 'small ghost', 'aria-expanded': String(showList), text: showList ? 'Hide the list' : 'Show the list', onclick: () => {
+        st.dockOpen = !st.dockOpen; window.OLS.store.set('ols-dock-open', st.dockOpen ? '1' : '0'); renderDock();
+      } });
+      dock.append(h('div', { class: 'row dock-head' }, h('strong', { text: 'Reviewer comments' }), h('span', { class: 'small muted grow', text: `${t.handled} of ${t.total} handled · ${t.total - t.handled} to go` }),
+        nextAt >= 0 ? h('button', { type: 'button', class: 'small primary', disabled: st.busy, text: 'Fix the next one', onclick: () => fixIssue(m, nextAt) }) : null, st.banner ? null : toggle),
+      progressBar(t));
+      if (showList) dock.append(h('ul', { class: 'issues dock-list' }, m.data.issues.map((it, i) => issueRow(m, i, true))));
     }
 
     // ---- references
@@ -457,6 +587,7 @@
     function renderSuggestion(holder, prop, m) {
       clear(holder);
       let p = prop;
+      st.cards.set(p.id, { holder, m, status: p.status, sent: !!p.sent_at });
       const locked = p.status === 'applied' || p.status === 'rejected';
       const sel = new Set(p.units.flatMap((u) => u.hunks.map((x) => x.uid)));
       const nHunks = sel.size;
@@ -504,9 +635,10 @@
       const copyAs = window.OLS.panes && window.OLS.panes.copyAsync;
       // the text of the ticked changes, as the server assembles it (real LaTeX, or tagged for QuillBot); nothing is written
       const textOf = () => api.post('/api/proposal/text', { paper, id: p.id, accept: sel.size ? [...sel] : 'all' });
-      const copyBtn = (label, title, make, what) => guarded(h('button', { type: 'button', class: 'small', text: label, title }), async () => {
+      const copyBtn = (label, title, make, what, after) => guarded(h('button', { type: 'button', class: 'small', text: label, title }), async () => {
         if (!sel.size) throw new Error('Tick at least one change.');
         await copyAs(make(), what);
+        if (after) after();
       });
       const beforeAfter = (hk) => [hk.diff.filter(([o]) => o !== '+').map(([, t]) => t).join(''), hk.diff.filter(([o]) => o !== '-').map(([, t]) => t).join('')];
       const everything = async () => {
@@ -523,21 +655,23 @@
       };
       const copies = h('div', { class: 'row tight copies' }, h('span', { class: 'small muted', text: 'Copy:' }),
         copyBtn('the new text', 'The improved text with your citations and formulas back in place, ready to paste into Overleaf or anywhere', async () => (await textOf()).latex, 'The new text'),
-        copyBtn('for QuillBot', 'The same text with citations and formulas as tags like [[LX001]], so QuillBot cannot damage them', async () => (await textOf()).masked, 'The text for QuillBot'),
+        copyBtn('for QuillBot', 'Copies the text with citations and formulas as tags like [[LX001]] (so QuillBot cannot damage them) and opens the panel where you bring QuillBot\'s result back', async () => (await textOf()).masked, 'The text for QuillBot', () => openBanner(p, 2)),
         copyBtn('everything', 'The explanation, each change with its reason, and the new text', everything, 'The whole answer'));
       if (locked) {
-        if (p.status === 'applied') {
+        if (p.status === 'applied' && p.sent_at) {
+          holder.append(notice('ok', h('strong', { text: 'Saved and sent to Overleaf.' })));
+        } else if (p.status === 'applied') {
           holder.append(h('div', { class: 'stack' }, notice('ok', h('strong', { text: 'Saved in your files. ' }), 'It is not in Overleaf until you send it.'),
             h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Send to Overleaf' }), async () => {
               const r = await api.post('/api/papers/sync', { name: paper, message: 'Writing assistant: ' + (p.instruction || '').slice(0, 60) });
               showGit(notices, r);
               if (r.sent && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend(r);
+              await reload().catch(() => {});
             }))));
         }
         return;
       }
       if (!nHunks) return;
-      const tone = h('div', { hidden: true, class: 'tone' });
       const unclean = !st.data.can_apply;             // no text-cleaning service: the text is saved exactly as written, and the card says so
       const approve = (push) => async () => {
         if (!sel.size) throw new Error('Tick at least one change.');
@@ -551,16 +685,11 @@
       const actions = h('div', { class: 'row actions' },
         guarded(h('button', { type: 'button', class: 'primary', text: 'Save in my files' }), approve(false)),
         guarded(h('button', { type: 'button', text: 'Save and send to Overleaf' }), approve(true)),
-        h('button', { type: 'button', text: 'Polish in QuillBot or by hand', onclick: () => {
-          tone.hidden = !tone.hidden;
-          if (!tone.childNodes.length) buildTone(tone, p, redraw);
-          if (!tone.hidden && window.OLS.panes && window.OLS.panes.has && window.OLS.panes.has('quillbot')) window.OLS.panes.show('quillbot');   // QuillBot opens beside the chat
-        } }),
-        guarded(h('button', { type: 'button', class: 'ghost', text: 'Not now' }), async () => { await api.post('/api/proposal/record', { paper, id: p.id, accepted: [], rejected: 'all' }); await redraw(); }),
+        h('button', { type: 'button', text: 'Polish in QuillBot or by hand', title: 'Opens a panel above the message box: take the text to QuillBot, bring the result back, check it and save', onclick: () => openBanner(p, 1) }),
+        guarded(h('button', { type: 'button', class: 'ghost', text: 'Not now' }), async () => { await api.post('/api/proposal/record', { paper, id: p.id, accepted: [], rejected: 'all', chat: st.cid }); await redraw(); await reload(); }),
         h('span', { class: 'grow' }), count);
       holder.append(copies, actions);
       holder.append(h('p', { class: 'small muted' }, unclean ? 'Saved exactly as written: no text-cleaning service is set up. ' : '', 'Saving puts the ticked changes into your files here; "send" then puts them in Overleaf. ', handoff));
-      holder.append(tone);
     }
 
     function hunkCard(hk, sel, onChange, locked, labels) {
@@ -602,22 +731,59 @@
         toast(what === 'clipboard' ? 'QuillBot has not copied anything yet. Press QuillBot\'s own Copy button, or select the text there and use "Take the text I selected".' : 'Nothing is selected in QuillBot. Select the result text there first.');
         return;
       }
-      mine.value = t; check(); toast('Took ' + t.trim().split(/\s+/).length + ' words from QuillBot. Check them below.');
+      mine.value = t; if (st.banner) st.banner.setStep(Math.max(st.banner.step, 3)); check(); toast('Took ' + t.trim().split(/\s+/).length + ' words from QuillBot. Check them below.');
     });
 
-    function buildTone(el, p, redraw) {
+    /* The panel above the message box for taking a suggestion through QuillBot (or editing it by hand): the text goes out, the result comes back into a box here, the
+       same checks as everywhere run on it, and one button saves it and sends it to Overleaf. It lives outside the scrolling conversation, so it stays in view. */
+    const banner = h('section', { class: 'quill-banner', hidden: true, 'aria-label': 'Take the text to QuillBot and bring it back' });
+    st.banner = null;
+    function closeBanner() { st.banner = null; clear(banner); banner.hidden = true; renderDock(); }
+    function openBanner(p, step) {
+      const panes = window.OLS.panes;
+      if (panes && panes.has && panes.has('quillbot')) panes.show('quillbot');                 // QuillBot opens beside the chat
+      if (st.banner && st.banner.pid === p.id) {                                               // already open for this suggestion: keep what was typed, move to the step
+        st.banner.setStep(Math.max(st.banner.step, step || 1)); st.banner.minimised(false); banner.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      clear(banner); banner.hidden = false;
+      buildBanner(banner, p, step || 1);
+      renderDock();
+      if (st.stuck) threadEl.scrollTop = threadEl.scrollHeight;
+    }
+
+    function buildBanner(el, p, startStep) {
       const inQuillBot = !!(window.OLS.panes && window.OLS.panes.has && window.OLS.panes.has('quillbot'));
       const units = p.units.filter((u) => u.status !== 'failed' && u.views);
-      const boxes = new Map();
-      const checkEls = new Map();
-      const approveBtns = [];
+      const boxes = new Map(), checkEls = new Map(), approveBtns = [];
       const ack = h('input', { type: 'checkbox' });
       const ackRow = h('label', { class: 'check small', hidden: true }, ack, 'I checked the warnings above and want to go ahead');
-      let timer = null, last = {};
+      let timer = null, last = {}, blocked = false;
       const texts = () => Object.fromEntries([...boxes.entries()].map(([id, b]) => [id, b.value]));
+      const changed = () => units.some((u) => boxes.get(u.unit_id).value !== u.views.suggested_masked);
+
+      // the four steps, with the current one marked
+      const labels = ['Copy the text', 'Adjust the tone in QuillBot', 'Bring the result back', 'Save and send'];
+      const stepper = h('ol', { class: 'stepper' }, labels.map((t, i) => h('li', null, h('span', { class: 'n', 'aria-hidden': 'true', text: String(i + 1) }), h('span', { text: t }))));
+      const handle = { pid: p.id, step: 0 };
+      handle.setStep = (n) => {
+        handle.step = n;
+        Array.from(stepper.children).forEach((li, i) => { li.className = i + 1 < n ? 'done' : i + 1 === n ? 'now' : ''; li.querySelector('.n').textContent = i + 1 < n ? '✓' : String(i + 1); });
+      };
+      st.banner = handle;
+
+      const body = h('div', { class: 'banner-body' });
+      handle.minimised = (on) => { body.hidden = on; mini.textContent = on ? 'Show' : 'Hide'; mini.setAttribute('aria-expanded', String(!on)); };
+      const mini = h('button', { type: 'button', class: 'small ghost', 'aria-expanded': 'true', text: 'Hide', onclick: () => handle.minimised(!body.hidden) });
+      const first = units[0];
+      el.append(h('div', { class: 'row banner-head' }, h('span', { class: 'qb-dot', 'aria-hidden': 'true' }), h('strong', { text: 'Taking this to QuillBot' }),
+        h('span', { class: 'small muted grow clamp1', text: first ? `${first.section_path.split(' > ').slice(-1)[0]} · lines ${first.line_start} to ${first.line_end}${units.length > 1 ? ` and ${units.length - 1} more` : ''}` : '' }),
+        mini, h('button', { type: 'button', class: 'small ghost', title: 'Close this panel. Nothing is saved.', text: 'Close', onclick: closeBanner })), stepper, body);
+
       const paintChecks = (checks) => {
         last = checks;
-        let blocked = false, warn = false;
+        blocked = false;
+        let warn = false;
         for (const [uid, c] of Object.entries(checks)) {
           const e = checkEls.get(uid); if (!e) continue;
           clear(e.list).append(...c.messages.map((x) => h('li', { class: 'chk ' + x.level }, h('span', { class: 'mark', 'aria-hidden': 'true', text: icon(x.level) }), h('span', { text: x.text }))));
@@ -626,8 +792,10 @@
         }
         ackRow.hidden = !warn || blocked;
         approveBtns.forEach((b) => { b.disabled = blocked; });
+        if (handle.step >= 3) handle.setStep(changed() && !blocked ? 4 : 3);
       };
       const check = () => {
+        if (handle.step < 3 && changed()) handle.setStep(3);
         clearTimeout(timer);
         timer = setTimeout(async () => {
           try { paintChecks((await api.post('/api/proposal/check', { paper, id: p.id, texts: texts() })).checks); }
@@ -635,15 +803,12 @@
         }, 350);
       };
       const out = h('div', { class: 'stack' });
-      el.append(h('ol', { class: 'small secondary tone-steps' },
-        h('li', null, inQuillBot ? 'Press "Put it in QuillBot" (left). It goes into the QuillBot pane beside the chat.' : 'Press "Copy for QuillBot" (left) and paste it into QuillBot, in the pane beside the chat or in any window.'),
-        h('li', null, 'Adjust the tone there. Or skip QuillBot and just edit "Your final version" (right) by hand.'),
-        h('li', null, inQuillBot ? 'Press "Take QuillBot\'s result" (right): QuillBot\'s own Copy button, or the text you selected there, comes into the box. Otherwise copy it in QuillBot and press "Paste what I copied".' : 'Copy QuillBot\'s result and press "Paste what I copied" (right).'),
-        h('li', null, 'Check the notes under the box, then press "Save my version" or "Save and send to Overleaf".')),
-        h('p', { class: 'small muted', text: 'Tags like [[LX001]] stand for your citations and formulas: leave them as they are.' }));
+      body.append(h('p', { class: 'small secondary', text: inQuillBot
+        ? '1. Copy or put the text in QuillBot (it is beside the chat). 2. Adjust the tone there. 3. Press "Take QuillBot\'s result" and check the notes. 4. Save and send. Or skip QuillBot and edit the right-hand box by hand.'
+        : '1. Copy the text and paste it into QuillBot (open it with the QuillBot button at the top, or in any window). 2. Adjust the tone. 3. Copy the result and press "Paste what I copied". 4. Save and send.' }));
       units.forEach((u) => {
         const v = u.views;
-        const mine = h('textarea', { rows: '8', 'aria-label': 'Your final version', class: 'mono' });
+        const mine = h('textarea', { rows: '5', 'aria-label': 'Your final version', class: 'mono' });
         mine.value = v.suggested_masked;
         mine.addEventListener('input', check);
         boxes.set(u.unit_id, mine);
@@ -653,42 +818,50 @@
         const diff = h('div');
         checkEls.set(u.unit_id, { list, diff, which });
         const legend = Object.entries(v.legend || {});
-        out.append(h('section', { class: 'unit' }, h('h4', { text: u.section_path.split(' > ').slice(-1)[0] + ` · lines ${u.line_start} to ${u.line_end}` }),
+        body.append(h('section', { class: 'unit' }, units.length > 1 ? h('h4', { text: u.section_path.split(' > ').slice(-1)[0] + ` · lines ${u.line_start} to ${u.line_end}` }) : null,
           h('div', { class: 'two' },
-            h('div', null, h('label', { class: 'small secondary', text: 'OpenAI\'s suggestion' }), readonlyBox(v.suggested_masked),
-              h('div', { class: 'row' }, h('button', { type: 'button', text: 'Copy for QuillBot', onclick: () => copyText(v.suggested_masked, 'Text for QuillBot') }),
-                inQuillBot ? guarded(h('button', { type: 'button', class: 'primary', text: 'Put it in QuillBot', title: 'Types the suggestion into the QuillBot pane' }), async () => {
+            h('div', null, h('label', { class: 'small secondary', text: 'Text for QuillBot' }), readonlyBox(v.suggested_masked),
+              h('div', { class: 'row tight' }, h('button', { type: 'button', class: 'small', text: 'Copy for QuillBot', onclick: () => { copyText(v.suggested_masked, 'Text for QuillBot'); handle.setStep(Math.max(handle.step, 2)); } }),
+                inQuillBot ? guarded(h('button', { type: 'button', class: 'small primary', text: 'Put it in QuillBot', title: 'Types the text into the QuillBot pane' }), async () => {
                   await window.OLS.panes.sendText('quillbot', v.suggested_masked);
+                  handle.setStep(Math.max(handle.step, 2));
                   toast('It is in QuillBot. Adjust the tone there, then press "Take QuillBot\'s result" here.');
                 }) : null,
-                h('button', { type: 'button', text: 'Copy as LaTeX', onclick: () => copyText(v.suggested_latex, 'LaTeX') }))),
-            h('div', null, h('label', { class: 'small secondary', text: 'Your final version' }), mine,
-              h('div', { class: 'row' }, inQuillBot ? [
+                h('button', { type: 'button', class: 'small', text: 'Copy as LaTeX', onclick: () => copyText(v.suggested_latex, 'LaTeX') }))),
+            h('div', null, h('label', { class: 'small secondary', text: 'Your final version (the result from QuillBot goes here)' }), mine,
+              h('div', { class: 'row tight' }, inQuillBot ? [
                 take(mine, check, 'clipboard', 'Take QuillBot\'s result', 'The text QuillBot put on its clipboard with its own Copy button'),
                 take(mine, check, 'selection', 'Take the text I selected', 'The text you selected in the QuillBot pane')] : null,
-              h('button', { type: 'button', text: 'Paste what I copied', onclick: async () => {
+              h('button', { type: 'button', class: inQuillBot ? 'small' : 'small primary', text: 'Paste what I copied', onclick: async () => {
                 try { mine.value = await navigator.clipboard.readText(); check(); } catch (e) { toast('Your browser did not allow reading the clipboard. Paste with Cmd+V or Ctrl+V into the box instead.'); }
-              } }), h('button', { type: 'button', class: 'ghost', text: 'Start over', onclick: () => { mine.value = v.suggested_masked; check(); } })),
-              h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'small', text: 'Copy my version as LaTeX', title: 'Your version with the citations and formulas put back, ready to paste anywhere' }), async () => {
+              } }), h('button', { type: 'button', class: 'small ghost', text: 'Start over', onclick: () => { mine.value = v.suggested_masked; check(); } }),
+              guarded(h('button', { type: 'button', class: 'small ghost', text: 'Copy my version as LaTeX', title: 'Your version with the citations and formulas put back, ready to paste anywhere' }), async () => {
                 await window.OLS.panes.copyAsync(api.post('/api/proposal/check', { paper, id: p.id, texts: { [u.unit_id]: mine.value } }).then((r) => r.checks[u.unit_id].latex), 'Your version');
               })))),
           legend.length ? h('details', null, h('summary', { text: 'What each tag stands for' }), h('ul', { class: 'small mono' }, legend.map(([k, x]) => h('li', { text: `[[${k}]]  ${x}` })))) : null,
-          list, h('div', { class: 'row small' }, which), diff));
+          list, h('details', null, h('summary', { text: 'Show what differs' }), h('div', { class: 'row small' }, which), diff)));
       });
       const unclean = !st.data.can_apply;             // no text-cleaning service: saved exactly as written
       const approve = (push) => async () => {
-        const r = await doApprove(out, p, { texts: texts(), acknowledge: ack.checked, push, unclean_ok: unclean });
-        if (r && r.ok === false) { paintChecks(r.checks); if (r.needs_ack) { ackRow.hidden = false; toast('Tick "I checked the warnings" to go ahead.'); } else toast('Fix the red items first.'); }
+        const sink = h('div', { class: 'stack' });
+        let r;
+        try { r = await doApprove(sink, p, { texts: texts(), acknowledge: ack.checked, push, unclean_ok: unclean }); }
+        catch (e) { out.append(...Array.from(sink.childNodes)); throw e; }
+        if (r && r.ok === false) { paintChecks(r.checks); if (r.needs_ack) { ackRow.hidden = false; toast('Tick "I checked the warnings" to go ahead.'); } else toast('Fix the red items first.'); return; }
+        if (sink.childNodes.length) st.local.push({ node: sink });                    // what happened with Overleaf stays in the conversation
+        closeBanner();
+        renderThread();
       };
-      const b1 = guarded(h('button', { type: 'button', class: 'primary', text: 'Save my version' }), approve(false));
-      const b2 = guarded(h('button', { type: 'button', text: 'Save my version and send to Overleaf' }), approve(true));
-      const b3 = guarded(h('button', { type: 'button', class: 'ghost', text: 'Hand my version to Claude Code instead', title: 'For when you work in Claude Code. You do not need this to save from here.' }), async () => {
+      const bSend = guarded(h('button', { type: 'button', class: 'primary', text: 'Save and send to Overleaf' }), approve(true));
+      const bSave = guarded(h('button', { type: 'button', text: 'Save only' }), approve(false));
+      const bHand = guarded(h('button', { type: 'button', class: 'ghost', text: 'Hand my version to Claude Code instead', title: 'For when you work in Claude Code. You do not need this to save from here.' }), async () => {
         const r = await api.post('/api/proposal/approve', { paper, id: p.id, texts: texts(), acknowledge: ack.checked, mode: 'handoff' });
         if (r.ok === false) { paintChecks(r.checks); return; }
         out.append(notice('ok', 'Handed to Claude Code with your version.'));
       });
-      approveBtns.push(b1, b2);
-      el.append(out, ackRow, h('div', { class: 'row' }, b1, b2, b3), ...(unclean ? [h('p', { class: 'small muted', text: 'Saved exactly as written: no text-cleaning service is set up.' })] : []));
+      approveBtns.push(bSend, bSave);
+      body.append(out, ackRow, h('div', { class: 'row' }, bSend, bSave, bHand), ...(unclean ? [h('p', { class: 'small muted', text: 'Saved exactly as written: no text-cleaning service is set up.' })] : []));
+      handle.setStep(startStep);
       check();
     }
 
@@ -702,6 +875,7 @@
       if (m.kind === 'refs') return refsBubble(m);
       if (m.kind === 'review_plan') return reviewPlanBubble(m);
       if (m.kind === 'review') return reviewBubble(m);
+      if (m.kind === 'review_done') return reviewDoneBubble(m);
       if (m.kind === 'error') return assistant(notice('bad', m.text));
       return assistant(textBlock(m.text));
     }
@@ -724,7 +898,7 @@
       const live = new Set();
       for (const m of st.messages) {
         live.add(m.id);
-        const sig = ctx + JSON.stringify([m.kind, m.role, m.text, m.data]);
+        const sig = ctx + JSON.stringify([m.kind, m.role, m.text, m.data]) + (m.kind === 'review' || m.kind === 'review_done' ? JSON.stringify(slotsOf(m.kind === 'review' ? m.id : m.data.review)) : '');
         let hit = st.cache.get(m.id);
         if (!hit || hit.sig !== sig) {
           hit = { sig, node: buildMessage(m) };
@@ -741,6 +915,7 @@
       if (follow) nodes.forEach((n) => follow.observe(n));              // observing an element twice is harmless; a removed one is dropped by the browser
       threadEl.scrollTop = stick ? threadEl.scrollHeight : keep;
       if (stick) st.stuck = true;
+      renderDock();
     }
 
     // ---- what the app remembers, and how to forget it
@@ -816,7 +991,7 @@
         memoryBox());
     }
 
-    const page = h('div', { class: 'chat-page' }, head, threadEl, composer, h('div', { class: 'drop-hint', 'aria-hidden': 'true', text: 'Drop the file here to add it to this paper' }));
+    const page = h('div', { class: 'chat-page' }, head, threadEl, dock, banner, composer, h('div', { class: 'drop-hint', 'aria-hidden': 'true', text: 'Drop the file here to add it to this paper' }));
     let depth = 0;
     const hasFiles = (e) => !!e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
     page.addEventListener('dragenter', (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; page.classList.add('dropping'); });
