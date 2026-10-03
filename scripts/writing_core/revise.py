@@ -673,6 +673,14 @@ def _selected(proposal, accept):
     return chosen
 
 
+def _anchor_holds(anchor, lines):
+    """New text goes between two lines of the file; it can still go there only if both are still what they were when the text was drafted."""
+    a = anchor["after_line"]
+    before_ok = a <= 0 or (a <= len(lines) and lines[a - 1] == anchor.get("before_raw", lines[a - 1]))
+    after_ok = a >= len(lines) or lines[a] == anchor.get("after_raw", lines[a])
+    return before_ok and after_ok
+
+
 def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source="cli", note=""):
     """Write the accepted hunks into the manuscript. `cleaner(text) -> text` is the step-6b watermark clean."""
     proposal = get_proposal(proj, pid)
@@ -689,7 +697,7 @@ def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source=
             continue
         lines, crlf = _read_lines(Path(proj["path"]) / u["file"])
         current = "\n".join(lines[u["line_start"] - 1:u["line_end"]])
-        if store.sha256_text(current) != u["original_hash"]:
+        if store.sha256_text(current) != u["original_hash"] or (u.get("insert") and not _anchor_holds(u["anchor"], lines)):
             stale.append(u["unit_id"])
             continue
         final_masked = latex_mask.assemble(u["segments"], ids)
@@ -698,6 +706,10 @@ def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source=
             refused.append(f"{u['unit_id']}: {latex_mask.summarize(bad)} (hunks that move a citation or formula must be accepted together)")
             continue
         new_text = latex_mask.unmask(final_masked, u["mapping"])
+        if u.get("insert"):
+            new_text = new_text.strip("\n")
+            if not new_text.strip():
+                continue
         if cleaner:
             try:
                 cleaned = cleaner(new_text)
@@ -726,7 +738,10 @@ def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source=
         path = Path(proj["path"]) / rel
         lines, crlf = _read_lines(path)
         for u, new_text, ids in sorted(items, key=lambda x: -x[0]["line_start"]):
-            lines[u["line_start"] - 1:u["line_end"]] = new_text.split("\n")
+            new_lines = new_text.split("\n")
+            if u.get("insert"):                                                  # new text gets a blank line between it and what it sits next to
+                new_lines = ([""] if u["anchor"].get("before") else []) + new_lines + ([""] if u["anchor"].get("after") else [])
+            lines[u["line_start"] - 1:u["line_end"]] = new_lines
             written.append({"file": rel, "unit": u["unit_id"], "hunks": sorted(ids)})
         data = ("\r\n" if crlf else "\n").join(lines)
         tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")

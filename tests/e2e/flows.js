@@ -375,6 +375,7 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   ok(/Numbers that came from your files: 0\.412/.test(anAnswer), 'and points out the number that came from the results, to be checked against the source');
   await shot(page, '06g-results-from-analysis');
 
+
   await page.click('#nav a:has-text("Activity")');
   await page.waitForSelector('.feed-card');
   const act = await text(page, '#main');
@@ -572,6 +573,31 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   await page.click('.pane-bar button:has-text("LaTeX")');
   await page.waitForSelector('.lx-pages .pg.ready', { timeout: 90000 });
   await shot(page, '13-latex-dark');
+  await page.close();
+
+  // ---- new text written from the analysis: where it goes, what it rests on, and saved between two lines (last, because it adds a few lines to the paper)
+  page = await open({ width: 1400, height: 900 });
+  const chatsAtEnd = await page.$$eval('#chat-list .side-item', (a) => a.length);
+  await page.click('#new-chat');
+  await page.waitForFunction((n) => document.querySelectorAll('#chat-list .side-item').length === n + 1 && document.querySelector('.welcome'), chatsAtEnd);
+  await page.waitForTimeout(500);
+  const draftsBefore = await page.evaluate(() => [...document.querySelectorAll('.msg.assistant')].filter((m) => m.innerText.includes('What each statement rests on')).length);
+  await page.fill('#composer', 'write the results from my analysis');
+  await page.press('#composer', 'Enter');
+  await page.waitForFunction((n) => [...document.querySelectorAll('.msg.assistant')].filter((m) => m.innerText.includes('What each statement rests on')).length > n, draftsBefore, { timeout: 30000 });
+  const planTxt = await page.evaluate(() => [...document.querySelectorAll('.msg.assistant')].filter((m) => m.innerText.includes('I will write new text')).pop().innerText);
+  ok(/at the end of the results/.test(planTxt) && /metrics\.csv/.test(planTxt) && /rmse_by_model\.png/.test(planTxt), 'the plan says where the new text goes and what it will rest on');
+  ok(!JARGON.test(planTxt), 'and uses no jargon: ' + (JARGON.exec(planTxt) || [''])[0]);
+  const draftCard = await page.evaluate(() => [...document.querySelectorAll('.msg.assistant')].filter((m) => m.innerText.includes('What each statement rests on')).pop().innerText);
+  ok(/new text after line/.test(draftCard) && /Nothing here yet/.test(draftCard) && /Rests on: metrics\.csv/.test(draftCard), 'the suggestion is new text: nothing is there yet, and each paragraph says which file it rests on');
+  ok(/Numbers that came from your files: [^\n]*0\.412/.test(draftCard), 'the numbers that came from the files are pointed out to be checked');
+  await shot(page, '06h-draft');
+  await page.click('.msg.assistant:has-text("What each statement rests on") >> nth=-1 >> button:has-text("Save in my files")');
+  const draftSavedBy = Date.now() + 20000;
+  while (Date.now() < draftSavedBy && !/Training loss reached 0\.24/.test(fs.readFileSync(`${home}/papers/soil-yield/main.tex`, 'utf8'))) await new Promise((r) => setTimeout(r, 200));
+  await page.waitForFunction(() => [...document.querySelectorAll('.msg.assistant')].some((m) => m.innerText.includes('What each statement rests on') && m.innerText.includes('Saved in your files')), null, { timeout: 20000 });
+  const mainAfterDraft = fs.readFileSync(`${home}/papers/soil-yield/main.tex`, 'utf8');
+  ok(/The best model reached an RMSE of 0\.412, against 0\.588 for the recurrent baseline, as Table~\\ref\{tab:a\} shows\.\n\nTraining loss reached 0\.24 by epoch 20\./.test(mainAfterDraft), 'saving puts the new text into the paper, with the real \\ref and a blank line between the paragraphs');
   await page.close();
 
   // ---- phone and dark

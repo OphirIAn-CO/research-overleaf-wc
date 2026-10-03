@@ -32,7 +32,7 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (activity, book_index, chat, chunk_book, config, events, files, gitmerge, health, latex_mask, latexbuild, library, openai_client, panes, paper_index, preferences,  # noqa: E402
+from writing_core import (activity, book_index, chat, chunk_book, config, draft, events, files, gitmerge, health, latex_mask, latexbuild, library, openai_client, panes, paper_index, preferences,  # noqa: E402
                           retrieve, review, revise, rule_cards, stats, taxonomy, watermark, webview)
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -107,7 +107,7 @@ class Jobs:
 def friendly(e):
     """Message for errors we expect and can explain; None for anything else (-> logged, generic 500)."""
     known = (book_index.BookError, config.ConfigError, paper_index.IsolationError, revise.ReviseError, review.ReviewError, ValueError, FileNotFoundError,
-             watermark.WatermarkError, webview.BrowserError, latexbuild.LatexProblem, library.LibraryError)
+             watermark.WatermarkError, webview.BrowserError, latexbuild.LatexProblem, library.LibraryError, draft.DraftError)
     if isinstance(e, openai_client.OpenAIError):
         return f"OpenAI error ({e.kind}): {e}"
     if isinstance(e, known):
@@ -1031,7 +1031,7 @@ def api_chat_cancel(r):
     n, p, cid = _chat_ctx(r)
     (mid,) = need(r.body, "message")
     m = chat.get_message(p, cid, str(mid))
-    if not m or m["kind"] not in ("plan", "review_plan") or m["data"].get("state") != "waiting":
+    if not m or m["kind"] not in ("plan", "review_plan", "draft_plan") or m["data"].get("state") != "waiting":
         raise ApiError(409, "that request is not waiting")
     chat.update(p, cid, m["id"], state="cancelled")
     return {"ok": True}
@@ -1082,10 +1082,45 @@ def _start_pass(app, n, p, cid, plan_mid):
     return app.jobs.submit(f"Improving {n}", work, with_steps=True, meta={"paper": n, "chat": cid})
 
 
+def _start_draft(app, n, p, cid, plan_mid):
+    """Write new text in the background; the suggestion lands in the chat when it is ready."""
+    msg = chat.get_message(p, cid, plan_mid)
+    if not msg or msg["kind"] != "draft_plan":
+        raise ApiError(404, "that request is not in this chat")
+    if msg["data"].get("state") == "sent":
+        raise ApiError(409, "that request was already sent")
+    plan = msg["data"]["plan"]
+    chat.update(p, cid, plan_mid, state="sent")
+
+    def work(progress, set_steps):
+        try:
+            res = draft.run(n, p, plan["instruction"], plan["anchor"], plan["part"], facts=plan.get("facts", ""), confirm=plan["payload_hash"], source="web", progress=set_steps, book_id=plan.get("book"))
+            if res["status"] == "preview":
+                raise ValueError("Your paper or your files changed after I prepared this request. Please ask again.")
+        except Exception as e:  # noqa: BLE001
+            chat.update(p, cid, plan_mid, state="failed")
+            chat.append(p, cid, "assistant", "error", plain_error(e))
+            raise
+        prop = res["proposal"]
+        api_kind = next((u.get("error_kind") for u in prop["units"] if u.get("error_kind") in PLAIN_OPENAI), None)
+        if prop["status"] == "failed" and api_kind:
+            chat.update(p, cid, plan_mid, state="failed")
+            chat.append(p, cid, "assistant", "error", PLAIN_OPENAI[api_kind])
+            return {"proposal": prop["id"], "failed": api_kind}
+        old = msg["data"].get("revises")
+        replaced = bool(old) and prop["status"] == "proposed" and revise.supersede(p, old, prop["id"])
+        chat.append(p, cid, "assistant", "result", "", proposal=prop["id"], chunk_ids=[], plan=plan_mid, status=prop["status"], usage=prop["usage"], steps=prop.get("steps", []), draft=True,
+                    **({"revises": old, "replaced": replaced} if old else {}))
+        return {"proposal": prop["id"]}
+    return app.jobs.submit(f"Writing new text for {n}", work, with_steps=True, meta={"paper": n, "chat": cid})
+
+
 HELP_TEXT = ("Tell me what to do with your paper, in your own words. For example:\n"
              "- improve the flow of the text before Figure 1 in the methods\n"
              "- fix the grammar in the introduction\n"
              "- make the abstract shorter\n"
+             "- write the results from my analysis (or the discussion, or a paragraph on the sampling from my notes)\n"
+             "- what do my articles say about irrigation?\n"
              "- peer review my paper\n"
              "- or paste a DOI to add the reference.\n"
              "I read the right part of your paper, add the advice from your writing book, and ask OpenAI for a better version with an explanation. "
@@ -1131,12 +1166,15 @@ def api_chat_send(r):
         raise ApiError(400, "say what you want")
     text = text or "Improve this."
     issue = _issue_ref(p, cid, r.body.get("issue"))
-    facts = str(r.body.get("facts") or "").strip()[:3000] if ticked else ""          # the author's answers to the model's questions; only for a revision of a chosen place
+    redraft = str(r.body.get("redraft") or "")
+    facts = str(r.body.get("facts") or "").strip()[:3000] if (ticked or redraft) else ""          # the author's answers to the model's questions; only for a revision of a chosen place
     revises = str(r.body.get("revises") or "")
     if not (facts and PID_RE.match(revises)):
         revises = ""
+    if not (facts and PID_RE.match(redraft)):
+        redraft = ""
     out = [chat.append(p, cid, "user", "text", text, **({"chunk_ids": ticked} if ticked else {}), **({"issue": issue} if issue else {}), **({"facts": facts} if facts else {}))]
-    kind = chat.intent(text) if not ticked else "edit"
+    kind = "draft" if redraft else (chat.intent(text) if not ticked else "edit")
     job = None
     if kind == "help":
         out.append(chat.append(p, cid, "assistant", "text", HELP_TEXT))
@@ -1144,6 +1182,32 @@ def api_chat_send(r):
         job = _start_refs(r.app, n, p, cid, chat.find_dois(text)[:20])
     elif kind == "library":
         out.append(_library_answer(n, p, cid, text))
+    elif kind == "draft":
+        if config.openai_status()[0] != "ok":
+            out.append(chat.append(p, cid, "assistant", "error", "ChatGPT is not set up yet. Open Settings and add your OpenAI key and model, then ask again."))
+            return {"messages": out}
+        try:
+            if redraft:                                                    # the author answered the model's questions: write it again for the same place, with the answers
+                old_prop = revise.get_proposal(p, redraft)
+                where = old_prop.get("draft") or {}
+                loc = {"status": "ready", "anchor": where["anchor"], "part": where.get("part", ""), "where": "the same place as before", "notes": [], "label": taxonomy.label(where.get("part", "")).capitalize()}
+            else:
+                loc = draft.locate(n, p, text)
+            if loc["status"] != "ready":
+                tail = (" Sections I can see: " + ", ".join(loc["sections"]) + ".") if loc.get("sections") else ""
+                out.append(chat.append(p, cid, "assistant", "text", loc["why"] + tail))
+                return {"messages": out}
+            pl = draft.plan(n, p, text, loc["anchor"], loc["part"], facts=facts if redraft else "")
+        except (draft.DraftError, revise.ReviseError, config.ConfigError, openai_client.OpenAIError, ValueError, FileNotFoundError, KeyError, paper_index.IsolationError) as e:
+            out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
+            return {"messages": out}
+        ask = config.paper_settings(p)["confirm_before_send"]
+        m = chat.append(p, cid, "assistant", "draft_plan", "", plan=pl, where=loc["where"], notes=loc["notes"], state="waiting", confirm="setting" if ask else None,
+                        **({"revises": redraft} if redraft else {}))
+        out.append(m)
+        if not ask:
+            job = _start_draft(r.app, n, p, cid, m["id"])
+            out[-1] = chat.get_message(p, cid, m["id"])
     elif kind == "review":
         if config.openai_status()[0] != "ok":
             out.append(chat.append(p, cid, "assistant", "error", "ChatGPT is not set up yet. Open Settings and add your OpenAI key and model, then ask again."))
@@ -1243,6 +1307,8 @@ def api_chat_run(r):
     m = chat.get_message(p, cid, str(mid))
     if m and m["kind"] == "review_plan":
         return {"job": _start_review(r.app, n, p, cid, str(mid))}
+    if m and m["kind"] == "draft_plan":
+        return {"job": _start_draft(r.app, n, p, cid, str(mid))}
     return {"job": _start_pass(r.app, n, p, cid, str(mid))}
 
 

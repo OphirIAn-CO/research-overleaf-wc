@@ -167,9 +167,9 @@ def _http_error(cfg, e):
     return OpenAIError(f"request rejected ({e.code}): {msg}", "bad_request", e.code)
 
 
-def call(cfg, system, user, schema=REVISION_SCHEMA, retries=2, plain=False, max_output=None, timeout=None, images=None):
+def call(cfg, system, user, schema=REVISION_SCHEMA, retries=2, plain=False, max_output=None, timeout=None, images=None, name="revision"):
     """One request (with retries on rate limit / 5xx / network). -> dict(text, data, usage, latency_ms, model, tries)"""
-    url, body = build_request(cfg, system, user, schema, plain=plain, max_output=max_output, images=images)
+    url, body = build_request(cfg, system, user, schema, name, plain=plain, max_output=max_output, images=images)
     payload = json.dumps(body).encode("utf-8")
     headers = {"Authorization": "Bearer " + cfg["api_key"], "Content-Type": "application/json", "User-Agent": UA}
     for k, h in (("organization", "OpenAI-Organization"), ("project", "OpenAI-Project")):

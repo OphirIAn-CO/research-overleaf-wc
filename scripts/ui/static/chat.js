@@ -23,6 +23,8 @@
     const parts = Array.isArray(u) && u[0] && u[0].content ? u[0].content : u;
     return parts.map((x) => (x.text !== undefined ? x.text : '[a picture goes here]')).join('\n');
   }
+  // the heading of one passage of a suggestion: where it is, or where the new text goes
+  const unitTitle = (u) => (u.insert ? `${u.section_path.replace(/ \(new text\)$/, '')}: new text after line ${u.line_start - 1} of ${u.file}` : `${u.section_path.split(' > ').slice(-1)[0]} · lines ${u.line_start} to ${u.line_end}`);
   const icon = (level) => ({ ok: '✓', warn: '!', error: '✗' }[level] || '•');
 
   /* A small, safe Markdown renderer for the review report: headings, lists, tables, bold, italics, code. Text nodes only, never HTML. */
@@ -389,6 +391,40 @@
       return assistant(...lines, details, foot);
     }
 
+    // ---- new text written from the author's own sources (analysis, notes, library): what it will rest on, and where it will go
+    function draftPlanBubble(m) {
+      const d = m.data, pl = d.plan;
+      const src = (pl.sources || []).filter((x) => !x.picture);
+      const pics = pl.pictures || [], lib = pl.library || [];
+      const lines = [h('p', null, 'I will write new text for the ', h('strong', { text: pl.label.toLowerCase() }), `, ${d.where}, about ${pl.target_words} words or fewer.`)];
+      (d.notes || []).forEach((x) => lines.push(h('p', { class: 'small secondary', text: x })));
+      const bits = [];
+      if (src.length) bits.push(`${plural(src.length, 'part')} of your files (${[...new Set(src.map((x) => x.file.split('/').pop()))].slice(0, 4).join(', ')}${new Set(src.map((x) => x.file)).size > 4 ? '...' : ''})`);
+      if (pics.length) bits.push(`${plural(pics.length, 'picture')} (${pics.map((x) => x.name).join(', ')})`);
+      if (lib.length) bits.push(`${plural(lib.length, 'part')} of your library`);
+      if (pl.tips) bits.push(`${plural(pl.tips, 'tip')} from your writing book`);
+      lines.push(h('p', { class: 'small secondary', text: (bits.length ? 'It rests on ' + bits.join(', ') + '. ' : 'You have not linked any code, results or notes, so there is nothing for it to rest on yet. ') +
+        `Every statement says which source it comes from, and a number that is in none of them is refused. About ${fmtTok(pl.est_tokens_in)} tokens go to ${pl.model}${pl.est_cost != null ? ', roughly ' + pl.est_cost.toFixed(4) + ' in your price units' : ''}.` }));
+      if (!src.length && !lib.length) lines.push(notice('warn', 'Link the folder with your code and results (or your notes) in ', h('a', { href: '#/settings', text: 'Settings' }), ' so the text can rest on them. Without sources, it can only reorganise what you tell me.'));
+      (pl.warnings || []).forEach((x) => lines.push(notice('warn', x)));
+      const exact = h('div');
+      const details = h('details', null, h('summary', { text: 'What goes out' }),
+        h('ul', { class: 'small' }, src.map((x) => h('li', { text: `From your files: ${x.file.split('/').pop()} · ${(x.where || '').split(' · ').slice(1).join(' · ')} · about ${fmtTok(x.tokens * 0.75)} words` })),
+          pics.map((x) => h('li', { text: `Picture: ${x.name} · ${x.kb} KB` })), lib.map((x) => h('li', { text: `From your library: ${x.label}, ${x.where}` }))),
+        h('button', { type: 'button', class: 'small', text: 'Show the exact text', onclick: (ev) => { ev.target.disabled = true; exact.append(h('pre', { class: 'payload small', text: requestText(pl.payload) })); } }), exact);
+      const foot = h('div');
+      if (d.state === 'waiting') {
+        foot.append(notice('warn', 'You asked me to check with you before anything is sent.'),
+          h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Send to OpenAI' }), async () => {
+            const r = await api.post('/api/chat/run', { paper, id: st.cid, message: m.id });
+            await reload(); await watch(r.job);
+          }), guarded(h('button', { type: 'button', text: 'Cancel' }), async () => { await api.post('/api/chat/cancel', { paper, id: st.cid, message: m.id }); await reload(); })));
+      } else {
+        foot.append(h('p', { class: 'muted small', text: { sent: 'Sent to OpenAI.', failed: 'It could not be completed.', cancelled: 'Cancelled, nothing was sent.' }[d.state] || '' }));
+      }
+      return assistant(...lines, details, foot);
+    }
+
     function askBubble(m) {
       const d = m.data;
       const sections = h('div', { class: 'row chips' }, (d.sections || []).map((s) => h('button', { type: 'button', class: 'chip', text: s.label,
@@ -637,6 +673,9 @@
       const nHunks = sel.size;
       const usage = p.usage || {};
       const notices = h('div', { class: 'stack' });
+      const srcLabels = {};                                  // S1 -> "metrics.csv · rows 2 to 3", L1 -> "Smith and Lee 2020 · page 2"
+      (p.sources || []).forEach((x) => { if (x.ref) srcLabels[x.ref] = `${x.file.split('/').pop()} · ${(x.where || '').split(' · ').slice(1).join(' · ') || x.where}`; });
+      (p.library || []).forEach((x) => { if (x.ref) srcLabels[x.ref] = `${x.label} · ${x.where}`; });
       const redraw = async () => { const fresh = await api.get(`/api/proposal?paper=${enc(paper)}&id=${enc(p.id)}`); renderSuggestion(clear(holder), fresh, m); };
 
       holder.append(h('div', { class: 'row small secondary' }, h('span', { text: `${p.model} · ${fmtTok(usage.input_tokens)} in / ${fmtTok(usage.output_tokens)} out${usage.cost != null ? ' · cost ' + usage.cost : ''}` }),
@@ -665,7 +704,7 @@
       p.units.forEach((u) => {
         if (u.status === 'failed') { holder.append(notice('bad', `${u.section_path}: ${u.error_plain || u.error || 'failed'}`)); return; }
         // on a wide screen the explanation sits beside the changes instead of above them (see .unit in the stylesheet)
-        const why = h('div', { class: 'unit-why' }, h('h3', { text: `${u.section_path.split(' > ').slice(-1)[0]} · lines ${u.line_start} to ${u.line_end}` }));
+        const why = h('div', { class: 'unit-why' }, h('h3', { text: unitTitle(u) }));
         const changes = h('div', { class: 'unit-changes' });
         const box = h('section', { class: 'unit' }, why, changes);
         if (u.approach) why.append(h('p', { class: 'approach', text: u.approach }));
@@ -684,7 +723,11 @@
         if (bad.length) why.append(notice('warn', 'Heads up: ', bad.map((v) => v.detail || v.name).join('; ')));
         if ((u.added_cites || []).length) why.append(notice('ok', h('strong', { text: 'Citations from your library: ' }), u.added_cites.join(', '), '. They stand in your bibliography already. Check each one supports the claim it sits next to.'));
         if ((u.from_files || []).length) why.append(notice('warn', h('strong', { text: 'Numbers that came from your files: ' }), u.from_files.join(', '), '. Check them against the source before you keep the change.'));
-        u.hunks.forEach((hk) => changes.append(hunkCard(hk, sel, () => { count.textContent = `${sel.size} of ${nHunks} changes selected`; }, locked, p.rule_labels)));
+        u.hunks.forEach((hk) => changes.append(hunkCard(hk, sel, () => { count.textContent = `${sel.size} of ${nHunks} changes selected`; }, locked, p.rule_labels, srcLabels)));
+        if ((u.basis || []).length) {
+          why.append(h('details', null, h('summary', { text: 'What each statement rests on' }),
+            h('ul', { class: 'small' }, u.basis.map((b) => h('li', null, h('strong', { text: (srcLabels[b.source] || b.source) + ': ' }), b.statement + '...')))));
+        }
         if (!u.hunks.length && u.status !== 'failed') changes.append(h('p', { class: 'muted small', text: 'No changes in this passage.' }));
         holder.append(box);
       });
@@ -705,7 +748,7 @@
         const parts = [];
         p.units.filter((u) => u.status !== 'failed').forEach((u) => {
           const mine = u.hunks.filter((hk) => sel.has(hk.uid));
-          parts.push(`${u.section_path.split(' > ').slice(-1)[0]} (lines ${u.line_start} to ${u.line_end})`);
+          parts.push(unitTitle(u));
           if (u.approach) parts.push('', 'Why: ' + u.approach);
           if (mine.length) parts.push('', 'Changes:', ...mine.map((hk) => { const [b, a] = beforeAfter(hk); return `- "${b.trim()}" -> "${a.trim()}"${hk.reasons.length ? ' (' + hk.reasons.join('; ') + ')' : ''}`; }));
           parts.push('');
@@ -754,7 +797,7 @@
           if (!request) throw new Error('Say what the suggestion should do.');
           if (!facts && request === (p.instruction || '').trim()) throw new Error('Answer a question, write what to add or change, or change the request first.');
           if (st.busy) throw new Error('A request is still running. Wait for it to finish, then press the button again.');
-          await send(request, { chunk_ids: m.data.chunk_ids, facts, revises: p.id, issue: m.data.issue });
+          await send(request, p.kind === 'draft' ? { redraft: p.id, facts } : { chunk_ids: m.data.chunk_ids, facts, revises: p.id, issue: m.data.issue });
         });
         discuss.append(h('p', { class: 'small secondary', text: answers.length ? 'Your answers to the questions above go with it. Everything you write here is used as given: I add nothing beyond it, and the numbers and names in it are allowed in the new text.' : 'Everything you write here is used as given: I add nothing beyond it, and the numbers and names in it are allowed in the new text.' }),
           h('label', { class: 'small secondary', text: isComment ? 'The reviewer\'s comment (change it if you read it differently)' : 'What I was asked to do (change it if you want it understood differently)' }), req,
@@ -789,14 +832,15 @@
       holder.append(h('p', { class: 'small muted' }, unclean ? 'Saved exactly as written: no text-cleaning service is set up. ' : '', 'Saving puts the ticked changes into your files here; "send" then puts them in Overleaf. ', handoff));
     }
 
-    function hunkCard(hk, sel, onChange, locked, labels) {
+    function hunkCard(hk, sel, onChange, locked, labels, sources) {
       const cb = h('input', { type: 'checkbox', checked: locked ? hk.status === 'accepted' : sel.has(hk.uid), disabled: locked, 'aria-label': 'Keep this change' });
       cb.addEventListener('change', () => { if (cb.checked) sel.add(hk.uid); else sel.delete(hk.uid); onChange(); });
       return h('div', { class: 'hunk' },
         h('header', null, cb, h('div', { class: 'grow' }, h('div', { class: 'small', text: hk.reasons.length ? hk.reasons.join('; ') : 'A small improvement' }),
+          (hk.rests_on || []).length ? h('div', { class: 'rule', text: 'Rests on: ' + hk.rests_on.map((x) => (sources && sources[x]) || x).join('; ') }) : null,
           hk.rules.length ? h('div', { class: 'rule', text: 'From your writing book: ' + hk.rules.map((r) => (labels && labels[r]) || 'a tip from the book').join('; ') }) : null),
           locked ? h('span', { class: 'badge', text: hk.status }) : null),
-        h('div', { class: 'sides' }, h('div', { class: 'side' }, h('h4', { text: 'Now' }), diffSpans(hk.diff, 'old')), h('div', { class: 'side' }, h('h4', { text: 'Suggested' }), diffSpans(hk.diff, 'new'))));
+        h('div', { class: 'sides' }, h('div', { class: 'side' }, h('h4', { text: 'Now' }), hk.old ? diffSpans(hk.diff, 'old') : h('span', { class: 'muted', text: 'Nothing here yet.' })), h('div', { class: 'side' }, h('h4', { text: 'Suggested' }), diffSpans(hk.diff, 'new'))));
     }
 
     function showGit(into, r) {
@@ -915,7 +959,7 @@
         const diff = h('div');
         checkEls.set(u.unit_id, { list, diff, which });
         const legend = Object.entries(v.legend || {});
-        body.append(h('section', { class: 'unit' }, units.length > 1 ? h('h4', { text: u.section_path.split(' > ').slice(-1)[0] + ` · lines ${u.line_start} to ${u.line_end}` }) : null,
+        body.append(h('section', { class: 'unit' }, units.length > 1 ? h('h4', { text: unitTitle(u) }) : null,
           h('div', { class: 'two' },
             h('div', null, h('label', { class: 'small secondary', text: 'Text for QuillBot' }), readonlyBox(v.suggested_masked),
               h('div', { class: 'row tight' }, h('button', { type: 'button', class: 'small', text: 'Copy for QuillBot', onclick: () => { copyText(v.suggested_masked, 'Text for QuillBot'); handle.setStep(Math.max(handle.step, 2)); } }),
@@ -968,6 +1012,7 @@
       if (m.role === 'user') return h('div', { class: 'msg user' }, h('div', { class: 'bubble' }, h('div', { text: m.text }),
         (m.data && m.data.facts) ? h('details', { class: 'facts' }, h('summary', { text: 'My answers that went with it' }), h('div', { class: 'small', text: m.data.facts })) : null));
       if (m.kind === 'plan') return planBubble(m);
+      if (m.kind === 'draft_plan') return draftPlanBubble(m);
       if (m.kind === 'ask') return askBubble(m);
       if (m.kind === 'result') return resultBubble(m);
       if (m.kind === 'refs') return refsBubble(m);

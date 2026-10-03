@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import random
+import re
 import sys
 import tempfile
 import threading
@@ -105,9 +106,15 @@ def main():
     def edit(body):
         if "text" not in body and "peer reviewer" in str(body.get("instructions", "")).lower():
             return REPORT          # a review asks for free text, not the JSON of an edit
-        t = passage_of(body)
         from writing_core import openai_client
         user = openai_client.user_text(body)
+        if (((body.get("text") or {}).get("format")) or {}).get("name") == "draft":     # new text from the author's analysis, resting on the sources it was given
+            m = re.search(r"\[\[(LX\d+)\]\] = the number of Table 1", user)
+            return {"approach": "The first paragraph compares the models by their error; the second says how training went. Both rest on your results files.",
+                    "draft_text": "The best model reached an RMSE of 0.412, against 0.588 for the recurrent baseline" + (f", as Table~[[{m.group(1)}]] shows" if m else "") + ".\n\n"
+                                  "Training loss reached 0.24 by epoch 20.",
+                    "basis": [{"statement": "The best model reached an RMSE of 0.412", "source": "S1"}, {"statement": "Training loss reached 0.24", "source": "S2"}], "questions": []}
+        t = passage_of(body)
         answered = "<author_answers>" in user                       # the author replied to the question below: use the reply
         t = t.replace("We sampled 40 farms by stratified random sampling.", "We drew a stratified random sample of 40 farms.")
         if "metrics.csv" in user:          # the request carried the author's analysis: state a result that stands in it

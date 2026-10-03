@@ -257,8 +257,50 @@ def library_topic(text):
     return re.sub(r"\s+", " ", re.sub(r"[?!.:;,]+", " ", t)).strip()
 
 
+_DRAFT = re.compile(r"\b(?:write|draft|compose|generate|prepare|produce|come up with)\b|\badd\s+(?:a|an|one|two|three|some|new)\s+(?:new\s+)?(?:paragraphs?|sections?|sentences?|passages?)\b", re.I)
+_DRAFT_VIA = re.compile(r"\b(?:explain|interpret|discuss|describe|summari[sz]e|report|present)\b.*\b(?:in|into|for|to)\s+(?:the\s+|my\s+|our\s+)?(?:\w+\s+){0,2}?"
+                        r"(?:results?|discussion|introduction|methods?|conclusions?|abstract|limitations?)\b", re.I)
+_DRAFT_NOT = {"rewrite", "rephrase", "paraphrase", "improve", "fix", "polish", "tighten", "shorten", "simplify", "proofread", "revise", "edit", "smooth", "reorder", "reorganize"}
+DRAFTABLE = ("abstract", "introduction", "background", "theory", "methods", "results", "discussion", "limitations", "conclusion")
+_PREP_PART = re.compile(r"\b(?:in|into|for|to|inside|within|under|on)\s+(?:the\s+|my\s+|our\s+|a\s+|an\s+)?(?:\w+\s+){0,2}?(%s)\b")
+
+
+def draft_part(text):
+    """The part of the paper a request to WRITE something is about ("write the discussion of these results" -> discussion; "explain the results in the discussion" ->
+    discussion; "write the results from my code" -> results). None when it names none."""
+    ws = taxonomy.words((text or "").lower())
+    first = {}
+    for part in DRAFTABLE:
+        for phrase in taxonomy._IDX.get(part, []):
+            n = len(phrase)
+            for i in range(len(ws) - n + 1):
+                if n and tuple(ws[i:i + n]) == phrase:
+                    first[part] = min(first.get(part, 10 ** 6), i)
+                    break
+    if not first:
+        return None
+    start = next((i for i, w in enumerate(ws) if w in ("write", "draft", "compose", "generate", "prepare", "produce", "add")), 0)
+    for part in sorted(first, key=first.get):                       # a part named after a preposition is the place ("... in the discussion")
+        pos = first[part]
+        if pos > 0 and ws[max(0, pos - 3):pos] and any(w in ("in", "into", "for", "to", "inside", "within", "under") for w in ws[max(0, pos - 3):pos]):
+            return part
+    after = [p for p in sorted(first, key=first.get) if first[p] >= start]
+    return (after or sorted(first, key=first.get))[0]
+
+
+def is_draft_request(text):
+    """"Write the results from my analysis", "draft the discussion", "add a paragraph about the sampling to the methods": new text, not an edit of existing text."""
+    t = text or ""
+    if not (_DRAFT.search(t) or _DRAFT_VIA.search(t)):
+        return False
+    ws = set(taxonomy.words(t.lower())) | {w for w in re.findall(r"[a-z]+", t.lower())}
+    if ws & _DRAFT_NOT:
+        return False
+    return bool(draft_part(t)) or bool(re.search(r"\b(?:paragraphs?|section|sentences?|passage)\b", t, re.I))
+
+
 def intent(text):
-    """-> 'refs' | 'review' | 'help' | 'library' | 'edit'"""
+    """-> 'refs' | 'review' | 'help' | 'library' | 'draft' | 'edit'"""
     if find_dois(text):
         return "refs"
     if _HELP.match(text or ""):
@@ -267,6 +309,8 @@ def intent(text):
         return "review"
     if _LIBRARY_ASK.search(text or "") and not (set(taxonomy.words((text or "").lower())) & (_INTENT_WORDS | _LIBRARY_EDIT)):
         return "library"
+    if is_draft_request(text):
+        return "draft"
     return "edit"
 
 

@@ -819,10 +819,15 @@ def _pick_images(use, text, named, every):
     return chosen[:MAX_IMAGES]
 
 
-def relevant(name, proj, instruction, passage="", mode="auto", budget=1800, limit=5, analysis_mode="auto"):
+FILL_ORDER = ("json", "yaml", "yml", "toml", "csv", "tsv", "tex", "log", "txt", "md", "ipynb")           # what states a result before what produced it: numbers first, code last
+
+
+def relevant(name, proj, instruction, passage="", mode="auto", budget=1800, limit=5, analysis_mode="auto", fill=False):
     """The parts of the author's files a request should see, or None. A file is used when the request names it, when it talks about the author's files or data
     (see WANTS_FILES) or, for the code and results folders, about the analysis (see WANTS_ANALYSIS), or always when the setting says so; never when it says never.
     `mode` is the setting for the notes, tables and uploads, `analysis_mode` the one for the code and results folders.
+    fill: when the parts that match leave room in the budget, the rest of the analysis's tables, results files and logs fill it (used when new text is drafted from the analysis,
+    where the numbers matter more than a good match).
     -> {"chunks": [...], "files": [names], "images": [{file, name}], "why": "named" | "asked" | "always"}"""
     from . import paper_index, retrieve
     info = [f for f in listing(name, proj) if f.get("parts") and (analysis_mode if role_of(f) == "analysis" else mode) != "never"]
@@ -873,6 +878,13 @@ def relevant(name, proj, instruction, passage="", mode="auto", budget=1800, limi
                 if len(chosen) >= limit:
                     break
                 take(con.execute("SELECT * FROM chunks WHERE id=?", (i,)).fetchone())
+        if fill:
+            rank = lambda f: (FILL_ORDER.index(ext_of(f["file"])) if ext_of(f["file"]) in FILL_ORDER else len(FILL_ORDER), f["file"])  # noqa: E731
+            for f in sorted((f for f in use if role_of(f) == "analysis" and ext_of(f["file"]) not in IMAGE_EXT), key=rank):
+                if ext_of(f["file"]) in ("py", "r", "rmd", "m", "jl", "sql", "sh"):
+                    continue
+                for row in con.execute("SELECT * FROM chunks WHERE kind IN ('source','project') AND file=? ORDER BY ord", (f["file"],)).fetchall():
+                    take(row)
         pics = _pick_images(use, instruction + " " + passage[:800], set(named), every=asked_analysis or analysis_mode == "always")
         for f in pics:                                              # a picture that goes out is announced in the text, so the answer can say which one it looked at
             row = con.execute("SELECT * FROM chunks WHERE kind IN ('source','project') AND file=? ORDER BY ord LIMIT 1", (f["file"],)).fetchone()
@@ -883,7 +895,11 @@ def relevant(name, proj, instruction, passage="", mode="auto", budget=1800, limi
         con.close()
     if not chosen:
         return None
-    chosen.sort(key=lambda c: (c["file"], c["ord"]))
+    if fill:                                                         # new text is written from numbers first: results and tables, then logs, then code, then the figures' names
+        order = lambda c: (1 if c.get("picture") else 0, FILL_ORDER.index(ext_of(c["file"])) if ext_of(c["file"]) in FILL_ORDER else len(FILL_ORDER), c["file"], c["ord"])  # noqa: E731
+        chosen.sort(key=order)
+    else:
+        chosen.sort(key=lambda c: (c["file"], c["ord"]))
     return {"chunks": chosen, "files": list(dict.fromkeys(c["file"] for c in chosen)), "images": [{"file": f["file"], "name": f["file"].rsplit("/", 1)[-1]} for f in pics],
             "why": "named" if named else "asked" if (asked_files or asked_analysis) else "always"}
 
