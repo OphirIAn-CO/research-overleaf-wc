@@ -14,6 +14,7 @@ Rules kept here: only the QuillBot / Overleaf start addresses can be opened by t
 local address (top-level navigations are checked); downloads are refused; the saved sign-in details are used only when asked, are filled into
 the form and are never logged or returned.
 """
+import base64
 import http.client
 import ipaddress
 import json
@@ -33,6 +34,8 @@ SITES = ("quillbot", "overleaf")
 DESKTOP_W = 1100            # sites switch to their cramped phone layout below this width, so the page is drawn at least this wide
 MIN_W, MAX_W, MIN_H, MAX_H = 640, 1920, 360, 1400
 IDLE_CLOSE = int(os.environ.get("OLS_BROWSER_IDLE", 30 * 60))   # seconds without anyone looking before Chromium is closed (the sign-in stays on disk)
+SCREENCAST = os.environ.get("OLS_SCREENCAST", "1") != "0"   # the browser pushes its own pictures (smooth); off: a screenshot is asked for again and again (slow)
+CAST_QUALITY = int(os.environ.get("OLS_CAST_QUALITY", 62))
 NAV_TIMEOUT_MS = 20000      # how long opening a page may take before the pane says so (the page keeps loading unless stopped)
 STUCK_AFTER = int(os.environ.get("OLS_BROWSER_STUCK", 75))   # seconds without the worker finishing a round before the browser is declared stuck and killed
 MAX_EVENTS, MAX_TEXT = 200, 100000
@@ -128,6 +131,12 @@ class _Session:
         self.cdp = {}
         self.tick = time.time()
         self._current = None
+        self._casting, self._cast_page, self._cast_hooked, self._acks = False, None, set(), []
+        self._cast_fail = not SCREENCAST
+        self._expect_since = 0.0
+        self._frame_at = 0.0
+        self._cast_hash = None
+        self.frames_pushed = 0
 
     # ------------------------------------------------------------------ used by other threads
     def start(self):
@@ -226,7 +235,8 @@ class _Session:
         kw = dict(user_data_dir=str(self.profile), headless=True, viewport={"width": w, "height": h}, locale="en-US", accept_downloads=False,
                   permissions=["clipboard-read", "clipboard-write"],   # so a site's own "Copy" button can be read back (see clipboard())
                   args=["--disable-gpu", "--disk-cache-size=52428800", "--no-first-run", "--no-default-browser-check", "--disable-features=Translate,MediaRouter",
-                        "--disable-blink-features=AutomationControlled"])
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-smooth-scrolling"])     # one scroll notch is one step: smooth scrolling animates it over many pictures, each one costing a paint here
         tz = os.environ.get("OLS_BROWSER_TZ", "")
         if re.fullmatch(r"[A-Za-z0-9_+\-]+(/[A-Za-z0-9_+\-]+){0,2}", tz):
             kw["timezone_id"] = tz        # the time zone of the computer, so the browser does not claim to be elsewhere than the connection it uses
@@ -285,7 +295,18 @@ class _Session:
                     self._leave(*self._violation)
                     self._violation = None
                 watched = now < self.watch_until
-                if watched or did:
+                self._flush_acks()
+                if watched and not self._cast_fail and (not self._casting or self._cast_page is not self.page):
+                    self._cast_start()
+                elif self._casting and now > self.watch_until + 2:
+                    self._cast_stop()                     # nobody is looking: the browser stops painting pictures for nobody
+                if self._casting:
+                    # a page that is still when the screencast starts paints nothing, so no picture would ever be pushed: take one by hand
+                    if self._expect_since and time.time() - self._expect_since > 0.35:
+                        if self._frame_at < self._expect_since:
+                            self._capture()
+                        self._expect_since = 0.0
+                elif watched or did:                      # pushed pictures are not available: a screenshot every so often
                     gap = 0.06 if now - self.last_input < 2.0 else 0.25
                     if did or now - last_cap >= gap:
                         self._capture()
@@ -293,7 +314,7 @@ class _Session:
                 if (watched or did) and now - last_info >= 0.5:
                     self._refresh_info()
                     last_info = now
-                self._pump(12 if (watched or did) else 80)
+                self._pump(6 if (watched or did) else 80)
         finally:
             try:
                 self.ctx.close()
@@ -362,6 +383,63 @@ class _Session:
         except Exception:  # noqa: BLE001
             pass
 
+    # ---- pictures pushed by the browser. Page.startScreencast hands over a picture each time the page paints, without stopping the page for a screenshot, so the
+    # loop that carries out the mouse and keyboard is never held up by taking pictures. Each picture must be acknowledged before the next one is sent.
+    def _cast_start(self):
+        c = self.cdp.get(self.page)
+        if c is None:
+            return
+        self._cast_stop()
+        w, h = self.size
+        try:
+            if self.page not in self._cast_hooked:
+                page = self.page
+                c.on("Page.screencastFrame", lambda p, _c=c, _pg=page: self._on_cast(_pg, _c, p))
+                self._cast_hooked.add(page)
+            c.send("Page.startScreencast", {"format": "jpeg", "quality": CAST_QUALITY, "maxWidth": w, "maxHeight": h, "everyNthFrame": 1})
+        except Exception:  # noqa: BLE001
+            self._cast_fail = True                        # this browser cannot push pictures: fall back to screenshots, for good
+            return
+        self._casting, self._cast_page = True, self.page
+        self._expect_since = time.time()                  # a still page paints nothing: if no picture comes soon, one is taken by hand
+
+    def _cast_stop(self):
+        page, self._casting, self._cast_page = self._cast_page, False, None
+        c = self.cdp.get(page) if page is not None else None
+        if c is not None:
+            try:
+                c.send("Page.stopScreencast")
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _on_cast(self, page, c, params):
+        self._acks.append((c, params.get("sessionId")))
+        if page is not self.page:
+            return
+        try:
+            data = base64.b64decode(params["data"])
+        except Exception:  # noqa: BLE001
+            return
+        self.frames_pushed += 1
+        digest = hash(data)
+        if digest == self._cast_hash:                     # painted again, looks the same: not a new picture
+            self._frame_at = time.time()
+            return
+        self._cast_hash = digest
+        with self.cond:
+            self.seq += 1
+            self.jpeg = data
+            self._frame_at = time.time()
+            self.cond.notify_all()
+
+    def _flush_acks(self):
+        acks, self._acks = self._acks, []
+        for c, sid in acks:
+            try:
+                c.send("Page.screencastFrameAck", {"sessionId": sid})
+            except Exception:  # noqa: BLE001
+                pass
+
     def _capture(self):
         page = self.page
         try:
@@ -375,6 +453,7 @@ class _Session:
         with self.cond:
             self.seq += 1
             self.jpeg = jpeg
+            self._frame_at = time.time()
             self.cond.notify_all()
 
     def _refresh_info(self):
@@ -439,7 +518,9 @@ class _Session:
                     p.set_viewport_size({"width": w, "height": h})
                 except Exception:  # noqa: BLE001
                     pass
-            self._hash = None
+            self._hash = self._cast_hash = None
+            if self._casting:
+                self._cast_stop()                        # restarted at the new size by the loop
         return {"w": w, "h": h}
 
     def _release(self):
@@ -457,11 +538,28 @@ class _Session:
                 self.page.keyboard.down(m)
                 self._held.add(m)
 
+    @staticmethod
+    def _merge_wheels(events):
+        """Scrolling sends a wheel notch every few milliseconds. A page that is busy answers each one in turn, so a hundred notches are a hundred waits; consecutive notches in
+        one place (and with the same keys held) are one scroll of the same total distance."""
+        out = []
+        for e in events:
+            last = out[-1] if out else None
+            if (isinstance(e, dict) and e.get("t") == "wheel" and isinstance(last, dict) and last.get("t") == "wheel" and (last.get("mods") or []) == (e.get("mods") or [])
+                    and abs(_clamp(e.get("x"), 0, 10000, 0) - _clamp(last.get("x"), 0, 10000, 0)) <= 12 and abs(_clamp(e.get("y"), 0, 10000, 0) - _clamp(last.get("y"), 0, 10000, 0)) <= 12):
+                last = dict(last)
+                last["dx"] = _clamp(last.get("dx"), -20000, 20000, 0) + _clamp(e.get("dx"), -20000, 20000, 0)
+                last["dy"] = _clamp(last.get("dy"), -20000, 20000, 0) + _clamp(e.get("dy"), -20000, 20000, 0)
+                out[-1] = last
+            else:
+                out.append(e)
+        return out
+
     def _do_input(self, events):
         page = self.page
         w, h = self.size
         self.last_input = time.time()
-        for e in events[:MAX_EVENTS]:
+        for e in self._merge_wheels(events[:MAX_EVENTS]):
             if not isinstance(e, dict):
                 continue
             t = e.get("t")
@@ -478,7 +576,7 @@ class _Session:
                 page.mouse.up(button=BUTTONS.get(e.get("b"), "left"), click_count=_clamp(e.get("n"), 1, 3, 1))
             elif t == "wheel":
                 page.mouse.move(x, y)
-                page.mouse.wheel(_clamp(e.get("dx"), -2000, 2000, 0), _clamp(e.get("dy"), -2000, 2000, 0))
+                page.mouse.wheel(_clamp(e.get("dx"), -20000, 20000, 0), _clamp(e.get("dy"), -20000, 20000, 0))
             elif t == "type":                                 # printable characters, typed one by one so the page sees key events
                 self._mods([])
                 text = str(e.get("text") or "")[:MAX_TEXT]
@@ -530,6 +628,8 @@ class _Session:
         return {"ok": True, "focused": focused}
 
     def _do_clipboard(self):
+        if time.time() - self.last_input < 0.4:          # the page's own Copy button was pressed a moment ago and writes the clipboard a little later
+            time.sleep(0.25)
         return str(self._js("() => navigator.clipboard.readText()") or "")[:MAX_TEXT]
 
     def _do_signin(self, email, password):

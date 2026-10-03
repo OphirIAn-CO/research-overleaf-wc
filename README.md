@@ -195,6 +195,15 @@ You sign in once and it stays signed in (the sign-in is kept in `~/.config/overl
 - **Settings > QuillBot and Overleaf inside the app** shows whether the built-in browser is ready, the QuillBot address, each paper's
   Overleaf project address (normally built from its Git address), and how to show them: automatic, always the built-in browser, always a
   separate window beside the app, or inside the page as a frame (usually blank).
+- **Speed, and what to do when it is slow.** The pane is a live picture of a real browser running inside Docker, so every scroll has to travel
+  there, be drawn there without a graphics card, and travel back. Overleaf's editor and PDF preview are heavy pages, so how smooth it is
+  depends on the CPUs Docker gives that container. What the app does about it: the browser pushes its own pictures as the page changes (instead of
+  being photographed again and again, which roughly doubled the frame rate in tests), scroll notches that queue up are sent as one scroll,
+  and animated scrolling is off so one notch is one picture. If it is still slow, the pane notices (a scroll or a key taking over 0.7 seconds to
+  show, five times) and says so with a button, **Open Overleaf in a window beside the app**; the **↗** button in the pane header does the same any time.
+  That window is your own browser: instantly smooth, already signed in, and the pane is replaced by a button that brings the window forward. You can
+  switch back in **Settings > QuillBot and Overleaf inside the app**. To make the built-in one faster: give Docker more CPUs (Docker Desktop >
+  Settings > Resources, 4 or more), close other heavy tabs, and keep the pane at one site at a time.
 - **Safety:** the browser runs in a second container (`overleaf-browser`) on a private Docker network with nothing published to your
   network. It has no access to your OpenAI key, Overleaf token, papers or book, only its sign-in folder. It refuses to open local or
   private addresses, refuses downloads, and the app can only start it on the QuillBot and Overleaf project addresses. Chromium runs there
@@ -304,6 +313,7 @@ your book), or use **Book check** in the book library (Settings, Advanced).
 | The model was not found / the key was rejected | Use **Test** in **Settings > OpenAI**. It says which one it is, and never shows the key. |
 | The pane says the built-in browser is not available | The image is older than the app: run `./ui.sh down`, then `./ui.sh up` (the first start rebuilds the image, a few minutes). **Settings > QuillBot and Overleaf inside the app** says why if it still fails. Meanwhile the sites open in a window beside the app. |
 | The pane stays on "Starting the browser" or says the page did not answer | The site could not be reached from the container (internet, a VPN, or the site is down). Press **Reload**, or **Home**. Chromium keeps your sign-in, so nothing is lost. |
+| Scrolling in the Overleaf pane lags | Press the **↗** button in the pane header (or the button in the "is slow here" note) to use a window of your own browser, which is always smooth. To keep the built-in one: Docker Desktop > Settings > Resources > more CPUs, and close other heavy tabs. |
 | The page keeps asking "Verify you are human", or the sign-in is refused | Click the checkbox in the picture. If it comes back, use **Open QuillBot in a window instead** in the note above the pane (or switch the built-in browser off for that site in **Settings**); your own browser passes these checks. A Google/Apple/university sign-in does not work in an embedded browser: use an email and password. If Overleaf says the email or password is wrong, check them in Settings; the app never sees what you type in the page itself. |
 | The picture is small or blurry | The page is drawn wide and shrunk to fit: press **Wider**, or **Aa** for bigger text. |
 | "Fill my sign-in" finds no form | Open the site's sign-in page first. Some sites ask for the email, then the password: press the button again after **Continue**. |

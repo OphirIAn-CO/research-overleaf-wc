@@ -158,6 +158,31 @@ async function until(fn, ms) { const end = Date.now() + (ms || 12000); for (;;) 
   await page.evaluate(async () => { await fetch('/api/browser/quillbot/nav', { method: 'POST', headers: { 'X-Requested-With': 'ols', 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'home', paper: 'soil-yield' }) }).then((r) => r.text()); });
   await sleep(1500);
 
+  // ---- a view that is slow to answer: the pane says so after a few keystrokes or scrolls, offers the smooth way, and remembers "keep it here"; a quick view never nags
+  const typeSome = async (n, wait) => { await clickAt(60, 180); for (let i = 0; i < n; i++) { await page.keyboard.type('x'); await sleep(wait); } };
+  const hint = '#panes-area .bpane .warn:has-text("is slow here")';
+  await typeSome(8, 250);
+  ok(!(await page.isVisible(hint)), 'a quick view does not nag');
+  await page.route('**/api/browser/quillbot/frame*', async (r) => { await sleep(1300); try { await r.continue(); } catch (e) { /* the pane moved on while this picture was being held back */ } });
+  await page.evaluate(() => { localStorage.removeItem('ols-slow-ok-quillbot'); });
+  await page.reload();
+  await page.waitForSelector('#panes-area .bpane h2:has-text("QuillBot")');
+  await shown();
+  await clickAt(60, 180);
+  for (let i = 0; i < 12 && !(await page.isVisible(hint)); i++) { await page.keyboard.type('y'); await sleep(1700); }
+  ok(await page.isVisible(hint), 'when keys and scrolls are slow to show again and again, the pane says so');
+  ok(/much smoother/.test(await text(hint)) && await page.isVisible('#panes-area .bpane .warn button:has-text("Open QuillBot in a window beside the app")'), 'and offers a window of the author\'s own browser');
+  await shot('b6b-slow');
+  await page.click('#panes-area .bpane .warn button:has-text("Keep it here")');
+  ok(!(await page.isVisible(hint)), '"keep it here" closes it');
+  for (let i = 0; i < 7; i++) { await page.keyboard.type('z'); await sleep(1500); }
+  ok(!(await page.isVisible(hint)), 'and it does not come back (it is remembered for a day)');
+  await page.unroute('**/api/browser/quillbot/frame*');
+  ok(await page.isVisible('#panes-area .bpane button[title*="your own browser"]'), 'the header always has the quiet way to a window of the own browser');
+  await page.evaluate(() => { localStorage.removeItem('ols-slow-ok-quillbot'); });
+  await page.evaluate(async () => { await fetch('/api/browser/quillbot/nav', { method: 'POST', headers: { 'X-Requested-With': 'ols', 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'home', paper: 'soil-yield' }) }).then((r) => r.text()); });   // the typing above left text in the page: start it afresh
+  await sleep(1500);
+
   // ---- an edit, and the hand-off to QuillBot and back
   await page.fill('#composer', 'improve the first paragraph of the methods');
   await page.press('#composer', 'Enter');
@@ -176,7 +201,7 @@ async function until(fn, ms) { const end = Date.now() + (ms || 12000); for (;;) 
   await page.click('.tone button:has-text("Take QuillBot\'s result")');
   await page.waitForSelector('.toast:has-text("Took")');
   const mine = await page.locator('.tone textarea:not([readonly])').first().inputValue();
-  ok(mine === suggestion, 'what the page copied with its own Copy button is taken back into "Your final version"');
+  ok(mine === suggestion, 'what the page copied with its own Copy button is taken back into "Your final version"' + (mine === suggestion ? '' : ` (got ${JSON.stringify(mine.slice(0, 80))} of ${mine.length}, wanted ${JSON.stringify(suggestion.slice(0, 80))} of ${suggestion.length})`));
   await clickAt(60, 180);
   await page.keyboard.press('End');
   await page.keyboard.type(' TWEAKED');

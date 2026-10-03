@@ -199,7 +199,8 @@ class XSession(webview._Session):
                 "--no-sandbox", "--test-type", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--use-mock-keychain",
                 "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", "--lang=en-US", "--hide-crash-restore-bubble", "--noerrdialogs",
                 "--disk-cache-size=52428800", "--disable-features=Translate,MediaRouter",
-                "--disable-blink-features=AutomationControlled"]    # a debugging port makes the browser say "navigator.webdriver" even though a person is using it
+                "--disable-blink-features=AutomationControlled",    # a debugging port makes the browser say "navigator.webdriver" even though a person is using it
+                "--disable-smooth-scrolling"]                       # one wheel notch is one step: animated scrolling would cost a picture of the screen per frame
         self.chrome = subprocess.Popen(args, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         port_file = self.profile / "DevToolsActivePort"
         t0 = time.time()

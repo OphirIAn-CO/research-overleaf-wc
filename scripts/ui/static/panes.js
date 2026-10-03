@@ -135,7 +135,8 @@
   /* One site in the built-in browser. d = {url, how, reason}. Returns {el, destroy, api}. */
   function browserPane(site, label, d) {
     const BIG = 'ols-panes-bigtext';
-    const st = { alive: true, size: null, queue: [], flying: false, dragging: false, moveAt: 0, timers: [], poll: null, big: window.OLS.store.get(BIG) === '1' };
+    const st = { alive: true, size: null, queue: [], flying: false, dragging: false, moveAt: 0, timers: [], poll: null, big: window.OLS.store.get(BIG) === '1', lat: [], pendingAt: 0 };
+    const LAGKEY = 'ols-slow-ok-' + site;
     const post = (path, body) => api.post(`/api/browser/${site}/${path}`, body || {});
     const canvas = h('canvas', { class: 'bshot', role: 'img', 'aria-label': label + ' (live view of the built-in browser)' });
     const g = canvas.getContext('2d');
@@ -144,6 +145,7 @@
     const view = h('div', { class: 'bview' }, canvas, keys, overlay);
     const where = h('span', { class: 'small muted ellipsis grow', title: '' });
     const line = h('div', { class: 'small secondary bline', 'aria-live': 'polite', hidden: true });
+    const lag = h('div', { class: 'small bline warn', role: 'status', hidden: true });
     const check = h('div', { class: 'small bline warn challenge', role: 'status', hidden: true },
       h('strong', { text: label + ' is checking that you are human. ' }),
       'Click its checkbox in the picture below. If the check keeps coming back, your own browser will pass it: ',
@@ -170,11 +172,35 @@
       st.flying = false;
       if (st.queue.length) pump();
     }
+    const sameKeys = (a, b) => (a.mods || []).join() === (b.mods || []).join();
     function send(ev) {
       const last = st.queue[st.queue.length - 1];
-      if (ev.t === 'move' && last && last.t === 'move') st.queue[st.queue.length - 1] = ev; else st.queue.push(ev);
+      if (ev.t === 'move' && last && last.t === 'move') st.queue[st.queue.length - 1] = ev;
+      else if (ev.t === 'wheel' && last && last.t === 'wheel' && sameKeys(last, ev) && Math.abs(last.x - ev.x) <= 12 && Math.abs(last.y - ev.y) <= 12) { last.dx += ev.dx; last.dy += ev.dy; }   // notches that wait their turn become one scroll
+      else st.queue.push(ev);
+      if (!st.pendingAt && (ev.t === 'wheel' || ev.t === 'key' || ev.t === 'type')) st.pendingAt = performance.now();           // how long until the page shows what was asked of it
       pump();
     }
+    /* How long a scroll or a key takes to show. When it is slow again and again the pane says so and offers the way that is always smooth: a window of the author's own browser. */
+    function showLag(ms) {
+      clear(lag).append(h('strong', { text: `${label} is slow here (about ${(ms / 1000).toFixed(1)} s for a scroll to show). ` }),
+        'This view is a live picture of a browser running inside Docker, so it can only be as fast as that browser on this computer. A window of your own browser beside the app is much smoother: ',
+        h('button', { type: 'button', class: 'small primary', text: `Open ${label} in a window beside the app`, onclick: () => window.OLS.panes.useWindow(site, d.url) }), ' ',
+        h('button', { type: 'button', class: 'small', text: 'Keep it here', onclick: () => { lag.hidden = true; st.lagOff = true; window.OLS.store.set(LAGKEY, String(Date.now())); } }));
+      lag.hidden = false;
+    }
+    function noteFrame() {
+      if (!st.pendingAt) return;
+      const ms = performance.now() - st.pendingAt;
+      st.pendingAt = 0;
+      if (ms > 15000) return;
+      st.lat.push(ms);
+      if (st.lat.length > 7) st.lat.shift();
+      if (st.lat.length < 5 || st.lagOff) return;
+      const med = [...st.lat].sort((a, b) => a - b)[Math.floor(st.lat.length / 2)];
+      if (med > 700) showLag(med); else if (med < 350) lag.hidden = true;
+    }
+    if (Date.now() - Number(window.OLS.store.get(LAGKEY) || 0) < 86400000) st.lagOff = true;       // "keep it here" is remembered for a day
     const idle = async () => { for (let i = 0; i < 100 && (st.flying || st.queue.length); i++) await sleep(20); };
     const mods = (e) => [e.shiftKey && 'Shift', (e.ctrlKey || e.metaKey) && 'Control', e.altKey && 'Alt'].filter(Boolean);
     const button = (e) => (e.button === 1 ? 1 : e.button === 2 ? 2 : 0);
@@ -244,6 +270,7 @@
           if (canvas.width !== bmp.width || canvas.height !== bmp.height) { canvas.width = bmp.width; canvas.height = bmp.height; }
           g.drawImage(bmp, 0, 0);
           bmp.close();
+          noteFrame();
           if (!canvas.dataset.live) { canvas.dataset.live = '1'; show(null); }
           failures = 0;
           if (Date.now() - (st.fitAt || 0) > 1500) { st.fitAt = Date.now(); fit(); }    // a picture that does not match the pane is repaired by itself
@@ -322,8 +349,9 @@
       h('div', { class: 'row tight pane-head' }, h('h2', { text: label }), where,
         tool('←', 'Back', () => nav('back')), tool('→', 'Forward', () => nav('forward')), tool('↻', 'Reload', () => nav('reload')), tool('✕', 'Stop loading', () => nav('stop')), tool('Home', 'Back to the start page', () => nav('home')),
         bigText,
+        tool('↗', `Open ${label} in a window of your own browser beside the app (always smooth; you can switch back in Settings)`, () => window.OLS.panes.useWindow(site, d.url)),
         h('a', { class: 'small', href: '#/settings', text: 'Settings' })),
-      line, check, view,
+      line, check, lag, view,
       h('div', { class: 'row tight pane-foot' }, signin,
         guarded(h('button', { type: 'button', class: 'small', text: 'Copy what I selected', title: 'Copies the text selected in ' + label + ' to your clipboard' }), () => copyOut(false)),
         h('span', { class: 'small muted grow', text: 'Click inside and type as usual. Cmd/Ctrl+V pastes your clipboard.' })));

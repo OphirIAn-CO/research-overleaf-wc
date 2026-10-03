@@ -45,6 +45,8 @@ setTimeout(() => {
   make('Recompile from scratch', 'scratch'); make('<span>  Re</span><span>compile </span>', 'recompile');
 }, 600);
 </script></body>"""
+TALL = b"""<!doctype html><title>y=0</title><body style="margin:0"><div style="height:60000px;background:linear-gradient(#fff,#ccc)">tall</div>
+<script>addEventListener('scroll', () => { document.title = 'y=' + Math.round(scrollY); }, { passive: true });</script></body>"""
 PICKY = b"""<!doctype html><title>Picky</title><body style="margin:0">
 <form method=post action="/login" style="margin:30px">
 <input type=email name=email id=e style="display:block;width:300px;height:30px;margin:10px">
@@ -101,6 +103,8 @@ class Site(BaseHTTPRequestHandler):
             return self._send(PICKY)
         if u.path == "/editor":
             return self._send(EDITOR)
+        if u.path == "/tall":
+            return self._send(TALL)
         if u.path == "/challenge":
             return self._send(CHALLENGE)
         if u.path == "/seen":   # for the browser demo: what the page has reported so far
@@ -174,6 +178,11 @@ class BuiltInBrowser(unittest.TestCase):
     def test_a_new_picture_arrives_only_when_something_changed(self):
         self.b.open("quillbot", self.url, 1100, 700, force=True)
         seq, _ = self.b.next_frame("quillbot", -1, 8)
+        while True:        # a page can paint twice while it settles; once it is still, no more pictures come
+            again, more = self.b.next_frame("quillbot", seq, 0.8)
+            if more is None:
+                break
+            seq = again
         _, none = self.b.next_frame("quillbot", seq, 1.0)
         self.assertIsNone(none, "nothing moved, so no new picture")
         self.b.input("quillbot", [{"t": "down", "x": 60, "y": 180}, {"t": "up", "x": 60, "y": 180}, {"t": "type", "text": "x"}])
@@ -203,6 +212,58 @@ class BuiltInBrowser(unittest.TestCase):
         Site.log.clear()
         self.b.input("quillbot", [{"t": "down", "x": 60, "y": 280}, {"t": "up", "x": 60, "y": 280}])
         self.assertEqual(wait_for(lambda: Site.log[-1] if Site.log else None), {"b": "replaced"})
+
+    def scrolled(self, site="overleaf"):
+        self.b.next_frame(site, -1, 0.2)                     # somebody is looking, so the title is kept up to date
+        title = self.b.state(site)["title"]
+        return int(title[2:]) if title.startswith("y=") else None
+
+    def test_a_scroll_that_arrives_as_many_small_notches_is_one_scroll_of_the_same_distance(self):
+        self.b.open("overleaf", self.url + "tall", 1100, 700, force=True)
+        self.b.input("overleaf", [{"t": "wheel", "x": 300, "y": 300, "dx": 0, "dy": 100}] * 120)
+        self.assertTrue(wait_for(lambda: self.scrolled() == 12000, 8), f"scrolled {self.scrolled()} px of 12000")
+        self.b.input("overleaf", [{"t": "wheel", "x": 300, "y": 300, "dx": 0, "dy": -100}] * 30)
+        self.assertTrue(wait_for(lambda: self.scrolled() == 9000, 8))
+
+    def test_one_notch_of_the_wheel_is_one_step_not_an_animation(self):
+        self.b.open("overleaf", self.url + "tall", 1100, 700, force=True)
+        pid = [p for p in webview_processes(str(self.tmp / "overleaf"))]
+        cmd = open(f"/proc/{pid[0]}/cmdline", "rb").read().decode().replace("\0", " ")
+        self.assertIn("--disable-smooth-scrolling", cmd)
+
+    def test_the_pictures_are_pushed_by_the_browser_and_the_old_way_still_works(self):
+        s = self.b.sessions
+        self.b.open("quillbot", self.url + "tall", 1100, 700, force=True)
+        self.b.input("quillbot", [{"t": "wheel", "x": 300, "y": 300, "dx": 0, "dy": 400}])
+        seq, _ = self.b.next_frame("quillbot", -1, 5)
+        self.assertTrue(wait_for(lambda: s["quillbot"].frames_pushed >= 2 and self.b.next_frame("quillbot", -1, 0.2)[1] is not None, 8), "pictures came from the screencast")
+        old = webview.SCREENCAST
+        webview.SCREENCAST = False
+        try:
+            b2 = webview.Browsers(self.tmp / "nocast", exe=chromium(), allow_private=True)
+            b2.open("quillbot", self.url + "tall", 1100, 700, force=True)
+            self.assertIsNotNone(b2.next_frame("quillbot", -1, 8)[1])
+            b2.input("quillbot", [{"t": "wheel", "x": 300, "y": 300, "dx": 0, "dy": 400}])
+            self.assertEqual(b2.sessions["quillbot"].frames_pushed, 0)
+            self.assertTrue(wait_for(lambda: b2.next_frame("quillbot", 1, 1.0)[1] is not None, 8), "and it still shows the change")
+            b2.close_all()
+        finally:
+            webview.SCREENCAST = old
+
+    def test_a_picture_follows_a_resize_and_a_navigation(self):
+        from PIL import Image
+        import io
+        self.b.open("overleaf", self.url, 1100, 700, force=True)
+        seq, j = self.b.next_frame("overleaf", -1, 8)
+        self.assertEqual(Image.open(io.BytesIO(j)).size, (1100, 700))
+        self.b.resize("overleaf", 1300, 800)
+        def size():
+            _, jj = self.b.next_frame("overleaf", -1, 1.0)
+            return Image.open(io.BytesIO(jj)).size
+        self.assertTrue(wait_for(lambda: size() == (1300, 800), 8))
+        self.b.open("overleaf", self.url + "login", 1300, 800, force=True)
+        self.assertTrue(wait_for(lambda: self.b.state("overleaf")["title"] == "Sign in", 8))
+        self.b.resize("overleaf", 1100, 700)
 
     def test_recompile_presses_only_the_recompile_button_and_only_once_it_exists(self):
         self.b.open("overleaf", self.url + "editor", 1100, 700, force=True)
@@ -410,6 +471,11 @@ class BrowserContainer(unittest.TestCase):
         self.assertEqual(st["title"], "Stand-in site")
         seq, jpeg = self.remote.next_frame("quillbot", -1, 8)
         self.assertTrue(jpeg.startswith(b"\xff\xd8"))
+        while True:        # a page can paint twice while it settles; once it is still, no more pictures come
+            again, more = self.remote.next_frame("quillbot", seq, 0.8)
+            if more is None:
+                break
+            seq, jpeg = again, more
         self.assertEqual(self.remote.next_frame("quillbot", seq, 0.5), (seq, None))
         self.remote.input("quillbot", [{"t": "down", "x": 60, "y": 95}, {"t": "up", "x": 60, "y": 95}, {"t": "type", "text": "via service"}])
         self.assertTrue(wait_for(lambda: self.remote.selection("quillbot") is not None))
@@ -481,3 +547,19 @@ class AddressRules(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WheelNotches(unittest.TestCase):
+    def merge(self, evs):
+        return webview._Session._merge_wheels(evs)
+
+    def test_notches_in_one_place_with_the_same_keys_add_up(self):
+        w = lambda dy, x=100, y=100, mods=None: {"t": "wheel", "x": x, "y": y, "dx": 0, "dy": dy, **({"mods": mods} if mods else {})}  # noqa: E731
+        self.assertEqual(self.merge([w(100)] * 5), [{"t": "wheel", "x": 100, "y": 100, "dx": 0, "dy": 500}])
+        self.assertEqual([e["dy"] for e in self.merge([w(100), w(-30), w(100, x=105, y=96)])], [170])
+        self.assertEqual(len(self.merge([w(100), w(100, x=400)])), 2, "a different place is a different scroll")
+        self.assertEqual(len(self.merge([w(100), w(100, mods=["Control"])])), 2, "a held key changes what a wheel does (zoom)")
+        click = {"t": "down", "x": 100, "y": 100}
+        self.assertEqual([e["t"] for e in self.merge([w(100), click, w(100)])], ["wheel", "down", "wheel"], "order is kept around a click")
+        self.assertEqual(self.merge([w(100)] + ["junk"]), [w(100), "junk"])
+        self.assertEqual(self.merge([]), [])
