@@ -97,13 +97,67 @@
     // ---- header
     const catchUp = (into) => guarded(h('button', { type: 'button', class: 'primary', text: 'Get the latest from Overleaf, then send again' }), async () => {
       const r = await api.post('/api/papers/catchup', { name: paper, message: 'Writing assistant: update' });
-      into.append(gitNotice(r.pull));
-      if (r.push) into.append(gitNotice(r.push));
+      let out = into.querySelector(':scope > .catch-out');                 // one result at a time: pressing the button again replaces the last answer
+      if (!out) { out = h('div', { class: 'stack catch-out' }); into.append(out); }
+      clear(out);
+      out.append(gitNotice(r.pull));
+      if (r.conflict) out.append(conflictPanel(r.conflict));
+      if (r.conflict_error) out.append(notice('warn', r.conflict_error));
+      if (r.push) out.append(gitNotice(r.push));
       loadOverview();
       await window.OLS.loadState();
       if (window.OLS.panes && window.OLS.panes.refreshText) window.OLS.panes.refreshText();
       if (r.push && r.push.sent && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend(r.push);
     });
+    /* Overleaf and this computer changed the same lines: every colliding place with both versions side by side, a choice for each, and a way to hand it to Claude Code.
+       Nothing is changed until "Join" is pressed with every place chosen; what was not chosen stays in Overleaf's history and in this computer's. */
+    const conflictPanel = (c) => {
+      const picks = new Map();
+      const groups = [];                                                   // [{id, inputs: {value: input}}]
+      const total = c.files.reduce((n, f) => n + f.blocks.length, 0) + c.whole_files.length;
+      const left = h('span', { class: 'muted small' });
+      const status = () => { left.textContent = picks.size >= total ? `All ${plural(total, 'place')} chosen.` : `${picks.size} of ${plural(total, 'place')} chosen.`; };
+      const setAll = (value) => groups.forEach((g) => { if (g.inputs[value]) { g.inputs[value].checked = true; picks.set(g.id, value); } else if (g.inputs.mine) { g.inputs.mine.checked = true; picks.set(g.id, 'mine'); } status(); });
+      const card = (id, title, body, whole) => {
+        const inputs = {};
+        const opt = (value, label) => {
+          const input = h('input', { type: 'radio', name: 'pick-' + id, value });
+          input.addEventListener('change', () => { picks.set(id, value); status(); });
+          inputs[value] = input;
+          return h('label', { class: 'row tight pick-opt' }, input, ' ' + label);
+        };
+        groups.push({ id, inputs });
+        return h('div', { class: 'hunk place' }, h('header', null, h('div', { class: 'grow small', text: title })), body,
+          h('div', { class: 'choices row' }, opt('overleaf', 'Use Overleaf\'s'), opt('mine', 'Use mine'), whole ? null : opt('both', 'Keep both (Overleaf\'s, then mine)')));
+      };
+      const ctx = (t) => (t ? h('div', { class: 'ctx', text: t }) : null);
+      const cards = [];
+      c.files.forEach((f) => f.blocks.forEach((b, i) => cards.push(card(b.id, `${f.file} · place ${i + 1} of ${f.blocks.length}`, h('div', null, ctx(b.before),
+        h('div', { class: 'sides' }, h('div', { class: 'side' }, h('h4', { text: 'Overleaf has' }), diffSpans(b.diff, 'old')), h('div', { class: 'side' }, h('h4', { text: 'You have (saved here)' }), diffSpans(b.diff, 'new'))), ctx(b.after))))));
+      c.whole_files.forEach((w) => cards.push(card(w.id, w.file, h('p', { class: 'small secondary ctx', text: w.why }), true)));
+      const panel = h('div', { class: 'conflict stack' });
+      const answer = h('div', { class: 'stack' });
+      const joined = guarded(h('button', { type: 'button', class: 'primary', text: 'Join with my choices and send' }), async () => {
+        if (picks.size < total) throw new Error(`Choose for every place first (${total - picks.size} left).`);
+        const r = await api.post('/api/papers/resolve', { name: paper, choices: Object.fromEntries(picks), message: 'Writing assistant: update' });
+        clear(answer).append(gitNotice(r.push));
+        loadOverview();
+        await window.OLS.loadState();
+        if (window.OLS.panes && window.OLS.panes.refreshText) window.OLS.panes.refreshText();
+        if (r.push && r.push.sent) { cards.forEach((x) => x.remove()); if (window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend(r.push); }
+      });
+      const claude = guarded(h('button', { type: 'button', text: 'Ask Claude Code to join them' }), async () => {
+        const r = await api.post('/api/papers/conflict/handoff', { name: paper });
+        clear(answer).append(notice('ok', h('strong', { text: 'Handed to Claude Code. ' }), 'In your Claude Code terminal say: ', h('em', { text: `"${r.say}"` }), ' It joins the two versions, shows you what it kept, and sends. ',
+          h('button', { type: 'button', class: 'small', text: 'Copy that sentence', onclick: () => copyText(r.say, 'The sentence') })));
+      });
+      claude.title = 'Claude Code runs in your terminal, not inside this app, so the request waits for you to say the sentence there. It finds the details itself.';
+      status();
+      panel.append(h('p', { class: 'small secondary', text: 'These places were changed in Overleaf and here. For each one, choose what the paper should say. Everything else is joined automatically. What you do not choose stays in Overleaf\'s history and in this computer\'s, so nothing is lost for good.' }),
+        h('div', { class: 'row' }, h('button', { type: 'button', class: 'small', text: 'Keep mine everywhere', onclick: () => setAll('mine') }), h('button', { type: 'button', class: 'small', text: 'Keep Overleaf\'s everywhere', onclick: () => setAll('overleaf') }), left),
+        ...cards, h('div', { class: 'row' }, joined, claude), answer);
+      return panel;
+    };
     // Overleaf's editor does not follow a send by itself: the page that is open keeps showing the old text until it is loaded again, and so does the PDF until Recompile
     const sentNote = (r) => {
       const panes = window.OLS.panes;

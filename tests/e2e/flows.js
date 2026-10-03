@@ -144,6 +144,46 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   ok(await page.$eval('.msg.fresh', () => true).catch(() => false), 'and the new answer eases in');
   await page.evaluate(() => window.localStorage.setItem('ols-show-steps', '0'));
 
+  // ---- the same lines changed in Overleaf and here: each place is shown, the author chooses (or asks Claude Code), nothing happens before that
+  const json = (o) => ({ status: 200, contentType: 'application/json', body: JSON.stringify(o) });
+  const sentTo = [];
+  await page.route('**/api/papers/sync', (r) => r.fulfill(json({ output: 'push: ! [rejected]', summary: 'Overleaf has newer changes, so it did not accept this yet. Press "Get latest from Overleaf", then send again.', level: 'warn', needs: 'latest' })));
+  await page.route('**/api/papers/catchup', (r) => r.fulfill(json({
+    pull: { output: 'pull failed: could not join', summary: 'The same lines were changed in Overleaf and here, so I could not join them by myself. Nothing was overwritten or lost. Below, choose which version to keep for each place, or ask Claude Code to join them.', level: 'warn', needs: 'choose' },
+    push: null,
+    conflict: { state: 'conflict', whole_files: [{ file: 'fig.png', id: 'fig.png#file', why: 'This file cannot be compared line by line.' }], files: [{ file: 'main.tex', blocks: [
+      { id: 'main.tex#0', mine: 'Each region has a climate of its own.\n', overleaf: 'Each region has a distinct climate.\n', before: 'The study area.', after: 'The second paragraph.', diff: [['=', 'Each region has a '], ['-', 'distinct'], ['+', 'climate of its own'], ['-', ' climate'], ['=', '.']] },
+      { id: 'main.tex#1', mine: 'We sampled forty farms.\n', overleaf: 'We sampled 40 farms.\n', before: '', after: '', diff: [['=', 'We sampled '], ['-', '40'], ['+', 'forty'], ['=', ' farms.']] }] }] } })));
+  await page.route('**/api/papers/resolve', (r) => { sentTo.push(JSON.parse(r.request().postData())); r.fulfill(json({ joined: { state: 'conflict' }, push: { output: 'push: ok', summary: 'Sent to Overleaf. Checked: Overleaf now has your change (abc1234).', level: 'ok', needs: null, sent: true, pane: { reloading: false } } })); });
+  await page.route('**/api/papers/conflict/handoff', (r) => r.fulfill(json({ ok: true, say: 'Resolve the Overleaf merge conflict I handed you.', files: ['main.tex'] })));
+  await page.click('.chat-head button:has-text("Send to Overleaf")');
+  await page.waitForSelector('button:has-text("Get the latest from Overleaf, then send again")');
+  await page.click('button:has-text("Get the latest from Overleaf, then send again")');
+  await page.waitForSelector('.conflict .place');
+  ok((await page.$$('.conflict .place')).length === 3, 'every colliding place is shown, files that cannot be compared line by line included');
+  ok(/choose which version to keep/.test(await text(page, '.thread')) && /ask Claude Code to join/.test(await text(page, '.thread')), 'and the message says what to do instead of just naming Claude');
+  ok(/Overleaf has[\s\S]*You have \(saved here\)/.test(await text(page, '.conflict .place')), 'each place shows Overleaf\'s version beside the one saved here');
+  ok(await page.$eval('.conflict .place ins.d', (e) => /climate of its own/.test(e.textContent)) && await page.$eval('.conflict .place del.d', (e) => /distinct/.test(e.textContent)), 'the words that differ are marked');
+  await page.click('.conflict button:has-text("Join with my choices and send")');
+  await page.waitForSelector('.toast');
+  ok(/Choose for every place first \(3 left\)/.test(await text(page, '.toast')) && sentTo.length === 0, 'nothing is joined until every place has a choice');
+  await page.click('.conflict button:has-text("Keep mine everywhere")');
+  ok(/All 3 places chosen/.test(await text(page, '.conflict')), 'one button keeps mine everywhere and says so');
+  await page.check('.conflict input[name="pick-main.tex#1"][value="overleaf"]');
+  await page.click('.conflict button:has-text("Join with my choices and send")');
+  await page.waitForSelector('.conflict .notice.ok:has-text("Checked: Overleaf now has your change")');
+  const choice = sentTo[0] && sentTo[0].choices;
+  ok(choice && choice['main.tex#0'] === 'mine' && choice['main.tex#1'] === 'overleaf' && choice['fig.png#file'] === 'mine', 'the choices of each place reach the server as made');
+  ok(await page.$$eval('.conflict .place', (a) => a.length) === 0, 'and the places are gone once it is sent');
+  await page.click('button:has-text("Get the latest from Overleaf, then send again")');
+  await page.waitForSelector('.conflict .place');
+  await page.click('.conflict button:has-text("Ask Claude Code to join them")');
+  await page.waitForSelector('.conflict .notice.ok:has-text("Handed to Claude Code")');
+  ok(/Resolve the Overleaf merge conflict I handed you\./.test(await text(page, '.conflict .notice.ok')) && await page.isVisible('.conflict button:has-text("Copy that sentence")'), 'asking Claude Code gives the one sentence to say, with a copy button');
+  ok((await page.$$('.conflict .place')).length === 3, 'and keeps the places open');
+  await shot(page, '06c-conflict');
+  for (const u of ['**/api/papers/sync', '**/api/papers/catchup', '**/api/papers/resolve', '**/api/papers/conflict/handoff']) await page.unroute(u);
+
   // ---- coming back later: the conversation is still there
   await page.reload();
   await page.waitForSelector('.msg.user');
@@ -241,6 +281,7 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
     const w = (e) => Math.round(e.getBoundingClientRect().width);
     return u ? { bubble: w(document.querySelector('.msg.assistant .bubble')), thread: w(document.querySelector('.thread')), why: w(u.querySelector('.unit-why')), changes: w(u.querySelector('.unit-changes')), side: w(u.querySelector('.hunk .side')) } : null;
   });
+  await page.waitForSelector('.unit .hunk', { timeout: 15000 });
   const wide = await widths();
   ok(wide && wide.bubble > 1800 && wide.bubble / wide.thread > 0.85, `an answer uses the width of a 2600 px window (${wide && wide.bubble} of ${wide && wide.thread})`);
   ok(wide && wide.changes > wide.why * 1.8 && wide.side > 500, `the explanation sits beside the changes and the before/after columns are roomy (${wide && wide.why} | ${wide && wide.changes})`);

@@ -97,7 +97,8 @@ def tool_status(args):
     if err:
         return err
     code, out, err = run_git(repo, "status", "--short")
-    return out or "clean, nothing pending"
+    note = _merge_note(repo)
+    return (out or "clean, nothing pending") + (("\n\n" + note) if note else "")
 
 
 KEEP_DIRS = ("references/",)     # files the author added on purpose (articles as PDF, say) are never taken for LaTeX build output
@@ -106,8 +107,23 @@ JUNK = (".aux", ".log", ".out", ".toc", ".fls", ".fdb_latexmk", ".bbl", ".bcf", 
         ".synctex.gz", ".lof", ".lot", ".nav", ".snm", ".vrb", ".pdf")
 
 
+def _merge_note(repo):
+    """What the author handed to Claude Code about a conflict with Overleaf, if anything is waiting."""
+    try:
+        from writing_core import gitmerge
+        return gitmerge.describe(gitmerge.pending(repo))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def _push(repo):
     code, out, err = run_git(repo, "push")
+    if code == 0:
+        try:
+            from writing_core import gitmerge
+            gitmerge.clear(repo)               # whatever was waiting about a conflict is settled once Overleaf has the result
+        except Exception:  # noqa: BLE001
+            pass
     return "ok" if code == 0 else (err or out)
 
 
@@ -319,7 +335,8 @@ def tool_chatgpt_revise(args):
         if args.get("proposal_id"):  # an existing proposal, e.g. one the author handed over from the web app
             return revise.format_proposal(revise.get_proposal(proj, args["proposal_id"]))
         if not args.get("instruction"):  # nothing to do yet: what is waiting for Claude?
-            return revise.format_handoffs(revise.waiting_handoffs(proj))
+            note = _merge_note(proj["path"])
+            return revise.format_handoffs(revise.waiting_handoffs(proj)) + (("\n\n" + note) if note else "")
         res = revise.run(name, proj, args.get("instruction", ""), part=args.get("part"), chunk_ids=args.get("chunk_ids"),
                          book_id=args.get("book_id"), dry_run=args.get("dry_run"), confirm=args.get("confirm"), source="claude")
         return revise.format_preview(res) if res["status"] == "preview" else revise.format_proposal(res["proposal"])

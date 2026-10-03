@@ -32,7 +32,7 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (activity, book_index, chat, chunk_book, config, events, files, health, openai_client, panes, paper_index, preferences,  # noqa: E402
+from writing_core import (activity, book_index, chat, chunk_book, config, events, files, gitmerge, health, latex_mask, openai_client, panes, paper_index, preferences,  # noqa: E402
                           retrieve, review, revise, rule_cards, stats, taxonomy, watermark, webview)
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -322,7 +322,7 @@ def plain_git(action, out):
     if action == "pull":
         if low.startswith("pull failed"):
             if "could not join" in low:
-                return {"summary": "The same lines were changed in Overleaf and here, so I could not join them. Nothing was overwritten or lost. Ask Claude to merge them safely, or choose which version to keep.", "level": "warn", "needs": "claude"}
+                return {"summary": "The same lines were changed in Overleaf and here, so I could not join them by myself. Nothing was overwritten or lost. Below, choose which version to keep for each place, or ask Claude Code to join them.", "level": "warn", "needs": "choose"}
             if any(k in low for k in ("fast-forward", "diverg")):
                 return {"summary": "Overleaf and this computer both have changes. Press the button to bring Overleaf's latest in and put your saved changes on top of it; if the same lines were changed on both sides it stops and tells you.", "level": "warn", "needs": "latest"}
             if any(k in low for k in ("conflict", "overwritten")):
@@ -357,20 +357,72 @@ def plain_git(action, out):
     return {"summary": first, "level": "ok", "needs": None}
 
 
+def _conflict_view(name):
+    """Where Overleaf's latest and the changes saved here collide, with each side's words and what changed between them. The repository is left as it was."""
+    n, p = paper_ref(name)
+    c = gitmerge.conflicts(p["path"])
+    for f in c["files"]:
+        for b in f["blocks"]:
+            b["diff"] = latex_mask.word_diff(b["overleaf"], b["mine"])       # left: what Overleaf has; right: what is saved here
+    return c
+
+
 def api_catchup(r):
     """'Overleaf has newer changes': save what is waiting here, bring Overleaf's latest in underneath it, then send, in one go. Nothing is overwritten on either side;
-    when the same lines were changed in both places it stops before sending and says so."""
+    when the same lines were changed in both places it stops before sending and shows each colliding place so the author can choose."""
     name, msg = r.body.get("name", ""), r.body.get("message")
     saved = git_action(name, "sync", msg, push=False)           # first a saved change, so joining the two sides can never lose it
     if saved.get("hint") or saved.get("level") == "bad":
         return {"pull": saved, "push": None}
     pull = git_action(name, "pull", join=True)
     if pull.get("hint") or pull.get("level") != "ok":            # anything but a clean join stops here, before anything is sent
-        return {"pull": pull, "push": None}
+        out = {"pull": pull, "push": None}
+        if "could not join" in (pull.get("output") or "").lower():
+            try:
+                out["conflict"] = _conflict_view(name)
+            except gitmerge.MergeProblem as e:
+                out["conflict_error"] = str(e)
+        return out
     push = git_action(name, "sync", msg)
     if push.get("sent"):
         push["pane"] = {"reloading": refresh_overleaf(r.app, name)}
     return {"pull": pull, "push": push}
+
+
+def api_resolve(r):
+    """The author's choice for every colliding place -> the join is made, committed and sent."""
+    name, msg = r.body.get("name", ""), r.body.get("message")
+    raw = r.body.get("choices")
+    if not isinstance(raw, dict) or len(raw) > 500:
+        raise ApiError(400, "choices must be an object of place -> mine | overleaf | both")
+    choices = {str(k)[:400]: str(v) for k, v in raw.items() if str(v) in ("mine", "overleaf", "both")}
+    n, p = paper_ref(name)
+    saved = git_action(name, "sync", msg, push=False)
+    if saved.get("hint") or saved.get("level") == "bad":
+        raise ApiError(409, saved.get("friendly") or saved.get("summary") or "I could not save what is waiting here first.")
+    try:
+        joined = gitmerge.resolve(p["path"], choices, "Join with Overleaf's latest (Writing assistant)")
+    except gitmerge.MergeProblem as e:
+        raise ApiError(409, str(e)) from None
+    push = git_action(name, "sync", msg)
+    if push.get("sent"):
+        push["pane"] = {"reloading": refresh_overleaf(r.app, name)}
+    return {"joined": joined, "push": push}
+
+
+def api_conflict_handoff(r):
+    """The author asks Claude Code to join the two sides. Claude Code finds the note the next time it checks the paper; this returns the sentence to say to it."""
+    name = r.body.get("name", "")
+    n, p = paper_ref(name)
+    info = {"files": [], "places": []}
+    try:
+        c = gitmerge.conflicts(p["path"])
+        info["files"] = [f["file"] for f in c["files"]] + [w["file"] for w in c["whole_files"]]
+        info["places"] = [{"file": f["file"], "mine": b["mine"][:300], "overleaf": b["overleaf"][:300]} for f in c["files"] for b in f["blocks"]]
+    except gitmerge.MergeProblem:
+        pass                                                      # the note is still useful without the places
+    say = gitmerge.request(p["path"], info)
+    return {"ok": True, "say": say, "files": info["files"]}
 
 
 def api_git(r, action):
@@ -1677,7 +1729,7 @@ def api_handoff(r):
 
 ROUTES = [
     ("GET", r"^/api/state$", api_state), ("POST", r"^/api/papers/active$", api_set_active),
-    ("POST", r"^/api/papers/(pull|status|sync)$", None),
+    ("POST", r"^/api/papers/(pull|status|sync)$", None), ("POST", r"^/api/papers/resolve$", api_resolve), ("POST", r"^/api/papers/conflict/handoff$", api_conflict_handoff),
     ("GET", r"^/api/paper/([^/]+)/outline$", api_paper_outline), ("POST", r"^/api/paper/([^/]+)/refresh$", api_paper_refresh),
     ("GET", r"^/api/paper/([^/]+)/chunks$", api_paper_chunks),
     ("GET", r"^/api/books$", api_books), ("GET", r"^/api/book/([A-Za-z0-9_-]+)/tree$", api_book_tree),

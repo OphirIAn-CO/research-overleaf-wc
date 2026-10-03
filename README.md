@@ -243,8 +243,18 @@ notes (text, Markdown), JSON, a notebook, or code (Python, R, MATLAB, Julia, SQL
 **Sending to Overleaf, and why it sometimes says "Overleaf has newer changes".** If you (or a coauthor) edited the project in Overleaf since you last
 got the latest, Overleaf refuses a send. Your change is then a *saved change* that never arrived. The header counts these ("1 saved change not
 in Overleaf yet"), another **Send** tries again, and **Get the latest from Overleaf, then send again** saves what is waiting, puts Overleaf's
-latest underneath your changes, and sends. If the same lines were changed on both sides it stops before sending, undoes the attempt, and tells
-you nothing was lost (then ask Claude to merge them). After a send the app asks Overleaf what it has and says so ("Checked: Overleaf now has your
+latest underneath your changes, and sends. Changes in different places are joined automatically.
+
+**When the same lines were changed on both sides** the app cannot know which words you want, so it stops before sending, undoes its attempt (your
+files are exactly as they were) and shows **every colliding place**: what Overleaf has beside what you saved here, the words that differ marked,
+and a choice for each: *Use Overleaf's*, *Use mine*, or *Keep both*. **Keep mine everywhere** / **Keep Overleaf's everywhere** choose for all at once.
+Nothing happens until every place has a choice; then **Join with my choices and send** makes the merge, commits it, sends it, checks it, and reloads
+the Overleaf pane. This replaces only the colliding lines and only in this copy and in Overleaf's newest version: the text you did not choose stays in
+Overleaf's History (Overleaf: Menu, History) and in this computer's git history, so a wrong choice can be taken back. Pictures or files that one side
+deleted are chosen as a whole file. **Ask Claude Code to join them** leaves a note and gives you one sentence to say in your Claude Code terminal
+("Resolve the Overleaf merge conflict I handed you."): Claude Code runs on your computer, not inside the app, so it cannot be called from the page.
+It finds the note itself (`overleaf_status` ends with it), joins the versions keeping what fits together, asks you when they contradict, sends, and
+the note goes away once Overleaf has the result. After a send the app asks Overleaf what it has and says so ("Checked: Overleaf now has your
 change"), reloads the project's Overleaf page in the built-in browser even when its tab is not showing, and presses Recompile there so the PDF follows.
 (Overleaf's editor does not follow a send by itself: a page that was open before keeps showing the old text until it is loaded again.)
 

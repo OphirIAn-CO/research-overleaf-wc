@@ -129,7 +129,7 @@ class Sending(Overleaf, UiBase):
         st, plain = self.c.post("/api/papers/pull", {"name": "alpha"})
         self.assertEqual(plain["level"], "warn", "a plain pull never overwrites the unsaved change")
         r = self.catch_up()
-        self.assertEqual(r["pull"]["needs"], "claude", "the same line changed on both sides is not joined silently")
+        self.assertEqual(r["pull"]["needs"], "choose", "the same line changed on both sides is not joined silently")
 
     def test_when_the_same_lines_changed_nothing_is_lost_or_left_half_done(self):
         self.in_overleaf("Second line of the paper.", "Second line, as Overleaf has it.")
@@ -137,7 +137,7 @@ class Sending(Overleaf, UiBase):
         self.sync()
         before = out(self.paper, "rev-parse", "HEAD")
         r = self.catch_up()
-        self.assertEqual((r["pull"]["level"], r["pull"]["needs"], r["push"]), ("warn", "claude", None))
+        self.assertEqual((r["pull"]["level"], r["pull"]["needs"], r["push"]), ("warn", "choose", None))
         self.assertIn("Nothing was overwritten", r["pull"]["summary"])
         self.assertEqual(out(self.paper, "rev-parse", "HEAD"), before, "the saved change is exactly where it was")
         self.assertIn("as written here", (self.paper / "main.tex").read_text())

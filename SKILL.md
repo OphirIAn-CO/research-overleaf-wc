@@ -182,6 +182,22 @@ with `overleaf_projects` or `python3 scripts/common.py list|add|rm|default`.
    was done this session. See "Session memory" below. Never delete or
    overwrite prior entries — this file only grows.
 
+## Resolving a merge conflict with Overleaf
+
+The web app joins Overleaf's latest with the author's saved change by itself when they touched different lines. When the
+same lines changed on both sides it shows each place and lets the author pick Overleaf's, theirs, or both, or hand the join
+to you. If they handed it over, `overleaf_status` (and `chatgpt_revise` with no instruction) ends with "The author handed you
+a merge conflict with Overleaf in: ..."; they may also just say "resolve the Overleaf merge conflict I handed you".
+
+1. `git status` and `git log --oneline -5` first. Their saved change is a commit that Overleaf does not have; do not discard it,
+   do not `reset --hard`, and never force-push (Overleaf keeps history, but a coauthor's edit is not yours to overwrite).
+2. `git fetch`, then `git merge origin/<branch>` (the branch the note names). For each marked place (`<<<<<<<` is the author's
+   side, `>>>>>>>` is Overleaf's) `Read` both versions and the paragraph around them. If the two edits fit together (one fixed a
+   word, the other added a sentence), write the text that keeps both and tell the author what you kept from each. If they
+   contradict each other, show both to the author and ask which to keep; do not guess.
+3. Remove every mark, check `grep -n '<<<<<<<\|>>>>>>>' <files>` finds nothing, `git add` and `git commit`, then `overleaf_sync`.
+   The note for you is deleted once Overleaf has the result. Report in one line per place what the final text says.
+
 ## Writing a section from the author's own results (a Discussion, a Results paragraph)
 
 Use this when the user wants new text grounded in their analysis, which can be anywhere on their computer

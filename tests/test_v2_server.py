@@ -129,7 +129,7 @@ class PlainGit(unittest.TestCase):
         self.assertEqual((r["level"], r["needs"]), ("warn", "latest"), "both sides changed: the catch-up joins them safely")
         self.assertNotIn("fatal", r["summary"])
         r = pg("pull", "pull failed: could not join the changes in Overleaf with the ones saved here: CONFLICT (content): Merge conflict in main.tex")
-        self.assertEqual((r["level"], r["needs"]), ("warn", "claude"))
+        self.assertEqual((r["level"], r["needs"]), ("warn", "choose"), "the author chooses place by place, or hands it to Claude Code")
         self.assertIn("Nothing was overwritten", r["summary"])
         self.assertEqual(pg("pull", "joined: Successfully rebased and updated refs/heads/master.")["level"], "ok")
         self.assertEqual(pg("pull", "pull failed: fatal: unable to access 'https://git.overleaf.com/x/': Could not resolve host")["level"], "bad")
