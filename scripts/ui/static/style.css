@@ -125,8 +125,11 @@ th { color: var(--ink-2); font-weight: 600; font-size: 13px; } td.num, th.num { 
 /* diff */
 .hunk { border: 1px solid var(--border); border-radius: 10px; margin-top: 10px; overflow: hidden; }
 .hunk > header { display: flex; gap: 10px; align-items: flex-start; padding: 8px 12px; background: var(--surface-2); }
-.hunk .sides { display: grid; grid-template-columns: 1fr 1fr; } @media (max-width: 860px) { .hunk .sides { grid-template-columns: 1fr; } }
-.hunk .side { padding: 10px 12px; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: calc(var(--chat-fs, 15px) - 1px); line-height: 1.55; }
+.hunk { container-type: inline-size; }
+.hunk .sides { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+@container (max-width: 520px) { .hunk .sides { grid-template-columns: minmax(0, 1fr); } .hunk .side + .side { border-left: 0; border-top: 1px solid var(--grid); } }
+.hunk .side { padding: 10px 14px; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13.5px; line-height: 1.6; }
+@supports (width: 1cqi) { .hunk .side { font-size: clamp(12.5px, 0.7cqi + 7px, 16px); } }      /* the text follows the width of the card, not of the window, so a narrow chat beside two panes is not given big letters */
 .hunk .side + .side { border-left: 1px solid var(--grid); } .hunk .side h4 { margin: 0 0 6px; font: 600 12px system-ui, sans-serif; color: var(--ink-2); }
 ins.d { background: var(--ins-bg); text-decoration: none; border-radius: 2px; } del.d { background: var(--del-bg); text-decoration: line-through; border-radius: 2px; }
 .rule { font-size: 12px; color: var(--ink-2); }
@@ -228,17 +231,11 @@ main:focus { outline: none; }
 .step .mark { width: 16px; text-align: center; color: var(--good-text); } .step.failed .mark { color: var(--critical-text); } .step.skipped { color: var(--ink-3); }
 .approach { font-size: var(--chat-fs, 15px); line-height: 1.55; border-left: 3px solid var(--series-1); padding-left: 10px; max-width: 120ch; }
 .unit { border-top: 1px solid var(--grid); padding-top: 10px; } .unit h3, .unit h4 { margin-bottom: 6px; }
-.unit-why > * + * { margin-top: 8px; } .unit-changes > .hunk:first-child { margin-top: 0; }
-/* a wide screen: the explanation and the questions stay in view on the left while the changes use the rest of the width */
-@media (min-width: 1500px) {
-  .unit { display: grid; grid-template-columns: minmax(320px, 30%) minmax(0, 1fr); gap: 8px 20px; align-items: start; }
-  .unit-why { position: sticky; top: 0; }
-}
-.actions { margin-top: 10px; }
-.tone { border-top: 1px dashed var(--axis); margin-top: 12px; padding-top: 12px; } .tone .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; } @media (max-width: 1100px) { .tone .two { grid-template-columns: 1fr; } }
-.tone textarea { width: 100%; resize: vertical; }
-.checks { list-style: none; padding: 0; margin: 8px 0 0; } .chk { display: flex; gap: 8px; font-size: 14px; padding: 2px 0; } .chk .mark { width: 16px; text-align: center; flex: none; }
-.chk.ok .mark { color: var(--good-text); } .chk.warn .mark { color: #9a6700; font-weight: 700; } .chk.error { color: var(--critical-text); } .chk.error .mark { font-weight: 700; }
+/* the explanation, questions and warnings sit on top and use the whole width (notices side by side when there is room); the comparison below gets the full width of the card */
+.unit-why { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 8px 12px; align-items: start; margin-bottom: 12px; }
+.unit-why > h3, .unit-why > .approach { grid-column: 1 / -1; margin: 0; }
+.unit-why > .notice { margin: 0; }
+.unit-changes > .hunk:first-child { margin-top: 0; }
 .hunk .sides.one { grid-template-columns: 1fr; }
 .picker { margin-top: 8px; border: 1px solid var(--border); border-radius: 10px; padding: 10px; } .pick-list { max-height: 320px; overflow: auto; margin: 8px 0; } .pick-list h4 { margin: 10px 0 4px; font-size: 13px; color: var(--ink-2); }
 .pick { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; font-size: 14px; border-bottom: 1px solid var(--grid); }

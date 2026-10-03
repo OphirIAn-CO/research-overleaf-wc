@@ -274,22 +274,42 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   await shot(page, '08-panes');
   await page.close();
 
-  // ---- the screen is used: on a very wide window the answer is wide and the explanation sits beside the changes; on a narrow one it stacks
+  // ---- the screen is used: the explanation and questions sit on top at full width, the before/after comparison below it takes the whole card, side by side
   page = await open({ width: 2600, height: 1300 });
   const widths = () => page.evaluate(() => {
     const u = [...document.querySelectorAll('.unit')].filter((x) => x.querySelector('.hunk')).pop();
-    const w = (e) => Math.round(e.getBoundingClientRect().width);
-    return u ? { bubble: w(document.querySelector('.msg.assistant .bubble')), thread: w(document.querySelector('.thread')), why: w(u.querySelector('.unit-why')), changes: w(u.querySelector('.unit-changes')), side: w(u.querySelector('.hunk .side')) } : null;
+    const r = (e) => e.getBoundingClientRect();
+    if (!u) return null;
+    const sides = [...u.querySelectorAll('.hunk .side')].slice(0, 2).map(r);
+    return { bubble: Math.round(r(document.querySelector('.msg.assistant .bubble')).width), thread: Math.round(r(document.querySelector('.thread')).width), unit: Math.round(r(u).width),
+      whyBottom: Math.round(r(u.querySelector('.unit-why')).bottom), changesTop: Math.round(r(u.querySelector('.unit-changes')).top), changes: Math.round(r(u.querySelector('.unit-changes')).width),
+      hunk: Math.round(r(u.querySelector('.hunk')).width), side: Math.round(sides[0].width), sameRow: sides.length === 2 && Math.abs(sides[0].top - sides[1].top) < 3,
+      font: parseFloat(getComputedStyle(u.querySelector('.hunk .side')).fontSize) };
   });
   await page.waitForSelector('.unit .hunk', { timeout: 15000 });
   const wide = await widths();
   ok(wide && wide.bubble > 1800 && wide.bubble / wide.thread > 0.85, `an answer uses the width of a 2600 px window (${wide && wide.bubble} of ${wide && wide.thread})`);
-  ok(wide && wide.changes > wide.why * 1.8 && wide.side > 500, `the explanation sits beside the changes and the before/after columns are roomy (${wide && wide.why} | ${wide && wide.changes})`);
+  ok(wide && wide.whyBottom <= wide.changesTop + 1 && wide.changes >= wide.unit - 4, `the explanation is on top and the comparison below uses the whole width (${wide && wide.changes} of ${wide && wide.unit})`);
+  ok(wide && wide.sameRow && wide.side > 800, `Now and Suggested sit side by side and are roomy (${wide && wide.side} px each)`);
   await shot(page, '11-wide');
   await page.setViewportSize({ width: 1100, height: 800 });
   await page.waitForTimeout(300);
-  const narrow = await widths();
-  ok(narrow && Math.abs(narrow.why - narrow.changes) < 4, 'on a narrower window the explanation and the changes stack');
+  const mid = await widths();
+  ok(mid && mid.whyBottom <= mid.changesTop + 1 && mid.sameRow && mid.side > 250, `on a laptop window it is still stacked this way and side by side (${mid && mid.side} px each)`);
+  await page.close();
+  // with a pane open beside the chat the column is narrower, and the comparison stays side by side as long as the card is wide enough
+  page = await open({ width: 1700, height: 900 });
+  await page.click('.pane-bar button:has-text("Paper text")');
+  await page.waitForSelector('#panes-area .pane');
+  await page.waitForSelector('.unit .hunk', { timeout: 15000 });
+  const withPane = await widths();
+  ok(withPane && withPane.whyBottom <= withPane.changesTop + 1 && withPane.hunk < 900 && withPane.sameRow && withPane.side > 250, `with a pane open the messages stay on top and the comparison keeps two columns (${withPane && withPane.side} px each in a ${withPane && withPane.hunk} px card)`);
+  ok(withPane && withPane.font <= 15.6, `and its text is sized to the card, not the window (${withPane && withPane.font}px)`);
+  await shot(page, '11b-with-pane');
+  await page.setViewportSize({ width: 1250, height: 900 });
+  await page.waitForTimeout(300);
+  const tight = await widths();
+  ok(tight && tight.hunk < 520 ? !tight.sameRow : true, 'and a card that is too narrow for two columns stacks them instead of squeezing');
   await page.close();
 
   // ---- phone and dark

@@ -152,7 +152,7 @@ Everything else is set up **inside the app**, in **Settings** (nothing to edit b
    command). Link a paper to its group on the References page.
 
 Then just talk to it. The pages are **Chat**, **References**, **Activity** and **Settings**; the papers and your chats are in the sidebar.
-The chat uses the width of your window: on a wide screen the explanation stays on the left while the before/after columns use the rest, and the text grows a little with the window.
+The chat uses the width of your window. In an answer the explanation, questions and warnings sit on top (side by side when there is room), and the before/after comparison below them uses the full width of the card, **Now** and **Suggested** side by side; only a card narrower than about 520 pixels stacks them. The comparison's text is sized to the card, not the window, so it stays readable with a pane open beside the chat.
 
 **QuillBot and Overleaf inside the app (the built-in browser).** Press **QuillBot**, **Overleaf** or **Paper text** above the chat and the
 page opens in the side area. QuillBot and Overleaf refuse to be shown inside another page, so the app starts a real browser (Chromium) in
