@@ -11,10 +11,10 @@ import overleaf_mcp as mcp
 
 
 class Tools(IsolatedHome):
-    def test_tool_list_has_the_original_eight_and_the_four_new_ones(self):
+    def test_tool_list_has_the_original_eight_and_the_new_ones(self):
         self.assertEqual(set(mcp.TOOLS), {"overleaf_projects", "overleaf_pull", "overleaf_status", "overleaf_sync", "mendeley_fetch",
                                           "mendeley_list_groups", "mendeley_catalog_search", "mendeley_add_reference",
-                                          "book_query", "paper_query", "chatgpt_revise", "revise_record"})
+                                          "book_query", "paper_query", "library_query", "chatgpt_revise", "revise_record"})
         self.assertIn("OPT-IN ONLY", mcp.TOOLS["chatgpt_revise"]["description"])
         for t in mcp.TOOLS.values():
             self.assertIn("type", t["inputSchema"])

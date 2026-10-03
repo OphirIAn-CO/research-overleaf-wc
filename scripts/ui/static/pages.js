@@ -139,9 +139,9 @@
       modeSel.value = r.use_files; autoSend.checked = r.send_uploads;
       folderPick.show(r.folders, r.shared);
       clear(list);
-      if (!r.files.length) { list.append(h('p', { class: 'muted small', text: `No files yet. Add an article, a table or your notes, or drop them on the chat. They are saved in the ${r.folder} folder of your project.` })); return; }
+      if (!r.files.filter((f) => f.role !== 'analysis').length) { list.append(h('p', { class: 'muted small', text: `No files yet. Add an article, a table or your notes, or drop them on the chat. They are saved in the ${r.folder} folder of your project.` })); return; }
       const rows = [];
-      r.files.forEach((f) => {
+      r.files.filter((f) => f.role !== 'analysis').forEach((f) => {
         const where = f.upload ? `Added here · ${r.folder}/` : f.file.startsWith('/') ? 'Other folder · ' + f.file : 'In your project · ' + f.file;
         const open = h('tr', { class: 'parts-row', hidden: true }, h('td', { colspan: '5' }));
         const see = f.parts ? h('button', { type: 'button', class: 'small', text: 'See the parts', onclick: async (ev) => {
@@ -197,6 +197,59 @@
   }
 
   window.OLS.filesCard = filesCard;
+
+  // ------------------------------------------------------------------ code and results: the folder where the analysis lives, read for the Results and the Discussion
+  function analysisCard(name) {
+    const sizeLine = h('div', { class: 'stack' });
+    const listBox = h('div');
+    const out = h('div', { class: 'stack' });
+    const badgeBox = h('span');
+    const modeSel = h('select', { 'aria-label': 'When requests use my code and results' }, [['auto', 'When I ask about my results, figures or code (recommended)'], ['always', 'In every request'], ['never', 'Never']].map(([v, t]) => h('option', { value: v, text: t })));
+    const KIND = { code: ['code file', 'code files'], notebook: ['notebook', 'notebooks'], table: ['table', 'tables'], results: ['results file', 'results files'], log: ['log', 'logs'],
+      text: ['note', 'notes'], figure: ['figure', 'figures'], document: ['article or report', 'articles and reports'] };
+    const kindLine = (g) => Object.keys(KIND).filter((k) => g[k]).map((k) => `${g[k]} ${KIND[k][g[k] === 1 ? 0 : 1]}`).join(' · ');
+    const pick = window.OLS.folderPicker({
+      label: 'Folder with your code and results', placeholder: '/Users/you/Documents/analysis',
+      detail: (f) => (f.files ? `${f.files} file${f.files === 1 ? '' : 's'} found: ${kindLine(f.groups) || 'nothing I can read yet'}.` : 'It can be read, but no code, tables, logs or figures were found in it (subfolders are included).'),
+      save: async (paths) => { const r = await api.post('/api/files/folders', { paper: name, folders: paths, role: 'analysis' }); await show(); return r.folders; },
+    });
+    async function show() {
+      const r = await api.get(`/api/files?paper=${enc(name)}`);
+      modeSel.value = r.use_analysis;
+      pick.show(r.analysis_folders, r.shared);
+      const mine = r.files.filter((f) => f.role === 'analysis');
+      const totals = {};
+      mine.filter((f) => f.parts).forEach((f) => { totals[f.group] = (totals[f.group] || 0) + 1; });
+      clear(badgeBox).append(h('span', { class: 'badge ' + (mine.some((f) => f.parts) ? 'ok' : 'warn'), text: mine.some((f) => f.parts) ? `${mine.filter((f) => f.parts).length} files read` : 'not set up' }));
+      clear(sizeLine);
+      if (mine.length) sizeLine.append(h('p', { class: 'small', text: 'What the app can see: ' + (kindLine(totals) || 'nothing yet') + '.' }));
+      clear(listBox);
+      if (!mine.length) return;
+      const order = Object.keys(KIND);
+      const rows = [];
+      mine.sort((a, b) => order.indexOf(a.group) - order.indexOf(b.group) || a.file.localeCompare(b.file)).forEach((f) => {
+        const open = h('tr', { class: 'parts-row', hidden: true }, h('td', { colspan: '5' }));
+        const see = f.parts && f.group !== 'figure' ? guarded(h('button', { type: 'button', class: 'small', text: 'See the parts' }), async () => {
+          if (!open.hidden) { open.hidden = true; return; }
+          const p = await api.get(`/api/files/parts?paper=${enc(name)}&file=${enc(f.file)}`);
+          clear(open.firstChild).append(h('ul', { class: 'small parts' }, p.parts.map((x) => h('li', null, h('strong', { text: x.where }), h('span', { class: 'muted', text: ` · about ${Math.round(x.tokens * 0.75)} words` }), h('div', { class: 'muted', text: x.preview })))));
+          open.hidden = false;
+        }) : null;
+        rows.push(h('tr', null, h('td', null, h('div', { class: 'mono small', text: f.name }), h('div', { class: 'muted small', text: f.file })), h('td', { class: 'small', text: (KIND[f.group] || [f.group])[0].replace(/^./, (c) => c.toUpperCase()) }),
+          h('td', { class: 'num', text: f.reads ? String(f.parts) : '-' }), h('td', { class: 'small', text: f.note }), h('td', null, see)), open);
+      });
+      listBox.append(h('details', null, h('summary', { text: 'The files' }), h('div', { class: 'table-wrap' }, h('table', null, h('thead', null, h('tr', null, ['File', 'Kind', 'Parts', 'Note', ''].map((t) => h('th', { text: t })))), h('tbody', null, rows)))));
+    }
+    modeSel.addEventListener('change', async () => { try { await api.post('/api/settings', { paper: name, use_analysis: modeSel.value }); await window.OLS.loadState(); toast('Saved'); } catch (e) { toast(e.message); } });
+    const card = h('section', { class: 'card', 'aria-label': 'Code and results' },
+      h('div', { class: 'row' }, h('h2', { text: 'Code and results' }), badgeBox),
+      h('p', { class: 'small secondary', text: 'Point to the folder where your analysis lives: scripts and notebooks (Python, R, MATLAB, Julia), the tables and numbers they write (CSV, TSV, JSON, LaTeX tables), logs, and your figures (PNG, JPG). The files stay where they are and are only read, never changed. When you ask for help with the Results or the Discussion, to explain a result, or to check a number, the app reads the code that produced it, the table it is in and the figures.' }),
+      h('p', { class: 'small secondary', text: 'Numbers in your text must come from the code outputs, tables and logs. Figures go to OpenAI as pictures (at most 4 per request, shrunk to 1024 pixels, and only when the request needs them; the request lists them). They are used to describe what the plot shows, never to read values off it. Passwords, keys and hidden folders are never read.' }),
+      pick.el, sizeLine, h('div', { class: 'row' }, h('label', { class: 'row tight small' }, 'Use them:', modeSel)), out, listBox);
+    show().catch((e) => clear(listBox).append(notice('bad', e.message)));
+    return card;
+  }
+  window.OLS.analysisCard = analysisCard;
 
   registerPage('references', 'References', async (box) => {
     await window.OLS.loadState();

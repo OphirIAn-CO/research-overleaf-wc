@@ -326,6 +326,29 @@ def tool_paper_query(args):
     return _writing_call(go)
 
 
+def tool_library_query(args):
+    def go():
+        from writing_core import library
+        q = (args.get("query") or "").strip()
+        if not q:
+            return "provide query (what you want to find in the author's reading)"
+        st = library.status()
+        if not st["docs"]:
+            return "the literature library is empty: the author adds a folder of books and articles in the app (Settings) or with writing.py library --add PATH --index"
+        res = library.query(q, k=int(args.get("max") or 6), budget=int(args.get("budget") or 2400))
+        name, proj, _ = resolve_paper(dict(args))
+        if proj:
+            library.annotate(res["chunks"], proj)
+        if not res["chunks"]:
+            return "nothing in the library matches"
+        out = []
+        for c in res["chunks"]:
+            cite = (f" | cite as {library.cite_command(proj)}{{{c['cite_key']}}}" if c.get("cite_key") else " | not in the paper's bibliography yet") if proj else ""
+            out.append(f"[{c['id']}] {c['label']} · {c['where']}{cite}\n{c['text']}")
+        return "\n\n".join(out)
+    return _writing_call(go)
+
+
 def tool_chatgpt_revise(args):
     def go():
         from writing_core import revise
@@ -387,6 +410,14 @@ TOOLS = {
         "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "part": {"type": "string"}, "kind": {"type": "string"},
                                                           "budget": {"type": "integer"}, **REPO_PATH_PROP}},
         "fn": tool_paper_query,
+    },
+    "library_query": {
+        "description": (
+            "Writing coach: search the author's literature library (folders of books and articles read once on this computer) and get the best parts with the document, the page and, when a paper "
+            "is in context, the \\cite key if the paper's bibliography has that document. Never read whole books; use this for 'what does my reading say about X' and for sources to cite. "
+            "Args: query (required), max (default 6), budget (tokens, default 2400), repo_path (optional paper)."),
+        "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}, "max": {"type": "integer"}, "budget": {"type": "integer"}, **REPO_PATH_PROP}},
+        "fn": tool_library_query,
     },
     "chatgpt_revise": {
         "description": (

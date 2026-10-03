@@ -86,6 +86,14 @@ def main():
     (shelf / "Material" / "interviews.md").write_text("# Interviews\n\nFarmers said the water came late in 2021 and that wells ran dry in July.\n")
     make_pdf(shelf / "Material" / "report.pdf", [["# Field report", "The field team visited forty farms in three regions between March and June and measured soil moisture weekly."]])
 
+    from PIL import Image  # noqa: E402
+    (shelf / "Analysis" / "results").mkdir(parents=True)
+    (shelf / "Analysis" / "figures").mkdir()
+    (shelf / "Analysis" / "train.py").write_text("def evaluate(model):\n    return {'rmse': 0.412}\n")
+    (shelf / "Analysis" / "results" / "metrics.csv").write_text("model,rmse\ngnn,0.412\nlstm,0.588\n")
+    (shelf / "Analysis" / "results" / "run.log").write_text("epoch 20 loss 0.24\nfinal rmse 0.412\n")
+    Image.new("RGB", (1200, 700), (40, 90, 200)).save(shelf / "Analysis" / "figures" / "rmse_by_model.png")
+
     oa = FakeOpenAI("responses")
 
     rubric = Path(home) / "rubric" / "peer_reviewer_agent.md"
@@ -98,9 +106,12 @@ def main():
         if "text" not in body and "peer reviewer" in str(body.get("instructions", "")).lower():
             return REPORT          # a review asks for free text, not the JSON of an edit
         t = passage_of(body)
-        user = body["input"] if "input" in body else body["messages"][-1]["content"]
+        from writing_core import openai_client
+        user = openai_client.user_text(body)
         answered = "<author_answers>" in user                       # the author replied to the question below: use the reply
         t = t.replace("We sampled 40 farms by stratified random sampling.", "We drew a stratified random sample of 40 farms.")
+        if "metrics.csv" in user:          # the request carried the author's analysis: state a result that stands in it
+            t = t.replace(", as Table~", ", and the best model reached an RMSE of 0.412, as Table~")
         if "Cite it with [[LX901]]" in user:          # the request offered a source from the author's library: cite it where the frame is described
             t = t.replace("sorted by size before sampling.", "sorted by size before sampling [[LX901]].")
         t = t.replace("Informed consent was obtained from all farmers.", "All farmers gave informed consent.")

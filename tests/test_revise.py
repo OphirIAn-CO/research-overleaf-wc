@@ -11,7 +11,7 @@ from writing_core import book_index, config, events, latex_mask, openai_client, 
 
 
 def user_of(body):
-    return body["input"] if "input" in body else body["messages"][-1]["content"]
+    return openai_client.user_text(body)
 
 
 def reply(*pairs, changes=None, questions=None, approach="The sentences were wordy, so they were tightened."):

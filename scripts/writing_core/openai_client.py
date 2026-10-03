@@ -47,13 +47,43 @@ def _scrub(msg, cfg):
     return msg.replace(key, "[key]") if key else msg
 
 
-def build_request(cfg, system, user, schema=REVISION_SCHEMA, name="revision", plain=False, max_output=None):
-    """-> (url, body). The body is exactly what is sent (and what a dry run shows). plain=True asks for free text (a review), not JSON."""
+def data_url(img):
+    return f"data:{img['mime']};base64,{img['b64']}"
+
+
+def user_text(body):
+    """The text of the user message of a request body, whichever API style it is in and whether or not pictures travel with it."""
+    u = body["input"] if "input" in body else body["messages"][-1]["content"]
+    if isinstance(u, list):
+        parts = u[0]["content"] if u and isinstance(u[0], dict) and "content" in u[0] else u
+        return "\n".join(p.get("text", "") for p in parts if isinstance(p, dict) and p.get("type") in ("input_text", "text"))
+    return u
+
+
+def redact(body):
+    """A copy of a request body that is safe and short to show: each picture is replaced by a line saying what it is."""
+    def walk(x):
+        if isinstance(x, dict):
+            if x.get("type") in ("input_image", "image_url"):
+                url = x.get("image_url")
+                url = url.get("url") if isinstance(url, dict) else url
+                return {"type": x["type"], "image_url": f"[picture, {len(str(url or '')) * 3 // 4 // 1024} KB]"}
+            return {k: walk(v) for k, v in x.items()}
+        if isinstance(x, list):
+            return [walk(v) for v in x]
+        return x
+    return walk(body)
+
+
+def build_request(cfg, system, user, schema=REVISION_SCHEMA, name="revision", plain=False, max_output=None, images=None):
+    """-> (url, body). The body is exactly what is sent (and what a dry run shows). plain=True asks for free text (a review), not JSON.
+    images: [{mime, b64, ...}] pictures that travel with the user message."""
     base = cfg["base_url"].rstrip("/")
     mode = "none" if plain else cfg.get("json_mode", "schema")
     out_tokens = max_output or cfg["max_output_tokens"]
     if cfg.get("api", "responses") == "chat":
-        body = {"model": cfg["model"], "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        content = [{"type": "text", "text": user}] + [{"type": "image_url", "image_url": {"url": data_url(i)}} for i in images] if images else user
+        body = {"model": cfg["model"], "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
                 "max_completion_tokens": out_tokens, "store": False}
         if mode == "schema":
             body["response_format"] = {"type": "json_schema", "json_schema": {"name": name, "schema": schema, "strict": True}}
@@ -61,7 +91,8 @@ def build_request(cfg, system, user, schema=REVISION_SCHEMA, name="revision", pl
             body["response_format"] = {"type": "json_object"}
         url = base + "/chat/completions"
     else:
-        body = {"model": cfg["model"], "instructions": system, "input": user, "max_output_tokens": out_tokens, "store": False}
+        content = [{"role": "user", "content": [{"type": "input_text", "text": user}] + [{"type": "input_image", "image_url": data_url(i)} for i in images]}] if images else user
+        body = {"model": cfg["model"], "instructions": system, "input": content, "max_output_tokens": out_tokens, "store": False}
         if mode == "schema":
             body["text"] = {"format": {"type": "json_schema", "name": name, "schema": schema, "strict": True}}
         elif mode == "object":
@@ -136,9 +167,9 @@ def _http_error(cfg, e):
     return OpenAIError(f"request rejected ({e.code}): {msg}", "bad_request", e.code)
 
 
-def call(cfg, system, user, schema=REVISION_SCHEMA, retries=2, plain=False, max_output=None, timeout=None):
+def call(cfg, system, user, schema=REVISION_SCHEMA, retries=2, plain=False, max_output=None, timeout=None, images=None):
     """One request (with retries on rate limit / 5xx / network). -> dict(text, data, usage, latency_ms, model, tries)"""
-    url, body = build_request(cfg, system, user, schema, plain=plain, max_output=max_output)
+    url, body = build_request(cfg, system, user, schema, plain=plain, max_output=max_output, images=images)
     payload = json.dumps(body).encode("utf-8")
     headers = {"Authorization": "Bearer " + cfg["api_key"], "Content-Type": "application/json", "User-Agent": UA}
     for k, h in (("organization", "OpenAI-Organization"), ("project", "OpenAI-Project")):

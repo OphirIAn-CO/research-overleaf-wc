@@ -16,6 +16,13 @@
   }
   function readonlyBox(text) { const t = h('textarea', { rows: '4', readonly: true, class: 'mono', 'aria-label': 'Suggestion' }); t.value = text; return t; }
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + 's'}`;
+  // the user message of a request as text; a picture shows as a line (the server never sends the picture itself to the page)
+  function requestText(rq) {
+    const u = rq.input !== undefined ? rq.input : rq.messages[1].content;
+    if (typeof u === 'string') return u;
+    const parts = Array.isArray(u) && u[0] && u[0].content ? u[0].content : u;
+    return parts.map((x) => (x.text !== undefined ? x.text : '[a picture goes here]')).join('\n');
+  }
   const icon = (level) => ({ ok: '✓', warn: '!', error: '✗' }[level] || '•');
 
   /* A small, safe Markdown renderer for the review report: headings, lists, tables, bold, italics, code. Text nodes only, never HTML. */
@@ -342,10 +349,14 @@
       if (d.notes && d.notes.length) lines.push(h('p', { class: 'small secondary', text: d.notes.join(' ') }));
       lines.push(h('p', { class: 'small secondary', text: (pl.tips ? `I will add ${plural(pl.tips, 'tip')} from your writing book. ` : 'No book advice this time. ') +
         `About ${fmtTok(pl.est_tokens_in)} tokens go to ${pl.model}${pl.est_cost != null ? ', roughly ' + pl.est_cost.toFixed(4) + ' in your price units' : ''}. Your citations, formulas and numbers stay behind as tags.` }));
-      const src = pl.sources || [];
+      const pics = pl.pictures || [];
+      const src = (pl.sources || []).filter((x) => !x.picture);
       if (src.length) {
         const names = [...new Set(src.map((x) => x.file.split('/').pop()))];
         lines.push(h('p', { class: 'small secondary', text: `${plural(src.length, 'part')} of your files go with it (${names.slice(0, 3).join(', ')}${names.length > 3 ? '...' : ''}), labelled so the answer can say where a number came from. Numbers taken from them are pointed out for you to check.` }));
+      }
+      if (pics.length) {
+        lines.push(h('p', { class: 'small secondary', text: `${plural(pics.length, 'picture')} from your figures go to ${pl.model} with it (${pics.map((x) => x.name).join(', ')}), shrunk first. They are used to describe what a plot shows; numbers must come from your tables and code output.` }));
       }
       const lib = pl.library || [];
       if (lib.length) {
@@ -358,11 +369,12 @@
       const details = h('details', null, h('summary', { text: 'What goes out' }),
         h('ul', { class: 'small' }, pl.passages.map((x) => h('li', { text: `${x.file}, lines ${x.lines[0]} to ${x.lines[1]} · ${x.section} · about ${x.words} words` })),
           src.map((x) => h('li', { text: `From your files: ${x.where} · about ${fmtTok(x.tokens * 0.75)} words` })),
+          pics.map((x) => h('li', { text: `Picture: ${x.name} · ${x.kb} KB` })),
           lib.map((x) => h('li', { text: `From your library: ${x.label}, ${x.where} · about ${fmtTok(x.tokens * 0.75)} words` }))),
         h('button', { type: 'button', class: 'small', text: 'Show the exact text', onclick: async (ev) => {
           ev.target.disabled = true;
           const r = await api.post('/api/revise/preview', { paper, instruction: pl.instruction, chunk_ids: pl.chunk_ids, book_id: pl.book });
-          exact.append(...r.payloads.map((x) => h('pre', { class: 'payload small', text: (x.request.input || x.request.messages[1].content) })));
+          exact.append(...r.payloads.map((x) => h('pre', { class: 'payload small', text: requestText(x.request) })));
         } }), exact);
       const foot = h('div');
       if (d.state === 'waiting') {
@@ -630,11 +642,12 @@
       holder.append(h('div', { class: 'row small secondary' }, h('span', { text: `${p.model} · ${fmtTok(usage.input_tokens)} in / ${fmtTok(usage.output_tokens)} out${usage.cost != null ? ' · cost ' + usage.cost : ''}` }),
         p.status === 'applied' ? h('span', { class: 'badge ok', text: 'saved in your files' }) : p.status === 'rejected' ? h('span', { class: 'badge', text: 'set aside' }) : p.status === 'superseded' ? h('span', { class: 'badge', text: 'replaced' }) : null,
         p.edited_by_author ? h('span', { class: 'badge', text: 'your own version' }) : null));
-      if ((p.sources || []).length) {
+      if ((p.sources || []).some((x) => !x.picture)) {
         const per = new Map();
-        p.sources.forEach((x) => per.set(x.file.split('/').pop(), (per.get(x.file.split('/').pop()) || 0) + 1));
+        p.sources.filter((x) => !x.picture).forEach((x) => per.set(x.file.split('/').pop(), (per.get(x.file.split('/').pop()) || 0) + 1));
         holder.append(h('p', { class: 'small secondary', text: 'Used parts of your files: ' + [...per].map(([f, n]) => `${f} (${plural(n, 'part')})`).join(', ') }));
       }
+      if ((p.pictures || []).length) holder.append(h('p', { class: 'small secondary', text: 'Looked at your figures: ' + p.pictures.map((x) => x.name).join(', ') + '.' }));
       if ((p.library || []).length) {
         const cited = [...new Set(p.units.flatMap((u) => u.added_cites || []))];
         holder.append(h('p', { class: 'small secondary', text: 'Used from your library: ' + [...new Set(p.library.map((x) => `${x.label} (${x.where})`))].join('; ') + '.' + (cited.length ? ` Citations added: ${cited.join(', ')}.` : '') }));

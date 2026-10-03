@@ -13,6 +13,7 @@ import json
 import os
 import re
 import statistics
+import struct
 import unicodedata
 import zipfile
 from pathlib import Path
@@ -38,6 +39,13 @@ UPLOAD_OK = set(READ) | KEEP
 PROJECT_OK = {k for k in READ if k not in ("pdf", "docx", "tex", "bib", "log")}   # found around the paper: data, code, notes (not LaTeX, not build output, not figure PDFs)
 MATERIAL_OK = PROJECT_OK | {"pdf", "docx"}                                        # in a folder the author chose for this paper: articles, interviews and reports are material too
 MATERIAL_BIG = {"pdf": 40 << 20, "docx": 40 << 20}                                # bytes: an article is bigger than a table
+IMAGE_EXT = {"png", "jpg", "jpeg", "gif", "webp"}                                 # figures: read (as pictures) only in the folders the author gave as code and results
+ANALYSIS_OK = PROJECT_OK | {"log", "tex"} | IMAGE_EXT                             # code, tables, logs and figures of an analysis; a .tex file there is usually a table the code wrote
+ANALYSIS_BIG = {e: 25 << 20 for e in IMAGE_EXT}
+MAX_IMAGES = 4                                                                    # pictures that go with one request
+IMAGE_SIDE = 1024                                                                 # pixels: a picture is shrunk to this before it goes out
+IMAGE_RAW_MAX = 1_200_000                                                         # bytes: without a way to shrink it (no Pillow), a bigger picture stays at home
+ROLES = {"material": "data_folders", "analysis": "analysis_folders"}              # the two kinds of folders an author links to a paper
 SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv", "env", "site-packages", "build", "dist", "target"}
 SKIP_NAMES = {"manifest.txt", "changelog.txt", "license", "license.txt", "license.md", "requirements.txt"}
 SECRET_WORDS = ("secret", "password", "passwd", "credential", "token", "apikey", "api_key", "id_rsa", "private_key")
@@ -153,23 +161,27 @@ def unsafe_folder(p):
     return ""
 
 
-def set_folders(proj, wanted):
-    """Save the list of linked folders for a paper. Each is written as an absolute path; a folder that is refused stays in the list with its reason (see folders())."""
+def set_folders(proj, wanted, role="material"):
+    """Save the list of linked folders for a paper (`material`: notes, articles, reports; `analysis`: code, tables, logs and figures). Each is written as an absolute path;
+    a folder that is refused stays in the list with its reason (see folders())."""
     cleaned = []
     for x in wanted:
         x = str(x or "").strip()
-        if not x or x in cleaned:
+        if not x:
             continue
         if len(x) > 500 or "\n" in x or "\0" in x:
             raise FileProblem("That does not look like a folder path.")
-        cleaned.append(str(Path(x).expanduser()) if x.startswith("~") else x)
+        x = str(Path(x).expanduser()) if x.startswith("~") else x
+        x = x.rstrip("/\\") or x
+        if x not in cleaned:
+            cleaned.append(x)
     if len(cleaned) > 8:
         raise FileProblem("At most 8 folders can be linked to one paper.")
-    config.set_paper_setting(proj, "data_folders", cleaned)
-    return folders(proj)
+    config.set_paper_setting(proj, ROLES[role], cleaned)
+    return folders(proj, role)
 
 
-def link_folder(proj, path):
+def link_folder(proj, path, role="material"):
     """Terminal use: link one folder that exists on this computer. -> the folder's status {path, ok, note}"""
     p = Path(str(path)).expanduser().resolve()
     if not p.is_dir():
@@ -177,30 +189,34 @@ def link_folder(proj, path):
     why = unsafe_folder(p)
     if why:
         raise FileProblem(why)
-    cur = [f["path"] for f in folders(proj)]
-    set_folders(proj, cur + [str(p)] if str(p) not in cur else cur)
-    return next(f for f in folders(proj) if f["path"] == str(p))
+    cur = [f["path"] for f in folders(proj, role)]
+    set_folders(proj, cur + [str(p)] if str(p) not in cur else cur, role)
+    return next(f for f in folders(proj, role) if f["path"] == str(p))
 
 
-def unlink_folder(proj, path):
+def unlink_folder(proj, path, role="material"):
     p = str(Path(str(path)).expanduser().resolve())
-    cur = [f["path"] for f in folders(proj)]
-    set_folders(proj, [x for x in cur if x not in (p, str(path))])
+    cur = [f["path"] for f in folders(proj, role)]
+    set_folders(proj, [x for x in cur if x not in (p, str(path))], role)
 
 
-def folders(proj):
-    """The folders the author linked for this paper: [{path, ok, note}]. They hold code and results that live outside the Overleaf project."""
+def folders(proj, role=None):
+    """The folders the author linked for this paper: [{path, ok, note, role}]. `material` folders hold notes, articles and reports; `analysis` folders hold the code, tables,
+    logs and figures of the analysis, which live outside the Overleaf project. role=None: both."""
     out = []
-    for raw in config.paper_settings(proj).get("data_folders") or []:
-        p = Path(str(raw)).expanduser()
-        if not p.is_absolute():
-            out.append({"path": str(raw), "ok": False, "note": "Use the full path of the folder."})
-        elif unsafe_folder(p):
-            out.append({"path": str(p), "ok": False, "note": unsafe_folder(p)})
-        elif not p.is_dir():
-            out.append({"path": str(p), "ok": False, "note": "I cannot see this folder. If the app runs in Docker, share it (read-only is enough) with: ./ui.sh folders add --read-only <folder>, then ./ui.sh down and ./ui.sh up."})
-        else:
-            out.append({"path": str(p), "ok": True, "note": ""})
+    for r, key in ROLES.items():
+        if role not in (None, r):
+            continue
+        for raw in config.paper_settings(proj).get(key) or []:
+            p = Path(str(raw)).expanduser()
+            if not p.is_absolute():
+                out.append({"path": str(raw), "ok": False, "note": "Use the full path of the folder.", "role": r})
+            elif unsafe_folder(p):
+                out.append({"path": str(p), "ok": False, "note": unsafe_folder(p), "role": r})
+            elif not p.is_dir():
+                out.append({"path": str(p), "ok": False, "role": r, "note": "I cannot see this folder. If the app runs in Docker, share it (read-only is enough) with: ./ui.sh folders add --read-only <folder>, then ./ui.sh down and ./ui.sh up."})
+            else:
+                out.append({"path": str(p), "ok": True, "note": "", "role": r})
     return out
 
 
@@ -227,26 +243,28 @@ def _walk(base, exts, limit_files, rel_to=None, skip_top=(), big=None):
 
 
 def discover(proj):
-    """[(path, shown_name, kind, note)] of everything to read: uploads (kind source), then files in the repository and in linked folders (kind project)."""
+    """[(path, shown_name, kind, note, role)] of everything to read: uploads (kind source), then files in the repository and in linked folders (kind project; role is
+    "project", "material" or "analysis")."""
     root = Path(proj["path"])
     out, notes = [], []
     up = root / UPLOAD_DIR
     if up.is_dir() and not up.is_symlink():
         for p in sorted(up.iterdir()):
             if p.is_file() and not p.is_symlink() and not p.name.startswith(".") and ext_of(p.name) in UPLOAD_OK:
-                out.append((p, f"{UPLOAD_DIR}/{p.name}", "source", "" if p.stat().st_size <= MAX_UPLOAD else "too big"))
+                out.append((p, f"{UPLOAD_DIR}/{p.name}", "source", "" if p.stat().st_size <= MAX_UPLOAD else "too big", "source"))
     budget = MAX_FILES
     found, early = _walk(root, PROJECT_OK, budget, skip_top=(UPLOAD_DIR,))
     for p, note in found:
-        out.append((p, str(p.relative_to(root)), "project", note))
+        out.append((p, str(p.relative_to(root)), "project", note, "project"))
     budget -= len(found)
     if early:
         notes.append("The repository has more files than I read; I stopped early.")
     for f in folders(proj):
         if f["ok"] and budget > 0:
-            found, early = _walk(f["path"], MATERIAL_OK, budget, big=MATERIAL_BIG)
+            exts, big = (ANALYSIS_OK, ANALYSIS_BIG) if f["role"] == "analysis" else (MATERIAL_OK, MATERIAL_BIG)
+            found, early = _walk(f["path"], exts, budget, big=big)
             for p, note in found:
-                out.append((p, str(p), "project", note))
+                out.append((p, str(p), "project", note, f["role"]))
             budget -= len(found)
             if early:
                 notes.append(f"The folder {f['path']} has more files than I read; I stopped early.")
@@ -543,10 +561,93 @@ def _pack_code(blocks):
     return out
 
 
+def image_size(path):
+    """(width, height) of a PNG, GIF, JPEG or WEBP, read from its first bytes, or None."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(65536)
+    except OSError:
+        return None
+    if head[:8] == b"\x89PNG\r\n\x1a\n" and len(head) >= 24:
+        return struct.unpack(">II", head[16:24])
+    if head[:6] in (b"GIF87a", b"GIF89a") and len(head) >= 10:
+        return struct.unpack("<HH", head[6:10])
+    if head[:2] == b"\xff\xd8":
+        i = 2
+        while i + 9 < len(head):
+            if head[i] != 0xFF:
+                i += 1
+                continue
+            m = head[i + 1]
+            if m in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                h, w = struct.unpack(">HH", head[i + 5:i + 9])
+                return (w, h)
+            if m == 0xD8 or m == 0x01 or 0xD0 <= m <= 0xD7 or m == 0xFF:
+                i += 1 if m == 0xFF else 2
+                continue
+            i += 2 + struct.unpack(">H", head[i + 2:i + 4])[0]
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP" and len(head) >= 30:
+        kind = head[12:16]
+        if kind == b"VP8X":
+            return (1 + int.from_bytes(head[24:27], "little"), 1 + int.from_bytes(head[27:30], "little"))
+        if kind == b"VP8L" and head[20] == 0x2F:
+            bits = int.from_bytes(head[21:25], "little")
+            return (1 + (bits & 0x3FFF), 1 + ((bits >> 14) & 0x3FFF))
+        if kind == b"VP8 " and head[23:26] == b"\x9d\x01\x2a":
+            return (int.from_bytes(head[26:28], "little") & 0x3FFF, int.from_bytes(head[28:30], "little") & 0x3FFF)
+    return None
+
+
+def parts_image(path):
+    """A figure of the author's analysis is one part: its name and size, which is what a search can use. The picture itself goes to the model only when a request needs it."""
+    size = image_size(path)
+    words = re.sub(r"[_\-.]+", " ", path.stem).strip()
+    text = f"Picture: {path.name}" + (f" ({size[0]} by {size[1]} pixels)" if size else "") + f". It is in the folder {path.parent.name}. What its name says: {words}."
+    return [{"text": text, "lo": 1, "hi": 1, "head": ""}], "pictures"
+
+
+def image_payload(path):
+    """A picture ready to go out with a request: shrunk to IMAGE_SIDE pixels, as base64. -> {name, mime, b64, bytes} or None when it cannot be read or is too big to send."""
+    import base64
+    path = Path(path)
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    ext = ext_of(path.name)
+    mime = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "webp": "image/webp"}.get(ext, "image/png")
+    try:
+        from PIL import Image
+    except ImportError:
+        return {"name": path.name, "mime": mime, "b64": base64.b64encode(raw).decode(), "bytes": len(raw)} if len(raw) <= IMAGE_RAW_MAX else None
+    try:
+        im = Image.open(io.BytesIO(raw))
+        im.load()
+        if max(im.size) > IMAGE_SIDE:
+            im.thumbnail((IMAGE_SIDE, IMAGE_SIDE))
+        out = io.BytesIO()
+        if ext in ("jpg", "jpeg"):
+            im.convert("RGB").save(out, "JPEG", quality=85)
+            mime = "image/jpeg"
+        else:
+            im.convert("RGBA" if im.mode in ("RGBA", "LA", "P") else "RGB").save(out, "PNG", optimize=True)
+            mime = "image/png"
+            if out.tell() > 3_000_000:                                  # a photograph saved as PNG: JPEG is far smaller
+                out = io.BytesIO()
+                im.convert("RGB").save(out, "JPEG", quality=85)
+                mime = "image/jpeg"
+    except Exception:  # noqa: BLE001  (a damaged or odd file: it is left out, the request goes on)
+        return None
+    data = out.getvalue()
+    return {"name": path.name, "mime": mime, "b64": base64.b64encode(data).decode(), "bytes": len(data)}
+
+
 def parts_of(path):
     """-> (chunks-without-ids [{text, lo, hi, head}], noun) for one file, or raises FileProblem."""
     ext = ext_of(path.name)
     kind = READ.get(ext)
+    if ext in IMAGE_EXT:
+        return parts_image(path)
     if kind == "pdf":
         return parts_pdf(path)
     if kind == "docx":
@@ -569,7 +670,7 @@ def parts_of(path):
 
 def _location(noun, c):
     a, b = c["lo"], c["hi"]
-    word = {"pages": "page", "rows": "row", "cells": "cell", "paragraphs": "paragraph", "lines": "line"}[noun]
+    word = {"pages": "page", "rows": "row", "cells": "cell", "paragraphs": "paragraph", "lines": "line", "pictures": "picture"}[noun]
     return f"{word}{'s' if a != b else ''} {a}" + (f" to {b}" if a != b else "")
 
 
@@ -585,14 +686,15 @@ def gather(name, proj):
     found, notes = discover(proj)
     warnings += notes
     root = Path(proj["path"])
-    for path, shown, kind, note in found:
+    for path, shown, kind, note, role in found:
         try:
             st = path.stat()
         except OSError:
             continue
-        rec = {"file": shown, "kind": kind, "size": st.st_size, "parts": 0, "tokens": 0, "note": note, "reads": ext_of(path.name) in READ}
+        ext = ext_of(path.name)
+        rec = {"file": shown, "kind": kind, "role": role, "size": st.st_size, "parts": 0, "tokens": 0, "note": note, "reads": ext in READ or (role == "analysis" and ext in IMAGE_EXT)}
         if note == "too big":
-            top = MATERIAL_BIG.get(ext_of(path.name), MAX_PROJECT_FILE) if kind == "project" and shown.startswith("/") else MAX_PROJECT_FILE
+            top = (ANALYSIS_BIG if role == "analysis" else MATERIAL_BIG).get(ext, MAX_PROJECT_FILE) if kind == "project" and shown.startswith("/") else MAX_PROJECT_FILE
             rec["note"] = f"Too big to read (over {max(1, top // 1_000_000)} MB)." if kind == "project" else f"Too big to read (over {MAX_UPLOAD >> 20} MB)."
             files.append(rec)
             continue
@@ -633,7 +735,7 @@ def fingerprint_rows(proj):
     root = Path(proj["path"])
     rows = []
     found, _ = discover(proj)
-    for path, shown, kind, note in found:
+    for path, shown, kind, note, role in found:
         try:
             st = path.stat()
         except OSError:
@@ -692,34 +794,64 @@ def parts_of_file(name, proj, rel):
     return [{"id": r["id"], "where": r["section_path"].split(" · ", 1)[-1], "tokens": r["tokens"], "preview": " ".join(r["plain"].split())[:220]} for r in rows]
 
 
-def relevant(name, proj, instruction, passage="", mode="auto", budget=1800, limit=5):
+WANTS_ANALYSIS = re.compile(
+    r"\b(?:my|our|these|those)\s+(?:code|scripts?|notebooks?|analys[ie]s|outputs?|results?|findings|figures?|plots?|graphs?|charts?|images?|pictures?|metrics|logs?)\b"
+    r"|\b(?:based on|according to|from|using|given|explain|interpret|describe|discuss|summari[sz]e|compare|look at|read)\s+(?:my|the|our|these|those|this|that)?\s*(?:code|scripts?|notebooks?|analys[ie]s|outputs?|results|findings|figures?|plots?|graphs?|charts?|images?|pictures?|metrics|logs?)\b"
+    r"|\bwhat\s+(?:do|does)\s+(?:the|my|these|those)\s+(?:results?|figures?|plots?|graphs?|charts?|numbers|tables?|outputs?)\s+(?:show|say|mean|suggest|tell)\b", re.I)
+
+
+def role_of(f):
+    return f.get("role") or ("source" if f.get("kind") == "source" else "project")
+
+
+def _pick_images(use, text, named, every):
+    """Which pictures go with a request: the ones it names, then the ones whose file name shares words with it; when the analysis has only a few, all of them if the
+    request is about the analysis. At most MAX_IMAGES."""
+    from . import retrieve
+    pics = [f for f in use if ext_of(f["file"]) in IMAGE_EXT and f.get("role") == "analysis"]
+    chosen = [f for f in pics if f["file"] in named]
+    terms = set(retrieve.fts_terms(text))
+    for f in pics:
+        if f not in chosen and terms & set(retrieve.fts_terms(re.sub(r"[_\-.]+", " ", f["file"].rsplit("/", 1)[-1].rsplit(".", 1)[0]))):
+            chosen.append(f)
+    if every and not chosen and len(pics) <= MAX_IMAGES:
+        chosen = list(pics)
+    return chosen[:MAX_IMAGES]
+
+
+def relevant(name, proj, instruction, passage="", mode="auto", budget=1800, limit=5, analysis_mode="auto"):
     """The parts of the author's files a request should see, or None. A file is used when the request names it, when it talks about the author's files or data
-    (see WANTS_FILES), or always when the paper's setting says so; never when the setting says never.
-    -> {"chunks": [...], "files": [names], "why": "named" | "asked" | "always"}"""
+    (see WANTS_FILES) or, for the code and results folders, about the analysis (see WANTS_ANALYSIS), or always when the setting says so; never when it says never.
+    `mode` is the setting for the notes, tables and uploads, `analysis_mode` the one for the code and results folders.
+    -> {"chunks": [...], "files": [names], "images": [{file, name}], "why": "named" | "asked" | "always"}"""
     from . import paper_index, retrieve
-    if mode == "never":
-        return None
-    info = [f for f in listing(name, proj) if f.get("parts")]
+    info = [f for f in listing(name, proj) if f.get("parts") and (analysis_mode if role_of(f) == "analysis" else mode) != "never"]
     if not info:
         return None
     named = mentions(info, instruction)
-    asked = bool(WANTS_FILES.search(instruction))
-    if mode != "always" and not named and not asked:
+    asked_files, asked_analysis = bool(WANTS_FILES.search(instruction)), bool(WANTS_ANALYSIS.search(instruction))
+
+    def active(f):
+        analysis = role_of(f) == "analysis"
+        return (analysis_mode if analysis else mode) == "always" or f["file"] in named or (asked_analysis if analysis else asked_files)
+    use = [f for f in info if active(f)]
+    if not use:
         return None
+    allowed = {f["file"] for f in use}
     terms = retrieve.fts_terms(instruction + " " + passage[:800])
     con = paper_index.open_index(name, proj)
     chosen, used, seen = [], 0, set()
 
     def take(row):
         nonlocal used
-        if row["id"] in seen or (chosen and used + row["tokens"] > budget):
+        if row is None or row["id"] in seen or row["file"] not in allowed or ext_of(row["file"]) in IMAGE_EXT or (chosen and used + row["tokens"] > budget):
             return
         seen.add(row["id"])
         used += row["tokens"]
         chosen.append({"id": row["id"], "file": row["file"], "where": row["section_path"], "tokens": row["tokens"], "text": row["text"], "kind": row["kind"], "ord": row["ord"]})
 
     try:
-        for rel in named[:3]:                         # a named file: all of it when it fits, otherwise its summary and the parts that match
+        for rel in [n for n in named if n in allowed and ext_of(n) not in IMAGE_EXT][:3]:        # a named file: all of it when it fits, otherwise its summary and the parts that match
             rows = con.execute("SELECT * FROM chunks WHERE kind IN ('source','project') AND file=? ORDER BY ord", (rel,)).fetchall()
             if sum(r["tokens"] for r in rows) <= budget // max(1, len(named[:3])):
                 for r in rows:
@@ -736,17 +868,24 @@ def relevant(name, proj, instruction, passage="", mode="auto", budget=1800, limi
         if not named and len(chosen) < limit and terms:          # a request that names a file reads that file; others are searched only when none is named
             ids = [r[0] for r in con.execute(
                 "SELECT c.id FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.chunk_id WHERE chunks_fts MATCH ? AND c.kind IN ('source','project') "
-                "ORDER BY bm25(chunks_fts, 0.0, 4.0, 1.0) LIMIT ?", (retrieve.fts_match(terms), limit * 2)).fetchall()]
+                "ORDER BY bm25(chunks_fts, 0.0, 4.0, 1.0) LIMIT ?", (retrieve.fts_match(terms), limit * 12)).fetchall()]
             for i in ids:
                 if len(chosen) >= limit:
                     break
                 take(con.execute("SELECT * FROM chunks WHERE id=?", (i,)).fetchone())
+        pics = _pick_images(use, instruction + " " + passage[:800], set(named), every=asked_analysis or analysis_mode == "always")
+        for f in pics:                                              # a picture that goes out is announced in the text, so the answer can say which one it looked at
+            row = con.execute("SELECT * FROM chunks WHERE kind IN ('source','project') AND file=? ORDER BY ord LIMIT 1", (f["file"],)).fetchone()
+            if row:
+                chosen.append({"id": row["id"], "file": row["file"], "where": row["section_path"], "tokens": row["tokens"],
+                               "text": row["text"] + " The picture itself is attached to this request.", "kind": row["kind"], "ord": row["ord"], "picture": True})
     finally:
         con.close()
     if not chosen:
         return None
     chosen.sort(key=lambda c: (c["file"], c["ord"]))
-    return {"chunks": chosen, "files": list(dict.fromkeys(c["file"] for c in chosen)), "why": "named" if named else "asked" if asked else "always"}
+    return {"chunks": chosen, "files": list(dict.fromkeys(c["file"] for c in chosen)), "images": [{"file": f["file"], "name": f["file"].rsplit("/", 1)[-1]} for f in pics],
+            "why": "named" if named else "asked" if (asked_files or asked_analysis) else "always"}
 
 
 def block(res):

@@ -213,6 +213,7 @@
 
     // ---- the author's reading and material
     box.append(h('h2', { class: 'section-h', text: 'Literature library' }), window.OLS.libraryCard(paper));
+    box.append(h('h2', { class: 'section-h', text: 'Code and results' }), paper ? window.OLS.analysisCard(paper) : h('section', { class: 'card' }, h('p', { class: 'muted', text: 'Add a paper first; the folder with your analysis belongs to a paper.' })));
     box.append(h('h2', { class: 'section-h', text: 'Your files and writing material' }), paper ? window.OLS.filesCard(paper) : h('section', { class: 'card' }, h('p', { class: 'muted', text: 'Add a paper first; files and folders belong to a paper.' })));
 
     const health = await api.get('/api/health').catch(() => ({ issues: [] }));

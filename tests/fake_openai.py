@@ -7,7 +7,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def passage_of(body):
     """The masked passage inside the user message of a recorded request body (either API style)."""
-    user = body["input"] if "input" in body else body["messages"][-1]["content"]
+    from writing_core import openai_client
+    user = openai_client.user_text(body)
     m = re.search(r"<passage[^>]*>\n(.*?)\n</passage>", user, re.S)
     return m.group(1) if m else ""
 

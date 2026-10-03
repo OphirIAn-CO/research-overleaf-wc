@@ -273,6 +273,20 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   ok(/Smith and Lee 2020/.test(await text(page, libCard + ' .hit')), 'a search shows the best parts and the document they come from');
   await shot(page, '06c-library');
 
+  // ---- Settings: the folder with the code and results (scripts, tables, logs and figures)
+  const anCard = 'section[aria-label="Code and results"]';
+  ok(await page.isVisible(anCard) && /never changed/.test(await text(page, anCard)), 'Settings has an explicit Code and results card');
+  ok(!JARGON.test(await text(page, anCard)), 'and uses no jargon: ' + (JARGON.exec(await text(page, anCard)) || [''])[0]);
+  await page.fill(anCard + ' input[aria-label="Folder with your code and results"]', `${home}-library/Analysis`);
+  await page.click(anCard + ' button:has-text("Add this folder")');
+  await page.waitForSelector(anCard + ' .folder-row:has-text("Analysis")');
+  await page.waitForSelector(anCard + ' p:has-text("What the app can see")', { timeout: 30000 });
+  const anText = await text(page, anCard);
+  ok(/1 code file/.test(anText) && /1 figure\b/.test(anText) && /1 log\b/.test(anText) && /1 table\b/.test(anText), 'the folder is read and counted by kind: ' + (/What the app can see[^\n]*/.exec(anText) || [''])[0]);
+  await page.click(anCard + ' summary:has-text("The files")');
+  ok(await page.isVisible(anCard + ' td:has-text("rmse_by_model.png")') && await page.isVisible(anCard + ' td:has-text("metrics.csv")'), 'every file the app can see is listed');
+  await shot(page, '06f-code-and-results');
+
   // ---- your files: add, see the parts, remove; the chat takes them too (button and drop), and a request that names one shows what goes out
   const filesCard = 'section[aria-label="Your files"]';
   ok(await page.isVisible(filesCard) && /split into small labelled parts/.test(await text(page, filesCard)), 'Settings has a Your files card that explains itself');
@@ -349,6 +363,17 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   ok(/Citations added: \\cite\{smith2020soil\}/.test(libUse), 'the suggestion says which citation it adds');
   ok(/Citations from your library/.test(await text(page, '.thread')), 'and points at it next to the change');
   await shot(page, '06e-library-citation');
+
+  // ---- a request about the results brings the numbers, the code and the figure
+  const lookedCount = () => page.evaluate(() => [...document.querySelectorAll('.msg.assistant')].filter((m) => m.innerText.includes('Looked at your figures')).length);
+  const lookedBefore = await lookedCount();
+  await page.fill('#composer', 'describe the results using my analysis');
+  await page.press('#composer', 'Enter');
+  await page.waitForFunction((n) => [...document.querySelectorAll('.msg.assistant')].filter((m) => m.innerText.includes('Looked at your figures')).length > n, lookedBefore, { timeout: 30000 });
+  const anAnswer = await page.evaluate(() => [...document.querySelectorAll('.msg.assistant')].filter((m) => m.innerText.includes('Looked at your figures')).pop().innerText);
+  ok(/rmse_by_model\.png/.test(anAnswer) && /Used parts of your files: [^\n]*metrics\.csv/.test(anAnswer), 'the answer says which figure it looked at and which parts of the analysis it used' + (process.env.E2E_DEBUG ? ': ' + anAnswer.slice(0, 400) : ''));
+  ok(/Numbers that came from your files: 0\.412/.test(anAnswer), 'and points out the number that came from the results, to be checked against the source');
+  await shot(page, '06g-results-from-analysis');
 
   await page.click('#nav a:has-text("Activity")');
   await page.waitForSelector('.feed-card');

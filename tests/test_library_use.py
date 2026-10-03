@@ -4,6 +4,7 @@ import json
 import unittest
 from pathlib import Path
 
+from tests.helpers import common
 from tests.pdfmaker import make_pdf
 from tests.test_library import IRRIGATION, SOIL
 from tests.test_revise import ReviseBase, reply, user_of
@@ -112,6 +113,48 @@ class Use(ReviseBase):
         r = self.go("support the sampling statement with my library, use the sampling error figure", part="methods")
         self.assertEqual(r["status"], "proposed", r["proposal"]["units"][0].get("error"))
         self.assertIn("35", r["proposal"]["units"][0]["from_files"])
+
+
+@needs_pdf
+class FromTheTerminal(ReviseBase):
+    """Claude Code and the terminal reach the library too."""
+
+    def setUp(self):
+        super().setUp()
+        self.lib = self.tmp / "Documents" / "Literature"
+        self.lib.mkdir(parents=True)
+        make_pdf(self.lib / "Smith et al. - 2020 - Soil moisture.pdf", SOIL)
+        self.bib = Path(self.proj["path"]) / self.proj["bib"]
+        self.bib.write_text(self.bib.read_text() + "@article{smithetal2020soil, author={Smith, J.}, title={Soil moisture and crop yield in semi-arid farms}, year={2020}, doi={10.1234/abc.2020.001}}\n")
+
+    def cli(self, *args):
+        import os
+        import subprocess
+        import sys
+        env = {**os.environ, "OVERLEAF_SKILL_HOME": str(common.HOME)}
+        return subprocess.run([sys.executable, str(Path(__file__).resolve().parent.parent / "scripts" / "writing.py"), "library", *args], capture_output=True, text=True, env=env)
+
+    def test_the_command_line_adds_a_folder_reads_it_and_searches_it(self):
+        out = self.cli()
+        self.assertIn("no folder yet", out.stdout)
+        out = self.cli("--add", str(self.lib), "--index")
+        self.assertIn("read 1 new", out.stdout, out.stderr)
+        out = self.cli("--search", "stratified random sampling", "--paper", "alpha")
+        self.assertIn("Smith et al. 2020 · page 2 · Methods", out.stdout, out.stderr)
+        self.assertIn("\\cite{smithetal2020soil}", out.stdout)
+        self.assertIn("1 documents", self.cli().stdout)
+        self.assertIn("nothing in the library matches", self.cli("--search", "zebrafish genomes", "--paper", "alpha").stdout)
+
+    def test_the_mcp_tool_answers_with_the_cite_key(self):
+        import overleaf_mcp as mcp
+        fn = mcp.TOOLS["library_query"]["fn"]
+        self.assertIn("library is empty", fn({"query": "sampling", "repo_path": "alpha"}))
+        library.set_folders([str(self.lib)])
+        library.update()
+        text = fn({"query": "stratified random sampling", "repo_path": "alpha"})
+        self.assertIn("Smith et al. 2020 · page 2 · Methods | cite as \\cite{smithetal2020soil}", text)
+        self.assertIn("capacitance probes", text)
+        self.assertIn("provide query", fn({"query": " "}))
 
 
 class Words(unittest.TestCase):

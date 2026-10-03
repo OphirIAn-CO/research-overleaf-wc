@@ -1351,9 +1351,16 @@ def pending_files(proj):
 
 # ---------------------------------------------------------------------------- the author's files: uploads, code and results
 
+_GROUPS = {"py": "code", "r": "code", "rmd": "code", "m": "code", "jl": "code", "sql": "code", "sh": "code", "ipynb": "notebook", "csv": "table", "tsv": "table", "json": "results",
+           "yaml": "results", "yml": "results", "toml": "results", "log": "log", "txt": "text", "md": "text", "markdown": "text", "rst": "text", "tex": "table",
+           "png": "figure", "jpg": "figure", "jpeg": "figure", "gif": "figure", "webp": "figure", "pdf": "document", "docx": "document"}
+GROUP_NAMES = {"code": "Code", "notebook": "Notebooks", "table": "Tables", "results": "Results files", "log": "Logs", "text": "Notes", "figure": "Figures", "document": "Articles and reports"}
+
+
 def _file_view(f):
-    return {"file": f["file"], "name": f["file"].rsplit("/", 1)[-1], "kind": f["kind"], "upload": f["kind"] == "source", "size": f["size"], "parts": f["parts"],
-            "words": int(f["tokens"] * 0.75), "note": f.get("note", ""), "reads": f.get("reads", True)}
+    ext = files.ext_of(f["file"])
+    return {"file": f["file"], "name": f["file"].rsplit("/", 1)[-1], "kind": f["kind"], "role": files.role_of(f), "group": _GROUPS.get(ext, "text"), "upload": f["kind"] == "source", "size": f["size"],
+            "parts": f["parts"], "words": int(f["tokens"] * 0.75), "note": f.get("note", ""), "reads": f.get("reads", True)}
 
 
 def _shared_folders():
@@ -1361,12 +1368,17 @@ def _shared_folders():
     return list(dict.fromkeys(common.data_roots()))
 
 
-def _folder_views(proj, listed):
-    """The author's linked folders with what was read from each: [{path, ok, note, files, parts}]"""
+def _folder_views(proj, listed, role="material"):
+    """The author's linked folders of one kind with what was read from each: [{path, ok, note, files, parts, groups: {code: n, figure: n, ...}}]"""
     out = []
-    for f in files.folders(proj):
+    for f in files.folders(proj, role):
         mine = [x for x in listed if x["file"].startswith(f["path"].rstrip("/") + "/")]
-        out.append({**f, "files": len(mine), "parts": sum(x.get("parts", 0) for x in mine)})
+        groups = {}
+        for x in mine:
+            if x.get("parts"):
+                g = _GROUPS.get(files.ext_of(x["file"]), "text")
+                groups[g] = groups.get(g, 0) + 1
+        out.append({**f, "files": len(mine), "parts": sum(x.get("parts", 0) for x in mine), "groups": groups})
     return out
 
 
@@ -1375,8 +1387,9 @@ def api_files(r):
     paper_index.refresh(n, p, trigger="files", source="web")
     st = config.paper_settings(p)
     listed = files.listing(n, p)
-    return {"files": [_file_view(f) for f in listed], "folders": _folder_views(p, listed), "use_files": st["use_files"], "send_uploads": st["send_uploads"],
-            "max_mb": files.MAX_UPLOAD >> 20, "folder": files.UPLOAD_DIR, "shared": _shared_folders()}
+    return {"files": [_file_view(f) for f in listed], "folders": _folder_views(p, listed), "analysis_folders": _folder_views(p, listed, "analysis"), "use_files": st["use_files"],
+            "use_analysis": st["use_analysis"], "send_uploads": st["send_uploads"], "max_mb": files.MAX_UPLOAD >> 20, "folder": files.UPLOAD_DIR, "shared": _shared_folders(),
+            "group_names": GROUP_NAMES}
 
 
 def api_files_parts(r):
@@ -1446,15 +1459,18 @@ def api_files_folders(r):
     """The folders (outside the Overleaf project) whose code and results this paper may read."""
     n, p = paper_ref(r.body.get("paper", ""))
     raw = r.body.get("folders")
+    role = r.body.get("role") or "material"
+    if role not in files.ROLES:
+        raise ApiError(400, "role must be material or analysis")
     if not isinstance(raw, list) or len(raw) > 8:
         raise ApiError(400, "folders must be a list of at most 8 paths")
     try:
-        files.set_folders(p, raw)
+        files.set_folders(p, raw, role)
     except files.FileProblem as e:
         raise ApiError(400, str(e)) from None
     paper_index.refresh(n, p, trigger="files", source="web")
     listed = files.listing(n, p)
-    return {"folders": _folder_views(p, listed), "files": [_file_view(f) for f in listed]}
+    return {"folders": _folder_views(p, listed, role), "files": [_file_view(f) for f in listed]}
 
 
 # ---------------------------------------------------------------------------- the literature library (books, articles and PDFs the author keeps in folders)
@@ -1664,6 +1680,10 @@ def api_settings(r):
             if body["use_files"] not in ("auto", "always", "never"):
                 raise ApiError(400, "use_files must be auto, always or never")
             config.set_paper_setting(p, "use_files", body["use_files"])
+        if "use_analysis" in body:
+            if body["use_analysis"] not in ("auto", "always", "never"):
+                raise ApiError(400, "use_analysis must be auto, always or never")
+            config.set_paper_setting(p, "use_analysis", body["use_analysis"])
         if "use_library" in body:
             if body["use_library"] not in ("auto", "always", "never"):
                 raise ApiError(400, "use_library must be auto, always or never")
