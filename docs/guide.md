@@ -40,7 +40,7 @@ The chat uses the width of your window. In an answer the explanation, questions 
 
 ### Mendeley (optional) and Telegram (optional)
 
-**Mendeley.**
+**Mendeley.** Do this on every computer that should talk to Mendeley (each one signs in by itself; do not copy the token file between computers).
 
 1. Create an app at [dev.mendeley.com](https://dev.mendeley.com) with redirect
    URI `https://localhost/callback`.
@@ -50,7 +50,13 @@ The chat uses the width of your window. In an answer the explanation, questions 
    ```
 3. Run `python3 scripts/mendeley_sync.py authorize`
    and follow the prompts (the browser page that fails to load at the end is
-   expected; copy its address back into the terminal).
+   expected; copy its address back into the terminal). Paste **the address the browser ends up on** (it starts with `https://localhost/callback?code=`),
+   not the first link, and do it right away: the code works once and expires within a minute or two. If Mendeley says `invalid_grant` ("Invalid access code"),
+   run the command again and use the new link; never reuse an old code.
+
+*A coauthor on another computer.* Everyone should use **their own Overleaf Git token** (Overleaf: Account Settings, Git Integration) and sign in to Mendeley on their own computer.
+Best is that they use their own Mendeley account (you invite them to your Mendeley group) and their own Mendeley app, so that nobody shares a login or a client secret.
+If you do share an app, the `client_id` and `client_secret` in `mendeley_credentials.json` are a secret: send them privately, never through git.
 
 **Telegram.**
 
@@ -358,6 +364,7 @@ your book), or use **Book check** in the book library (Settings, Advanced).
 | The LaTeX pane says LaTeX is not installed | In Docker the image needs LaTeX: run `./ui.sh down`, then `./ui.sh up` (the first start rebuilds the image with LaTeX, several minutes and about 1 GB more), or `./ui.sh build`. Without Docker, install MacTeX or TeX Live and restart the app. |
 | A package is "not found" when compiling | The Docker image has the usual LaTeX packages (publisher classes, maths, figures, biblatex), not every package ever written. Add the `.sty` file to the paper folder, or ask for the package to be added to `ui/Dockerfile`. |
 | The browser or LaTeX is slow, even though the app is idle | `./ui.sh up` and `./ui.sh status` say when Docker was given fewer than 4 CPUs or 6 GB of memory: Docker Desktop > Settings > Resources, raise both, Apply. On an Apple-silicon Mac Docker must run the arm64 image, not x86 under emulation (`./ui.sh up` tells you). |
+| Mendeley sign-in says `invalid_grant` / "Invalid access code" | The code was old or already used, or the first link was pasted instead of the address the browser ended up on. Run `mendeley_sync.py authorize` again, open the NEW link, approve, and paste the `https://localhost/callback?code=...` address straight away. Also check the redirect URL of your Mendeley app is exactly `https://localhost/callback`. |
 | Anything else | `common.py doctor` lists per-paper problems; `writing.py stats` prints what the system has been doing. |
 
 Self-check for the DOI code: `python3 scripts/doi_bot.py demo` (needs internet).

@@ -88,6 +88,38 @@ def http_request(url, data=None, headers=None, method=None):
         return e.code, e.read(), dict(e.headers or {})
 
 
+def extract_code(pasted):
+    """What the person pasted -> (code, problem). Accepts the whole address the browser ended up at (https://localhost/callback?code=...) or just the code.
+    A paste that cannot be a code (the first link, an error from Mendeley, several words) is explained instead of being sent."""
+    text = (pasted or "").strip().strip("\"'<>")
+    if not text:
+        return None, "nothing was pasted."
+    if "oauth/authorize" in text or "client_id=" in text:
+        return None, ("that is the FIRST link, the one to open in the browser. Open it, log in and approve; the browser then ends up on an address that starts with "
+                      f"{REDIRECT_URI}?code= (the page itself will not load). Copy THAT address from the address bar and paste it here.")
+    qs = urllib.parse.parse_qs(urllib.parse.urlparse(text).query) if "?" in text else {}
+    if "error" in qs or re.search(r"[?&]error=", text):
+        why = (qs.get("error_description") or qs.get("error") or ["an error"])[0]
+        return None, f"Mendeley answered with an error instead of a code ({why}). Start again and press Approve."
+    if "code" in qs:
+        return qs["code"][0], None
+    m = re.search(r"(?:^|[?&\s])code=([^&\s]+)", text)
+    if m:
+        return m.group(1), None
+    if re.search(r"\s", text) or "/" in text:
+        return None, f"I could not find a code in that. Paste the whole address the browser ended up at ({REDIRECT_URI}?code=...), or only the part after code=."
+    return text, None
+
+
+INVALID_GRANT_HELP = (
+    "Mendeley did not accept that code. A code works ONCE and only for a minute or two, so:\n"
+    "  1. run this command again and open the NEW link it prints (do not reuse an older code or an older page);\n"
+    "  2. log in to Mendeley and press Approve;\n"
+    "  3. copy the address the browser ends up on (it starts with https://localhost/callback?code=) and paste it here straight away.\n"
+    "If it still fails, check that the Mendeley app (dev.mendeley.com) has exactly this redirect URL: " + REDIRECT_URI + " (https, no slash at the end), "
+    "and that client_id and client_secret in mendeley_credentials.json are the ones of that app, copied whole.")
+
+
 def cmd_authorize(args):
     creds = load_creds()
     url = AUTH_URL + "?" + urllib.parse.urlencode({
@@ -102,18 +134,15 @@ def cmd_authorize(args):
         "\n2. After you approve, the browser will try to load "
         f"{REDIRECT_URI}?code=... and fail to connect — that's expected."
     )
-    print("3. Copy the FULL url from the address bar (or just the code=... value) and paste it below.\n")
+    print("3. Copy the FULL url from the address bar (or just the code=... value) and paste it below. Do it right away: the code expires within a minute or two and works once.\n")
     if getattr(args, "code", None):
         pasted = args.code.strip()
     else:
         pasted = input("Paste redirect URL or code: ").strip()
 
-    code = pasted
-    if "code=" in pasted:
-        parsed = urllib.parse.urlparse(pasted)
-        qs = urllib.parse.parse_qs(parsed.query)
-        if "code" in qs:
-            code = qs["code"][0]
+    code, problem = extract_code(pasted)
+    if problem:
+        sys.exit("\n" + problem)
 
     headers = {
         "Authorization": basic_auth_header(creds["client_id"], creds["client_secret"]),
@@ -126,7 +155,12 @@ def cmd_authorize(args):
     }
     status, body, _ = http_request(TOKEN_URL, data=data, headers=headers, method="POST")
     if status != 200:
-        sys.exit(f"token exchange failed ({status}): {body.decode(errors='replace')}")
+        text = body.decode(errors="replace")
+        if "invalid_grant" in text:
+            sys.exit(f"token exchange failed ({status}): {text}\n\n{INVALID_GRANT_HELP}")
+        if status in (400, 401) and "invalid_client" in text:
+            sys.exit(f"token exchange failed ({status}): {text}\n\nThe client_id or client_secret in {CREDS_PATH} is not the one of your Mendeley app. Copy both again from dev.mendeley.com, whole, with no extra spaces.")
+        sys.exit(f"token exchange failed ({status}): {text}")
     tokens = json.loads(body)
     save_json(TOKENS_PATH, tokens)
     print(f"\nSaved access + refresh token to {TOKENS_PATH}")
