@@ -969,10 +969,29 @@ def api_chat_rename(r):
     return {"ok": True}
 
 
+def _not_while_running(r, n, cid):
+    if r.app.jobs.running(paper=n, chat=cid):
+        raise ApiError(409, "A request in this chat is still running. Wait for it to finish first.")
+
+
+def api_chat_clear(r):
+    """Start the conversation over in the same place. Suggestions already saved in the files, and what the app learned from earlier decisions, are not touched."""
+    n, p = paper_ref(r.body.get("paper", ""))
+    cid = str(r.body.get("id", ""))
+    _not_while_running(r, n, cid)
+    try:
+        chat.clear(p, cid)
+    except ValueError as e:
+        raise ApiError(400, str(e)) from None
+    return {"ok": True}
+
+
 def api_chat_delete(r):
     n, p = paper_ref(r.body.get("paper", ""))
+    cid = str(r.body.get("id", ""))
+    _not_while_running(r, n, cid)
     try:
-        chat.delete(p, r.body.get("id", ""))
+        chat.delete(p, cid)
     except ValueError as e:
         raise ApiError(400, str(e)) from None
     return {"ok": True}
@@ -1764,7 +1783,7 @@ ROUTES = [
     ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/test/cleaner$", api_test_cleaner),
     ("GET", r"^/api/papers/discover$", api_discover), ("POST", r"^/api/papers/add$", api_add_paper),
     ("GET", r"^/api/chat/threads$", api_chat_threads), ("POST", r"^/api/chat/new$", api_chat_new), ("POST", r"^/api/chat/rename$", api_chat_rename),
-    ("POST", r"^/api/chat/delete$", api_chat_delete), ("GET", r"^/api/chat$", api_chat_get), ("POST", r"^/api/chat/send$", api_chat_send),
+    ("POST", r"^/api/chat/delete$", api_chat_delete), ("POST", r"^/api/chat/clear$", api_chat_clear), ("GET", r"^/api/chat$", api_chat_get), ("POST", r"^/api/chat/send$", api_chat_send),
     ("POST", r"^/api/chat/run$", api_chat_run), ("POST", r"^/api/chat/count$", api_chat_count), ("POST", r"^/api/chat/cancel$", api_chat_cancel),
     ("POST", r"^/api/proposal/check$", api_proposal_check), ("POST", r"^/api/proposal/approve$", api_proposal_approve),
     ("POST", r"^/api/proposal/text$", api_proposal_text), ("POST", r"^/api/papers/catchup$", api_catchup),

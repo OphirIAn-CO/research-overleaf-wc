@@ -127,6 +127,16 @@ def rename(proj, cid, title):
         _write(proj, t)
 
 
+def clear(proj, cid):
+    """Start the conversation over in the same place: no messages, so nothing is left to follow up on ("make it shorter" has no earlier place to mean)."""
+    with _LOCK:
+        t = _read(proj, cid)
+        if t is None:
+            raise ValueError("no such chat")
+        t["messages"], t["title"], t["updated"] = [], "New chat", time.time()
+        _write(proj, t)
+
+
 def delete(proj, cid):
     with _LOCK:
         p = _path(proj, cid)

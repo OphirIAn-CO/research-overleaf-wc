@@ -216,6 +216,13 @@ You sign in once and it stays signed in (the sign-in is kept in `~/.config/overl
 QuillBot has no public API, so the paste stays yours. **Copy for QuillBot** copies the suggestion with your citations and formulas as tags
 (`[[LX001]]`) so QuillBot cannot damage them.
 
+**What the chat remembers, and starting again.** Very little. A request goes to OpenAI on its own: the earlier messages of a chat are *not* sent. Inside a chat the
+only memory is the place of your last request, so "make it shorter" means the same passage. For the paper, in every chat, two things carry over: the notes about it
+(key terms, tense, notation; **Settings > Advanced > Paper index**) and a short style note built from which suggestions you kept or set aside. To start again:
+**Start over** (header, or in the **?** panel) empties the current chat and keeps it in the same place; **+ New chat** (sidebar) opens a second, empty one and keeps
+the old; **Delete this chat** and **Rename** are in the **?** panel; **Forget my past decisions** (also there, only when something was learned) erases the style note.
+None of these touch your paper or the suggestions already saved in your files. **Which chat belongs to which paper:** each chat is a small file inside its own paper's folder (`<paper>/.overleaf-skill/chats/`, git-ignored, never sent to Overleaf), so the sidebar lists exactly the chats of the paper you selected, a chat id from another paper opens that paper's own chat and never this one, and moving or re-cloning a paper folder takes its chats along only if you copy `.overleaf-skill/` with it.
+
 **Your files: articles, tables, notes and code.** The app does not only read your LaTeX. Press **Add a file** next to the message box (or
 drop files on the chat, or use **References > Your files**) to add an article you cite (PDF or Word), a table of results (CSV or TSV),
 notes (text, Markdown), JSON, a notebook, or code (Python, R, MATLAB, Julia, SQL, shell); pictures are kept but not read. Excel files: save as CSV first.

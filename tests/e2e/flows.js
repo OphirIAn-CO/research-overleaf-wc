@@ -312,6 +312,47 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   ok(tight && tight.hunk < 520 ? !tight.sameRow : true, 'and a card that is too narrow for two columns stacks them instead of squeezing');
   await page.close();
 
+  // ---- starting again: what a chat remembers, Start over in the same chat, a new chat, delete, forget
+  page = await open({ width: 1400, height: 900 });
+  page.on('dialog', (d) => d.accept());
+  const chatsBefore = await page.$$eval('#chat-list .side-item', (a) => a.length);
+  await page.click('#new-chat');
+  await page.waitForFunction((n) => document.querySelectorAll('#chat-list .side-item').length === n + 1, chatsBefore);
+  ok(true, 'a new chat is one more in the list');
+  await page.fill('#composer', 'improve the first paragraph of the methods');
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('.msg.assistant .approach', { timeout: 25000 });
+  await page.fill('#composer', 'make it shorter');
+  await page.press('#composer', 'Enter');
+  await page.waitForFunction(() => document.querySelectorAll('.msg.user').length === 2);
+  ok(/Sent to OpenAI|I will work on/.test(await text(page, '.thread')) && !(await page.isVisible('.msg.assistant:has-text("Which part")')), 'a follow-up means the same place');
+  await page.waitForFunction(() => !document.querySelector('.composer button.primary').disabled, null, { timeout: 25000 });
+  await page.click('.chat-head button:has-text("?")');
+  await page.waitForSelector('.memory');
+  ok(/In this chat: only where your last request worked/.test(await text(page, '.memory')) && /every chat/.test(await text(page, '.memory')), 'the help says what is remembered in a chat and what in the paper');
+  ok(!JARGON.test(await text(page, '.memory')), 'in words without jargon');
+  await shot(page, '12-memory');
+  await page.click('.memory button:has-text("Start over in this chat")');
+  await page.waitForFunction(() => document.querySelectorAll('.msg.user').length === 0);
+  ok(await page.isVisible('.welcome'), 'Start over clears the conversation and shows the beginning again');
+  ok((await page.$$eval('#chat-list .side-item', (a) => a.length)) === chatsBefore + 1, 'in the same chat, not a new one');
+  await page.fill('#composer', 'make it shorter');
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('.msg.assistant:has-text("Which")', { timeout: 15000 }).catch(() => {});
+  ok(!/Sent to OpenAI/.test(await text(page, '.thread')), 'and "make it shorter" no longer knows where to work: it asks which part');
+  await page.click('.chat-head button:has-text("Start over")');
+  await page.waitForFunction(() => document.querySelectorAll('.msg.user').length === 0);
+  ok(true, 'the header has Start over too');
+  await page.click('.chat-head button:has-text("?")');
+  await page.waitForSelector('.memory');
+  const hadDecisions = await page.isVisible('.memory button:has-text("Forget my past decisions")');
+  if (hadDecisions) { await page.click('.memory button:has-text("Forget my past decisions")'); await page.waitForSelector('.memory:has-text("Nothing learned yet")'); }
+  ok(!hadDecisions || !(await page.isVisible('.memory button:has-text("Forget my past decisions")')), 'what was learned from earlier decisions can be forgotten, and the button goes away');
+  await page.click('.memory button:has-text("Delete this chat")');
+  await page.waitForFunction((n) => document.querySelectorAll('#chat-list .side-item').length === n, chatsBefore);
+  ok(true, 'deleting a chat removes it from the list and shows another one');
+  await page.close();
+
   // ---- phone and dark
   page = await open({ width: 390, height: 800 });
   await page.fill('#composer', 'improve the first paragraph of the methods');

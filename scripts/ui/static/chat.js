@@ -198,7 +198,8 @@
     loadOverview();
     const head = h('header', { class: 'chat-head' }, h('div', { class: 'grow' }, h('h1', { text: paper }), sub),
       h('div', { class: 'row' }, window.OLS.panes.bar(), gitBtn('Get latest from Overleaf', 'pull'), gitBtn('Send to Overleaf', 'sync', { message: 'Writing assistant: update' }),
-        h('button', { type: 'button', class: 'ghost', text: '?', title: 'How this works', 'aria-label': 'How this works', onclick: () => { st.showHelp = !st.showHelp; renderThread(); } })));
+        guarded(h('button', { type: 'button', class: 'ghost', text: 'Start over', title: 'Clear this conversation and begin again in the same chat' }), () => startOver()),
+        h('button', { type: 'button', class: 'ghost', text: '?', title: 'How this works and what I remember', 'aria-label': 'How this works and what I remember', onclick: () => { st.showHelp = !st.showHelp; st.welcomeEl = null; renderThread(); } })));
 
     // ---- composer
     const ta = h('textarea', { id: 'composer', rows: '2', 'aria-label': 'Ask for a change', placeholder: 'What should I do? For example: improve the flow of the text before Figure 1 in the methods' });
@@ -742,6 +743,66 @@
       if (stick) st.stuck = true;
     }
 
+    // ---- what the app remembers, and how to forget it
+    async function startOver() {
+      if (st.busy || st.working) throw new Error('A request is still running. Wait for it to finish first.');
+      if (st.messages.length && !window.confirm('Clear this conversation and start again here?\n\nSuggestions you already saved stay in your files. Nothing is deleted from your paper.')) return;
+      await api.post('/api/chat/clear', { paper, id: st.cid });
+      st.local.length = 0; st.cache.clear(); st.seen.clear(); st.showHelp = false;
+      await reload();
+      await window.OLS.loadThreads();
+      if (window.OLS.panes && window.OLS.panes.setTargetFromThread) window.OLS.panes.setTargetFromThread(st.messages);
+      toast('Started over. This chat remembers nothing now.');
+      ta.focus();
+    }
+    async function newChat() {
+      const r = await api.post('/api/chat/new', { paper });
+      S.chatId = r.thread.id;
+      await window.OLS.loadThreads();
+      window.OLS.route();
+    }
+    async function renameChat() {
+      const cur = ((S.threads || []).find((t) => t.id === st.cid) || {}).title || '';
+      const name = window.prompt('Name this chat', cur);
+      if (name == null) return;
+      await api.post('/api/chat/rename', { paper, id: st.cid, title: name });
+      await window.OLS.loadThreads();
+      toast('Renamed');
+    }
+    async function deleteChat() {
+      if (!window.confirm('Delete this whole chat? Suggestions you already saved stay in your files.')) return;
+      await api.post('/api/chat/delete', { paper, id: st.cid });
+      S.chatId = null;
+      await window.OLS.loadThreads();
+      window.OLS.route();
+    }
+    function memoryBox() {
+      const decisions = h('p', { class: 'small secondary', text: 'Looking up what I have learned from your decisions...' });
+      const forget = guarded(h('button', { type: 'button', class: 'small', text: 'Forget my past decisions' }), async () => {
+        if (!window.confirm('Forget which suggestions you kept and which you set aside for this paper?\n\nRequests then go out without those style hints. Your paper and your saved files are not touched.')) return;
+        const r = await api.post(`/api/paper/${enc(paper)}/forget`, {});
+        toast(`Forgot ${plural(r.forgotten, 'decision')}`);
+        decisions.textContent = 'Nothing learned yet: I start from the writing book and the notes about your paper.';
+        forget.hidden = true;
+      });
+      forget.hidden = true;
+      api.get(`/api/paper/${enc(paper)}/preferences`).then((r) => {
+        const n = (r.accepted || 0) + (r.rejected || 0);
+        decisions.textContent = n ? `From your ${plural(n, 'earlier decision')} on this paper (${r.accepted} kept, ${r.rejected} set aside) I send OpenAI a short note about the style you like. It is the same in every chat of this paper.`
+          : 'Nothing learned yet: I start from the writing book and the notes about your paper.';
+        forget.hidden = !n;
+      }).catch(() => { decisions.textContent = ''; });
+      return h('section', { class: 'memory', 'aria-label': 'What I remember' }, h('h3', { text: 'What I remember' }),
+        h('ul', { class: 'small' },
+          h('li', null, h('strong', { text: 'In this chat: ' }), 'only where your last request worked, so "make it shorter" means the same place. I do not send the earlier messages to OpenAI; each request is sent on its own.'),
+          h('li', null, h('strong', { text: 'For this paper, in every chat: ' }), 'the notes about it (key terms, tense, notation; edit them under Settings, Advanced) and what you kept or set aside.')),
+        decisions,
+        h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary small', text: 'Start over in this chat' }), () => startOver()),
+          guarded(h('button', { type: 'button', class: 'small', text: 'Start a new chat instead' }), () => newChat()),
+          h('button', { type: 'button', class: 'small', text: 'Rename', onclick: () => renameChat().catch((e) => toast(e.message)) }),
+          guarded(h('button', { type: 'button', class: 'small', text: 'Delete this chat' }), () => deleteChat()), forget));
+    }
+
     function welcome() {
       const setup = [];
       if (st.data.openai !== 'ok') setup.push(notice('warn', h('strong', { text: 'One thing first: ' }), 'OpenAI is not set up yet. ', h('a', { href: '#/settings', text: 'Add your key and model in Settings' }), '.'));
@@ -751,7 +812,8 @@
           h('li', null, h('strong', { text: 'Say what you want. ' }), 'For example "improve the flow of the text before Figure 1 in the methods", "fix the grammar in the introduction", "peer review my paper", or paste a DOI.'),
           h('li', null, h('strong', { text: 'I find the right part ' }), 'of your paper and the writing advice that applies, and ask OpenAI for a better version with an explanation.'),
           h('li', null, h('strong', { text: 'You decide. ' }), 'Keep the changes you like, tweak the tone (QuillBot or by hand), then approve. It is saved in your files and you can send it to Overleaf.')),
-        h('p', { class: 'small muted', text: 'Your citations, formulas, numbers and figures never leave your computer as text; OpenAI only sees the passage with tags in their place, and the answer is rejected if any of them changed. Each paper keeps its own private notes.' }));
+        h('p', { class: 'small muted', text: 'Your citations, formulas, numbers and figures never leave your computer as text; OpenAI only sees the passage with tags in their place, and the answer is rejected if any of them changed. Each paper keeps its own private notes.' }),
+        memoryBox());
     }
 
     const page = h('div', { class: 'chat-page' }, head, threadEl, composer, h('div', { class: 'drop-hint', 'aria-hidden': 'true', text: 'Drop the file here to add it to this paper' }));

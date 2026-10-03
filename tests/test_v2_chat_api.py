@@ -1,5 +1,6 @@
 """The chat through the web app: a request goes in, a plan or a question comes back, the answer lands in the thread."""
 import json
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -280,3 +281,59 @@ class ApproveFlow(ChatBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StartingOver(ChatBase):
+    """What a chat remembers, and the ways to forget it."""
+
+    def test_a_follow_up_means_the_same_place_until_the_chat_is_started_over(self):
+        cid = self.chat_thread()["id"]
+        self.wait_job(self.send()["job"])
+        follow = self.send("make it shorter")
+        self.assertEqual(follow["messages"][1]["kind"], "plan", "it knows where the last request worked")
+        self.wait_job(follow["job"])
+        st, r = self.c.post("/api/chat/clear", {"paper": "alpha", "id": cid})
+        self.assertEqual((st, r), (200, {"ok": True}))
+        t = self.chat_thread(cid)
+        self.assertEqual((t["thread"]["messages"], t["thread"]["title"], t["id"]), ([], "New chat", cid), "the same chat, empty")
+        self.assertEqual([x["id"] for x in self.c.get("/api/chat/threads?paper=alpha")[1]["threads"]], [cid])
+        again = self.send("make it shorter")
+        self.assertEqual(again["messages"][1]["kind"], "ask", "with nothing before it, it has to ask which part")
+        self.assertEqual(len(self.oa.requests), 2, "and nothing more was sent to OpenAI for the question")
+
+    def test_clearing_and_deleting_are_refused_while_a_request_is_running_and_for_unknown_chats(self):
+        cid = self.chat_thread()["id"]
+        gate = threading.Event()
+        orig = self.oa.script
+        self.oa.script = [lambda body: (gate.wait(5) and None) or orig[0](body)]
+        r = self.send()
+        try:
+            self.assertEqual(self.c.post("/api/chat/clear", {"paper": "alpha", "id": cid})[0], 409)
+            self.assertEqual(self.c.post("/api/chat/delete", {"paper": "alpha", "id": cid})[0], 409)
+        finally:
+            gate.set()
+        self.wait_job(r["job"])
+        self.assertEqual(self.c.post("/api/chat/clear", {"paper": "alpha", "id": "c" + "0" * 10})[0], 400)
+        self.assertEqual(self.c.post("/api/chat/clear", {"paper": "nobody", "id": cid})[0], 404)
+        self.assertEqual(self.c.post("/api/chat/delete", {"paper": "alpha", "id": cid})[0], 200)
+        self.assertTrue(self.c.get("/api/chat/threads?paper=alpha")[1]["threads"], "a chat is always there to write in")
+
+    def test_what_was_learned_from_the_decisions_can_be_forgotten_and_a_new_chat_keeps_it_until_then(self):
+        from writing_core import preferences
+        pid = self.last_proposal_id()
+        self.c.post("/api/proposal/record", {"paper": "alpha", "id": pid, "accepted": "all", "rejected": []})
+        st, pref = self.c.get("/api/paper/alpha/preferences")
+        self.assertGreater(pref["accepted"] + pref["rejected"], 0)
+        self.assertTrue(preferences.digest(self.proj))
+        self.c.post("/api/chat/new", {"paper": "alpha"})
+        self.assertTrue(preferences.digest(self.proj), "a new chat does not forget what the paper has taught")
+        st, f = self.c.post("/api/paper/alpha/forget", {})
+        self.assertEqual(st, 200)
+        self.assertGreater(f["forgotten"], 0)
+        self.assertEqual(preferences.digest(self.proj), "")
+        self.assertEqual(self.c.get("/api/paper/alpha/preferences")[1]["accepted"], 0)
+
+    def last_proposal_id(self):
+        self.wait_job(self.send()["job"])
+        return self.last("result")["data"]["proposal"]
+

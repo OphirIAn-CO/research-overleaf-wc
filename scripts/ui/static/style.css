@@ -269,3 +269,6 @@ input[type="number"] { width: 90px; }
 .place .ctx { color: var(--ink-3); white-space: pre-wrap; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; padding: 4px 12px; }
 .place .choices { padding: 8px 12px; border-top: 1px solid var(--grid); gap: 6px 18px; }
 .pick-opt { cursor: pointer; }
+
+.memory { margin-top: 18px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); }
+.memory h3 { margin: 0 0 6px; font-size: 15px; } .memory ul { margin: 0 0 8px; padding-left: 18px; } .memory li { margin-bottom: 4px; }
