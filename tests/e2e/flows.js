@@ -244,11 +244,47 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   await page.waitForSelector('text=Add a reference');
   ok(!JARGON.test(await text(page, '#main')), 'References uses no jargon');
 
-  // ---- your files: add, see the parts, remove; the chat takes them too (button and drop), and a request that names one shows what goes out
+  // ---- Settings: the literature library (a folder with subfolders of articles), the folder of writing material, and your files
   page.on('dialog', (d) => d.accept());
+  await page.click('#nav a:has-text("Settings")');
+  const libCard = 'section[aria-label="Literature library"]';
+  await page.waitForSelector(libCard);
+  ok(!JARGON.test(await text(page, libCard)), 'the library card uses no jargon: ' + (JARGON.exec(await text(page, libCard)) || [''])[0]);
+  await page.fill(libCard + ' input[aria-label="Folder with your books and articles"]', `${home}-library/Literature`);
+  await page.click(libCard + ' button:has-text("Add this folder")');
+  await page.waitForSelector(libCard + ' .folder-row:has-text("Literature")');
+  ok(/No books or articles found|3 files found/.test(await text(page, libCard + ' .folder-row')), 'the folder is listed with what was found in it');
+  await page.click(libCard + ' button:has-text("Read the folders")');
+  await page.waitForSelector(libCard + ' .notice.ok:has-text("Done.")', { timeout: 60000 });
+  ok(/2 documents/.test(await text(page, libCard + ' .notice.ok')) || /3 documents/.test(await text(page, libCard + ' .notice.ok')), 'the folders are read and the card says what is in the library');
+  await page.click(libCard + ' summary:has-text("Documents")');
+  await page.waitForSelector(libCard + ' td:has-text("Soil moisture and crop yield")');
+  ok(/Details from your \.bib file/.test(await text(page, libCard)), 'a document takes its title and authors from the .bib file that describes it');
+  await page.click(libCard + ' tr:has-text("irrigation.pdf") button:has-text("See the parts")');
+  await page.waitForSelector(libCard + ' .parts li');
+  ok(/Deficit irrigation/.test(await text(page, libCard + ' .parts')), 'the parts of a document can be looked at');
+  await page.fill(libCard + ' input[type=search]', 'smith');
+  await page.waitForFunction((sel) => document.querySelectorAll(sel + ' tbody tr:not(.parts-row)').length === 1, libCard, { timeout: 5000 });
+  ok(true, 'the list of documents can be filtered');
+  await page.click(libCard + ' summary:has-text("Try a search")');
+  await page.fill(libCard + ' input[aria-label="Search the library"]', 'sampled farms capacitance probes');
+  await page.click(libCard + ' button:has-text("Search")');
+  await page.waitForSelector(libCard + ' .hit');
+  ok(/Smith and Lee 2020/.test(await text(page, libCard + ' .hit')), 'a search shows the best parts and the document they come from');
+  await shot(page, '06c-library');
+
+  // ---- your files: add, see the parts, remove; the chat takes them too (button and drop), and a request that names one shows what goes out
   const filesCard = 'section[aria-label="Your files"]';
-  ok(await page.isVisible(filesCard) && /split into small labelled parts/.test(await text(page, filesCard)), 'References has a Your files card that explains itself');
+  ok(await page.isVisible(filesCard) && /split into small labelled parts/.test(await text(page, filesCard)), 'Settings has a Your files card that explains itself');
   ok(!JARGON.test(await text(page, filesCard)), 'and uses no jargon: ' + (JARGON.exec(await text(page, filesCard)) || [''])[0]);
+  await page.fill(filesCard + ' input[aria-label="Folder with material for writing"]', `${home}-library/Material`);
+  await page.click(filesCard + ' button:has-text("Add this folder")');
+  await page.waitForSelector(filesCard + ' .folder-row:has-text("Material")');
+  await page.waitForSelector(filesCard + ' td:has-text("report.pdf")', { timeout: 30000 });
+  ok(/2 files read/.test(await text(page, filesCard + ' .folder-row')) && await page.isVisible(filesCard + ' td:has-text("interviews.md")'), 'a folder of writing material is read, PDF and notes alike');
+  await page.click(filesCard + ' .folder-row button:has-text("Remove")');
+  await page.waitForSelector(filesCard + ' td:has-text("report.pdf")', { state: 'detached', timeout: 20000 });
+  ok(true, 'and taken off the list again without touching the folder');
   await page.uncheck('input[aria-label="Send added files to Overleaf automatically"]');       // the demo's Overleaf is a stand-in
   const csv = 'model,rmse\n' + Array.from({ length: 30 }, (_, i) => `m${i % 3},${(0.5 + i / 100).toFixed(2)}`).join('\n') + '\n';
   await page.setInputFiles(filesCard + ' input[type=file]', { name: 'results.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
@@ -285,7 +321,7 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   await page.waitForFunction((n) => document.querySelectorAll('.msg.assistant .approach').length > n, sentBefore, { timeout: 25000 });
   ok(/Used parts of your files/.test(await text(page, '.thread')), 'and the answer says which parts it used');
   await shot(page, '06b-files-in-chat');
-  await page.click('#nav a:has-text("References")');
+  await page.click('#nav a:has-text("Settings")');
   await page.waitForSelector(filesCard + ' td:has-text("notes.md")');
   for (const f of ['results.csv', 'notes.md', 'scores.csv']) {
     await page.click(`${filesCard} tr:has-text("${f}") button:has-text("Remove")`);

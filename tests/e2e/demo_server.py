@@ -74,6 +74,18 @@ def main():
         common.register(str(root), name, group="Demo group" if name == "soil-yield" else None)
         names[name] = common.resolve(name)
 
+    # the author's reading and material live outside the data folder (the app refuses to read its own settings)
+    from tests.pdfmaker import make_pdf  # noqa: E402
+    from tests.test_library import BIB as LIB_BIB, IRRIGATION, SOIL  # noqa: E402
+    shelf = Path(home + "-library")
+    (shelf / "Literature" / "soil").mkdir(parents=True)
+    make_pdf(shelf / "Literature" / "soil" / "Smith et al. - 2020 - Soil moisture.pdf", SOIL, title="Soil moisture and crop yield in semi-arid farms", author="Jane Smith; Kim Lee")
+    make_pdf(shelf / "Literature" / "irrigation.pdf", IRRIGATION)
+    (shelf / "Literature" / "refs.bib").write_text(LIB_BIB)
+    (shelf / "Material").mkdir()
+    (shelf / "Material" / "interviews.md").write_text("# Interviews\n\nFarmers said the water came late in 2021 and that wells ran dry in July.\n")
+    make_pdf(shelf / "Material" / "report.pdf", [["# Field report", "The field team visited forty farms in three regions between March and June and measured soil moisture weekly."]])
+
     oa = FakeOpenAI("responses")
 
     rubric = Path(home) / "rubric" / "peer_reviewer_agent.md"

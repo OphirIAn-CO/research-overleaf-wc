@@ -125,20 +125,19 @@
     const list = h('div');
     const out = h('div', { class: 'stack' });
     const picker = h('input', { type: 'file', multiple: true, hidden: true, 'aria-hidden': 'true', tabindex: '-1', accept: FILE_TYPES });
-    const folderBox = h('textarea', { rows: '3', 'aria-label': 'Folders with your code and results', placeholder: '/Users/you/Documents/analysis' });
-    const folderOut = h('div', { class: 'stack' });
+    const folderPick = window.OLS.folderPicker({
+      label: 'Folder with material for writing', placeholder: '/Users/you/Documents/my-study',
+      detail: (f) => (f.files ? `${f.files} file${f.files === 1 ? '' : 's'} read, ${f.parts} part${f.parts === 1 ? '' : 's'}.` : 'It can be read, but no notes, tables, articles or code were found in it (subfolders are included).'),
+      save: async (paths) => { const r = await api.post('/api/files/folders', { paper: name, folders: paths }); await show(); return r.folders; },
+    });
     const modeSel = h('select', { 'aria-label': 'When requests use my files' }, [['auto', 'When I mention them (recommended)'], ['always', 'In every request'], ['never', 'Never']].map(([v, t]) => h('option', { value: v, text: t })));
     const autoSend = h('input', { type: 'checkbox', 'aria-label': 'Send added files to Overleaf automatically' });
     const parts = new Map();
 
-    const showFolders = (folders) => {
-      clear(folderOut).append(...folders.map((f) => notice(f.ok ? 'ok' : 'warn', h('span', { class: 'mono small', text: f.path }), f.ok ? ' can be read.' : ' ' + f.note)));
-    };
     async function show() {
       const r = await api.get(`/api/files?paper=${enc(name)}`);
       modeSel.value = r.use_files; autoSend.checked = r.send_uploads;
-      if (document.activeElement !== folderBox) folderBox.value = r.folders.map((f) => f.path).join('\n');
-      showFolders(r.folders);
+      folderPick.show(r.folders, r.shared);
       clear(list);
       if (!r.files.length) { list.append(h('p', { class: 'muted small', text: `No files yet. Add an article, a table or your notes, or drop them on the chat. They are saved in the ${r.folder} folder of your project.` })); return; }
       const rows = [];
@@ -190,16 +189,14 @@
       out, list,
       h('h3', { text: 'When a request may use them' }),
       h('div', { class: 'row' }, modeSel, h('span', { class: 'small secondary', text: 'Nothing goes to OpenAI unless a request uses it, and the request shows which parts.' })),
-      h('h3', { text: 'Code and results in other folders' }),
-      h('p', { class: 'small secondary', text: 'If your analysis lives outside the Overleaf project, list its folders here (one full path per line). Inside Docker, the folder must be shared first (read-only is enough, and safest): ./ui.sh folders add --read-only <folder>. Passwords, keys and hidden folders are never read.' }),
-      folderBox, folderOut,
-      guarded(h('button', { type: 'button', text: 'Save the folders' }), async () => {
-        const r = await api.post('/api/files/folders', { paper: name, folders: folderBox.value.split('\n').map((x) => x.trim()).filter(Boolean) });
-        showFolders(r.folders); toast('Saved'); await show();
-      }));
+      h('h3', { text: 'Folders with material for writing' }),
+      h('p', { class: 'small secondary', text: 'Point to a folder (its subfolders are read too) that holds what the text should draw on: interview notes, tables of results, reports and articles (PDF or Word), analysis code. The files stay where they are and are only read. A request can use the parts it needs, and new text can be drafted from them, following the advice of your writing book. Passwords, keys and hidden folders are never read.' }),
+      folderPick.el);
     show().catch((e) => clear(list).append(notice('bad', e.message)));
     return card;
   }
+
+  window.OLS.filesCard = filesCard;
 
   registerPage('references', 'References', async (box) => {
     await window.OLS.loadState();
@@ -255,7 +252,7 @@
       } catch (e) { clear(results).append(notice('bad', e.message)); throw e; }
     });
     box.append(h('section', { class: 'card', 'aria-label': 'Add by DOI' }, h('h2', { text: 'Add a reference' }), ta, h('div', { class: 'row' }, add)), results, waiting, group);
-    box.append(filesCard(name));
+    box.append(h('section', { class: 'card', 'aria-label': 'Files and library' }, h('p', { class: 'small secondary' }, 'Your own files and folders (articles, tables, notes, code) and your literature library are in ', h('a', { href: '#/settings', text: 'Settings' }), '.')));
     box.append(h('section', { class: 'card', 'aria-label': 'Mendeley' }, h('h2', { text: 'From Mendeley' }),
       h('p', { class: 'small secondary', text: proj.group ? `Pull references that are already in the Mendeley group “${proj.group}” into the bibliography (only new ones are added).` : 'Link a Mendeley group to pull references from it.' }),
       proj.group ? guarded(h('button', { type: 'button', text: 'Pull new references from Mendeley' }), async () => {

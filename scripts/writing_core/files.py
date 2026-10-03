@@ -36,6 +36,8 @@ READ = {"pdf": "pdf", "docx": "docx", "csv": "table", "tsv": "table", "json": "j
 KEEP = {"png", "jpg", "jpeg", "gif", "svg", "webp", "eps"}        # saved and sent, but not read
 UPLOAD_OK = set(READ) | KEEP
 PROJECT_OK = {k for k in READ if k not in ("pdf", "docx", "tex", "bib", "log")}   # found around the paper: data, code, notes (not LaTeX, not build output, not figure PDFs)
+MATERIAL_OK = PROJECT_OK | {"pdf", "docx"}                                        # in a folder the author chose for this paper: articles, interviews and reports are material too
+MATERIAL_BIG = {"pdf": 40 << 20, "docx": 40 << 20}                                # bytes: an article is bigger than a table
 SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv", "env", "site-packages", "build", "dist", "target"}
 SKIP_NAMES = {"manifest.txt", "changelog.txt", "license", "license.txt", "license.md", "requirements.txt"}
 SECRET_WORDS = ("secret", "password", "passwd", "credential", "token", "apikey", "api_key", "id_rsa", "private_key")
@@ -202,7 +204,7 @@ def folders(proj):
     return out
 
 
-def _walk(base, exts, limit_files, rel_to=None, skip_top=()):
+def _walk(base, exts, limit_files, rel_to=None, skip_top=(), big=None):
     """Files under `base` of the wanted kinds, without hidden or build folders, secrets or links. -> (paths, stopped_early)"""
     found, seen = [], 0
     for dirpath, dirnames, filenames in os.walk(base, followlinks=False):
@@ -215,7 +217,7 @@ def _walk(base, exts, limit_files, rel_to=None, skip_top=()):
             if fn.startswith(".") or fn.lower() in SKIP_NAMES or is_secret(fn) or ext_of(fn) not in exts or p.is_symlink():
                 continue
             try:
-                if p.stat().st_size > MAX_PROJECT_FILE:
+                if p.stat().st_size > (big or {}).get(ext_of(fn), MAX_PROJECT_FILE):
                     found.append((p, "too big"))
                     continue
             except OSError:
@@ -242,7 +244,7 @@ def discover(proj):
         notes.append("The repository has more files than I read; I stopped early.")
     for f in folders(proj):
         if f["ok"] and budget > 0:
-            found, early = _walk(f["path"], PROJECT_OK, budget)
+            found, early = _walk(f["path"], MATERIAL_OK, budget, big=MATERIAL_BIG)
             for p, note in found:
                 out.append((p, str(p), "project", note))
             budget -= len(found)
@@ -590,7 +592,8 @@ def gather(name, proj):
             continue
         rec = {"file": shown, "kind": kind, "size": st.st_size, "parts": 0, "tokens": 0, "note": note, "reads": ext_of(path.name) in READ}
         if note == "too big":
-            rec["note"] = f"Too big to read (over {MAX_PROJECT_FILE // 1_000_000} MB)." if kind == "project" else f"Too big to read (over {MAX_UPLOAD >> 20} MB)."
+            top = MATERIAL_BIG.get(ext_of(path.name), MAX_PROJECT_FILE) if kind == "project" and shown.startswith("/") else MAX_PROJECT_FILE
+            rec["note"] = f"Too big to read (over {max(1, top // 1_000_000)} MB)." if kind == "project" else f"Too big to read (over {MAX_UPLOAD >> 20} MB)."
             files.append(rec)
             continue
         if not rec["reads"]:

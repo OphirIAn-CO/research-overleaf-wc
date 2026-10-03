@@ -31,7 +31,9 @@ class Base(IsolatedHome):
         self._docker = os.environ.pop("OVERLEAF_UI_IN_DOCKER", None)
 
     def tearDown(self):
-        if self._docker is not None:
+        if self._docker is None:
+            os.environ.pop("OVERLEAF_UI_IN_DOCKER", None)
+        else:
             os.environ["OVERLEAF_UI_IN_DOCKER"] = self._docker
         super().tearDown()
 

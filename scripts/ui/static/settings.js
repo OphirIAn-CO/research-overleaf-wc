@@ -211,6 +211,10 @@
     // ---- writing book: prepared once, from the PDF in the inbox
     box.append(h('h2', { class: 'section-h', text: 'Writing book' }), await bookCard(st));
 
+    // ---- the author's reading and material
+    box.append(h('h2', { class: 'section-h', text: 'Literature library' }), window.OLS.libraryCard(paper));
+    box.append(h('h2', { class: 'section-h', text: 'Your files and writing material' }), paper ? window.OLS.filesCard(paper) : h('section', { class: 'card' }, h('p', { class: 'muted', text: 'Add a paper first; files and folders belong to a paper.' })));
+
     const health = await api.get('/api/health').catch(() => ({ issues: [] }));
     box.append(h('h2', { class: 'section-h', text: 'Advanced' }), h('section', { class: 'card', 'aria-label': 'Advanced' },
       h('p', { class: 'small secondary', text: 'You do not need these for daily work. They show what happens behind the scenes.' }),

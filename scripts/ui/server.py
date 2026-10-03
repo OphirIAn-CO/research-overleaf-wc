@@ -32,7 +32,7 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (activity, book_index, chat, chunk_book, config, events, files, gitmerge, health, latex_mask, latexbuild, openai_client, panes, paper_index, preferences,  # noqa: E402
+from writing_core import (activity, book_index, chat, chunk_book, config, events, files, gitmerge, health, latex_mask, latexbuild, library, openai_client, panes, paper_index, preferences,  # noqa: E402
                           retrieve, review, revise, rule_cards, stats, taxonomy, watermark, webview)
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -40,6 +40,7 @@ FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", 
          "/charts.js": ("charts.js", "text/javascript; charset=utf-8"), "/pages.js": ("pages.js", "text/javascript; charset=utf-8"),
          "/panes.js": ("panes.js", "text/javascript; charset=utf-8"), "/chat.js": ("chat.js", "text/javascript; charset=utf-8"),
          "/settings.js": ("settings.js", "text/javascript; charset=utf-8"), "/latex.js": ("latex.js", "text/javascript; charset=utf-8"),
+         "/library.js": ("library.js", "text/javascript; charset=utf-8"),
          "/style.css": ("style.css", "text/css; charset=utf-8")}
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
        "frame-src " + " ".join(panes.FRAME_HOSTS) + "; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -106,7 +107,7 @@ class Jobs:
 def friendly(e):
     """Message for errors we expect and can explain; None for anything else (-> logged, generic 500)."""
     known = (book_index.BookError, config.ConfigError, paper_index.IsolationError, revise.ReviseError, review.ReviewError, ValueError, FileNotFoundError,
-             watermark.WatermarkError, webview.BrowserError, latexbuild.LatexProblem)
+             watermark.WatermarkError, webview.BrowserError, latexbuild.LatexProblem, library.LibraryError)
     if isinstance(e, openai_client.OpenAIError):
         return f"OpenAI error ({e.kind}): {e}"
     if isinstance(e, known):
@@ -1335,12 +1336,27 @@ def _file_view(f):
             "words": int(f["tokens"] * 0.75), "note": f.get("note", ""), "reads": f.get("reads", True)}
 
 
+def _shared_folders():
+    """The folders shared with the app to read (ui.sh folders add --read-only): where a library or a folder of material can be taken from. In Docker the app sees nothing else."""
+    return list(dict.fromkeys(common.data_roots()))
+
+
+def _folder_views(proj, listed):
+    """The author's linked folders with what was read from each: [{path, ok, note, files, parts}]"""
+    out = []
+    for f in files.folders(proj):
+        mine = [x for x in listed if x["file"].startswith(f["path"].rstrip("/") + "/")]
+        out.append({**f, "files": len(mine), "parts": sum(x.get("parts", 0) for x in mine)})
+    return out
+
+
 def api_files(r):
     n, p = paper_ref(r.arg("paper", ""))
     paper_index.refresh(n, p, trigger="files", source="web")
     st = config.paper_settings(p)
-    return {"files": [_file_view(f) for f in files.listing(n, p)], "folders": files.folders(p), "use_files": st["use_files"], "send_uploads": st["send_uploads"],
-            "max_mb": files.MAX_UPLOAD >> 20, "folder": files.UPLOAD_DIR}
+    listed = files.listing(n, p)
+    return {"files": [_file_view(f) for f in listed], "folders": _folder_views(p, listed), "use_files": st["use_files"], "send_uploads": st["send_uploads"],
+            "max_mb": files.MAX_UPLOAD >> 20, "folder": files.UPLOAD_DIR, "shared": _shared_folders()}
 
 
 def api_files_parts(r):
@@ -1417,7 +1433,65 @@ def api_files_folders(r):
     except files.FileProblem as e:
         raise ApiError(400, str(e)) from None
     paper_index.refresh(n, p, trigger="files", source="web")
-    return {"folders": files.folders(p), "files": [_file_view(f) for f in files.listing(n, p)]}
+    listed = files.listing(n, p)
+    return {"folders": _folder_views(p, listed), "files": [_file_view(f) for f in listed]}
+
+
+# ---------------------------------------------------------------------------- the literature library (books, articles and PDFs the author keeps in folders)
+
+def _library_status():
+    st = library.status()
+    st["shared"] = _shared_folders()
+    st["in_docker"] = os.environ.get("OVERLEAF_UI_IN_DOCKER") == "1"
+    return st
+
+
+def api_library(r):
+    q = r.arg("q", "")
+    docs = library.docs(q)
+    return {"status": _library_status(), "docs": docs[:300], "matching": len(docs)}
+
+
+def api_library_folders(r):
+    raw = r.body.get("folders")
+    if not isinstance(raw, list):
+        raise ApiError(400, "folders must be a list of paths")
+    library.set_folders(raw)
+    return {"status": _library_status()}
+
+
+def api_library_index(r):
+    if library.running():
+        raise ApiError(409, "The library is being read already; wait for it to finish.")
+    if not any(f["ok"] for f in library.folders()):
+        raise ApiError(400, "None of the library's folders can be read yet. Add a folder first.")
+    rebuild = bool(r.body.get("rebuild"))
+
+    def job(progress):
+        if rebuild:
+            library.clear()
+        return library.update(progress)
+    return {"job": r.app.jobs.submit("Reading the library", job, with_progress=True, meta={"library": True})}
+
+
+def api_library_parts(r):
+    doc = r.arg("doc", "")
+    d = library.get_doc(doc)
+    if not d:
+        raise ApiError(404, "that document is not in the library")
+    return {"doc": {k: d[k] for k in ("id", "rel", "title", "authors", "year", "doi", "label", "pages", "parts", "note")}, "parts": library.parts(doc)}
+
+
+def api_library_search(r):
+    q = r.arg("q", "").strip()
+    if not q:
+        raise ApiError(400, "type what to look for")
+    res = library.query(q, k=8, budget=4000, per_doc=2)
+    paper = r.arg("paper", "")
+    if paper:
+        _, p = paper_ref(paper)
+        library.annotate(res["chunks"], p)
+    return res
 
 
 def api_overview(r):
@@ -1929,6 +2003,8 @@ ROUTES = [
     ("POST", r"^/api/browser/(quillbot|overleaf)/insert$", api_browser_insert), ("POST", r"^/api/browser/(quillbot|overleaf)/signin$", api_browser_signin),
     ("POST", r"^/api/browser/(quillbot|overleaf)/close$", api_browser_close),
     ("GET", r"^/api/panes$", api_panes), ("POST", r"^/api/test/frames$", api_test_frames),
+    ("GET", r"^/api/library$", api_library), ("POST", r"^/api/library/folders$", api_library_folders), ("POST", r"^/api/library/index$", api_library_index),
+    ("GET", r"^/api/library/parts$", api_library_parts), ("GET", r"^/api/library/search$", api_library_search),
     ("GET", r"^/api/overview$", api_overview), ("GET", r"^/api/connections$", api_connections), ("POST", r"^/api/test/openai$", api_test_openai),
     ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/test/cleaner$", api_test_cleaner),
     ("GET", r"^/api/papers/discover$", api_discover), ("POST", r"^/api/papers/add$", api_add_paper),
