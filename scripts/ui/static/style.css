@@ -394,3 +394,6 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); cur
 .warn-text { color: var(--ink); border-left: 3px solid var(--warning); padding-left: 8px; }
 .hit { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--surface-2); }
 .hit .cite { margin-left: auto; }
+.refcand { display: flex; gap: 10px; align-items: flex-start; }
+.refcand input[type=checkbox] { margin-top: 4px; flex: none; }
+.stack.tight { gap: 4px; }

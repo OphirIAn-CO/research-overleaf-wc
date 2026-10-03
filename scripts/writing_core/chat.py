@@ -299,8 +299,29 @@ def is_draft_request(text):
     return bool(draft_part(t)) or bool(re.search(r"\b(?:paragraphs?|section|sentences?|passage)\b", t, re.I))
 
 
+# "find references about X": look for new literature on the internet (as opposed to "what do my articles say", which searches the author's own library)
+_REF_NOUN = r"(?:references?|citations?|sources?|literature|papers?|articles?|studies|study|publications?|research|evidence)"
+_REF_VERB = r"(?:find|search(?:\s+for)?|look\s*(?:up|for)|get|suggest|recommend|locate|fetch|retrieve|dig\s+up|bring|give|show|list|propose|need|want)"
+_REFS_ASK = re.compile(rf"\b{_REF_VERB}\b(?:\W+\w+){{0,6}}?\W+{_REF_NOUN}\b", re.I)
+_REFS_EDIT = {"improve", "rewrite", "rephrase", "paraphrase", "revise", "edit", "tighten", "shorten", "polish", "fix", "proofread", "simplify", "smooth", "reorder", "reorganize"}
+_REFS_NOISE = re.compile(rf"\b(?:please|can you|could you|would you|i|we|need|want|find|search(?:ing)?|for|look\s*(?:up|for)?|get|me|us|some|any|few|good|relevant|suitable|appropriate|recent|new|more|additional|"
+                         rf"further|online|internet|web|google|scholar|about|regarding|concerning|related\s+to|that|which|support|supports|supporting|the|a|an|to|and|suggest|recommend|locate|fetch|"
+                         rf"retrieve|propose|list|give|show|bring|add|cite|{_REF_NOUN})\b", re.I)
+
+
+def is_refs_request(text):
+    t = text or ""
+    return bool(_REFS_ASK.search(t)) and not (set(re.findall(r"[a-z]+", t.lower())) & _REFS_EDIT) and not is_draft_request(t)
+
+
+def refs_topic(text):
+    """'find me some references about how violence affects pipelines in Colombia' -> 'how violence affects pipelines in Colombia'"""
+    t = _REFS_NOISE.sub(" ", text or "")
+    return re.sub(r"^(?:on|in|of)\s+", "", re.sub(r"\s+", " ", re.sub(r"[?!.:;,]+", " ", t)).strip())
+
+
 def intent(text):
-    """-> 'refs' | 'review' | 'help' | 'library' | 'draft' | 'edit'"""
+    """-> 'refs' | 'review' | 'help' | 'library' | 'refsearch' | 'draft' | 'edit'"""
     if find_dois(text):
         return "refs"
     if _HELP.match(text or ""):
@@ -309,6 +330,8 @@ def intent(text):
         return "review"
     if _LIBRARY_ASK.search(text or "") and not (set(taxonomy.words((text or "").lower())) & (_INTENT_WORDS | _LIBRARY_EDIT)):
         return "library"
+    if is_refs_request(text):
+        return "refsearch"
     if is_draft_request(text):
         return "draft"
     return "edit"
@@ -614,14 +637,56 @@ CHIPS = [("Make it clearer", "Make this clearer and easier to follow."), ("More 
 
 # ------------------------------------------------------------------------------------------- the request, ready to send
 
-def plan(name, proj, instruction, chunk_ids, book_id=None, facts=""):
+def plan(name, proj, instruction, chunk_ids, book_id=None, facts="", online=None):
     """Prepare the request without sending anything. -> what the chat shows ("2 passages, about 900 tokens") plus the hash that proves
-    exactly this payload is what gets sent."""
-    res = revise.run(name, proj, instruction, chunk_ids=chunk_ids, book_id=book_id, dry_run=True, source="web", facts=facts)
-    return {"instruction": instruction, "facts": (facts or "").strip()[:3000], "chunk_ids": chunk_ids, "units": res["units"], "passages": res["passages"], "est_tokens_in": res["est_tokens_in"],
+    exactly this payload is what gets sent. online: DOIs of references found online that the author picked for this request."""
+    res = revise.run(name, proj, instruction, chunk_ids=chunk_ids, book_id=book_id, dry_run=True, source="web", facts=facts, online=online)
+    return {"instruction": instruction, "facts": (facts or "").strip()[:3000], "chunk_ids": chunk_ids, "online": list(online or []), "units": res["units"], "passages": res["passages"], "est_tokens_in": res["est_tokens_in"],
             "est_cost": res["est_cost"], "manuscript_tokens": res["manuscript_tokens"], "model": res["model"], "tips": len(res["rules"]),
             "payload_hash": res["payload_hash"], "warnings": res["warnings"], "book": res["book"], "parts": res["parts"], "sources": res.get("sources", []),
             "library": res.get("library", []), "pictures": res.get("pictures", [])}
+
+
+# ------------------------------------------------------------------------------------------- finding references: about which text?
+
+def refs_place(text, topic):
+    """Does a request for references point at a place in the paper ("for the introduction", "the claim in the first paragraph") instead of naming a subject?"""
+    from . import scholar
+    return bool(_float_request(text) or _para_request(text) or (topic.strip() and len(scholar.terms(topic)) <= 2))
+
+
+def passage_text(name, proj, chunk_ids, limit=2500):
+    """The plain text of the chosen pieces of the manuscript (LaTeX commands left in, they are only used to choose search words), shortest first piece by piece up to `limit` characters."""
+    tex = {c["id"]: c for c in paper_index.list_chunks(name, proj)["chunks"] if c["kind"] == "tex"}
+    out, total = [], 0
+    for i in chunk_ids:
+        cid, a, b = revise.split_range_id(i)
+        c = tex.get(cid)
+        if not c:
+            continue
+        lines = _lines(proj, c["file"])
+        text = "\n".join(lines[(a or c["line_start"]) - 1:(b or c["line_end"])])
+        out.append(text)
+        total += len(text)
+        if total >= limit:
+            break
+    return "\n\n".join(out)[:limit]
+
+
+def refs_context(name, proj, text, chunk_ids=None, last_ids=None):
+    """What a request for references is about. -> {topic, passage, chunk_ids, where}
+    The subject the author wrote, and, when the request points at a place in the paper (or the author ticked some text), that text and where it is, so the references can later be
+    used there."""
+    topic = refs_topic(text)
+    if not chunk_ids and not refs_place(text, topic):
+        return {"topic": topic, "passage": "", "chunk_ids": [], "where": ""}
+    try:
+        u = understand(name, proj, text, chunk_ids=chunk_ids, last_ids=last_ids)
+    except (ValueError, FileNotFoundError):
+        u = {"status": "empty"}
+    if u["status"] != "ready":
+        return {"topic": topic, "passage": "", "chunk_ids": [], "where": ""}
+    return {"topic": topic, "passage": passage_text(name, proj, u["chunk_ids"]), "chunk_ids": u["chunk_ids"], "where": u["title"]}
 
 
 # ------------------------------------------------------------------------------------------- peer review: which part?

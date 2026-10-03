@@ -17,6 +17,8 @@ and never saves or sends anything you have not approved.
   files and every statement says which file it rests on. ([Details](docs/guide.md#writing-new-text-from-your-sources))
 - **Use your own reading.** Point it to the folder where you keep books and articles (subfolders are fine). It reads them once, on your computer, and can answer *"what do my articles say about irrigation timing?"*
   with the page, cite them in your text, and add them to your bibliography. ([Details](docs/guide.md#your-reading-the-literature-library))
+- **Find references on the internet and cite them.** *"Find references about armed conflict and pipeline attacks in Colombia"* searches the web and two open scholarly indexes, shows each paper with its abstract and DOI, and adds
+  the ones you tick to your bibliography; a suggestion can then be written again with them, citing them from their abstracts. ([Details](docs/guide.md#finding-references-on-the-internet-and-citing-them))
 - **Peer review.** *"Peer review my paper"* scores it against a rubric and lists the problems; **Fix this** turns a comment into an ordinary suggestion. Nothing changes by itself.
 - **References.** Paste a DOI: it goes into your `.bib`, your Mendeley group and Overleaf, and you get the `\cite{...}` to use. (Also from your phone, through a Telegram bot.)
 - **See your paper.** Your LaTeX source and the compiled PDF side by side, on your computer; QuillBot and Overleaf in panes next to the chat for the tone pass.

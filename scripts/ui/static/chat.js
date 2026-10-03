@@ -656,6 +656,64 @@
         h('p', { class: 'small secondary', text: 'To use these in your text, ask for it: for example "add support from my library to the introduction".' }));
     }
 
+    // ---- references found on the internet: tick the ones to add to the bibliography; when they were asked for a text, have that text written again with them
+    const SOURCE_NAMES = { web: 'The web search', openalex: 'OpenAlex', crossref: 'Crossref' };
+    async function pickRefs(m, dois) {
+      if (!dois.length) throw new Error('Tick at least one reference first.');
+      if (st.busy) throw new Error('A request is still running. Wait for it to finish.');
+      const r = await api.post('/api/chat/refs/pick', { paper, id: st.cid, message: m.id, dois });
+      await watch(r.job);
+    }
+    async function useRefs(ctx, dois) {                                   // the same request as before, now with the abstracts of these references to cite
+      const extra = { online: dois, facts: ctx.facts || undefined, issue: ctx.issue || undefined };
+      Object.assign(extra, ctx.draft ? { redraft: ctx.revises } : { chunk_ids: ctx.chunk_ids, revises: ctx.revises || undefined });
+      await send(ctx.request || 'Support the claims of this text with citations from the sources provided.', extra);
+    }
+    function refsearchBubble(m) {
+      const d = m.data, ctx = d.ctx || {}, added = d.added || {}, cmd = d.command || '\\cite';
+      const picks = new Set();
+      const copy = (text) => h('button', { type: 'button', class: 'small', text: 'Copy ' + text, onclick: async () => { try { await navigator.clipboard.writeText(text); toast('Copied'); } catch (e) { toast('Select it and copy by hand'); } } });
+      const how = d.how === 'model' ? 'ChatGPT chose these words from your text' : d.how === 'given' ? 'These are the words you gave' : 'From your request';
+      const kids = [h('p', { class: 'small secondary', text: `${how}: ${(d.queries || []).map((q) => '"' + q + '"').join(' · ')}. Searched on the internet from this computer; only those words were sent.` })];
+      (d.tried || []).filter((t) => !t.ok).forEach((t) => kids.push(h('p', { class: 'small secondary', text: `${SOURCE_NAMES[t.source] || t.source} did not answer${t.note ? ' (' + t.note + ')' : ''}.` })));
+      const count = h('span', { class: 'small muted', text: 'Tick the ones you want' });
+      const sync = () => { count.textContent = picks.size ? plural(picks.size, 'reference') + ' ticked' : 'Tick the ones you want'; };
+      const row = (c) => {
+        const have = c.cite_key ? { key: c.cite_key, how: 'already in your bibliography' } : added[c.doi] ? { key: added[c.doi].key, how: 'added to your bibliography' } : null;
+        const box = h('input', { type: 'checkbox', 'aria-label': 'Choose ' + c.label });
+        box.addEventListener('change', () => { if (box.checked) picks.add(c.doi); else picks.delete(c.doi); sync(); });
+        const who = (c.authors || []).slice(0, 3).join('; ') + ((c.authors || []).length > 3 ? ' et al.' : '');
+        return h('div', { class: 'hit refcand' }, box, h('div', { class: 'stack tight grow' },
+          h('div', null, h('strong', { text: c.title })),
+          h('div', { class: 'small secondary', text: [who, c.year, c.venue].filter(Boolean).join(' · ') }),
+          h('div', { class: 'row tight small' }, h('a', { href: 'https://doi.org/' + c.doi, target: '_blank', rel: 'noopener noreferrer', text: 'doi.org/' + c.doi }),
+            c.cited_by ? h('span', { class: 'muted', text: `cited ${c.cited_by} times` }) : null),
+          c.abstract ? h('details', null, h('summary', { class: 'small', text: 'Abstract' }), h('div', { class: 'small', text: c.abstract })) : h('div', { class: 'small muted', text: 'No abstract was available.' }),
+          have ? h('div', { class: 'row tight' }, h('code', { class: 'cite', text: `${cmd}{${have.key}}` }), copy(`${cmd}{${have.key}}`), h('span', { class: 'small secondary', text: have.how })) : null));
+      };
+      if (!(d.candidates || []).length) kids.push(notice('warn', 'I found no papers with a DOI for those words. Try other words below, or paste the DOI of a paper you know.'));
+      else {
+        (d.candidates || []).forEach((c) => kids.push(row(c)));
+        const useIt = (ctx.chunk_ids && ctx.chunk_ids.length) || ctx.draft;
+        kids.push(h('div', { class: 'row actions' },
+          guarded(h('button', { type: 'button', class: useIt ? '' : 'primary', text: 'Add the ticked to my bibliography' }), async () => { await pickRefs(m, [...picks]); }),
+          useIt ? guarded(h('button', { type: 'button', class: 'primary', text: ctx.revises ? 'Add them and write the suggestion again with them' : 'Add them and cite them in the text' }), async () => {
+            const dois = [...picks]; await pickRefs(m, dois); await useRefs(ctx, dois);
+          }) : null, h('span', { class: 'grow' }), count));
+        kids.push(h('p', { class: 'small muted', text: 'I only know what the search and the paper\'s own page say about each one: title, authors, abstract. I do not have the paper itself, so read it before you rely on what it says. Nothing is added to your bibliography until you tick it.' }));
+        if (!useIt) kids.push(h('p', { class: 'small muted', text: 'To cite them in your text afterwards, ask for it, for example: "support the first paragraph of the introduction with these references".' }));
+      }
+      const words = h('input', { type: 'text', value: (d.queries || [])[0] || '', 'aria-label': 'Words to search for', class: 'grow' });
+      kids.push(h('div', { class: 'row' }, h('span', { class: 'small secondary', text: 'Other words:' }), words, guarded(h('button', { type: 'button', class: 'small', text: 'Search again' }), async () => {
+        const w = words.value.trim();
+        if (!w) throw new Error('Write what to look for.');
+        await send('Find references about ' + w, Object.assign({ find_refs: true, words: w, chunk_ids: ctx.chunk_ids, facts: ctx.facts || undefined, issue: ctx.issue || undefined }, ctx.draft ? { redraft: ctx.revises } : { revises: ctx.revises || undefined }));
+      })));
+      if ((d.others || []).length) kids.push(h('details', null, h('summary', { class: 'small', text: `Other pages the search found (no DOI, so I cannot add them): ${d.others.length}` }),
+        h('ul', { class: 'small' }, d.others.map((o) => h('li', null, h('a', { href: o.url, target: '_blank', rel: 'noopener noreferrer', text: o.title || o.url }))))));
+      return assistant(...kids);
+    }
+
     // ---- the suggestion
     function resultBubble(m) {
       const holder = h('div', null, busy('Loading the suggestion...'));
@@ -689,7 +747,12 @@
       if ((p.pictures || []).length) holder.append(h('p', { class: 'small secondary', text: 'Looked at your figures: ' + p.pictures.map((x) => x.name).join(', ') + '.' }));
       if ((p.library || []).length) {
         const cited = [...new Set(p.units.flatMap((u) => u.added_cites || []))];
-        holder.append(h('p', { class: 'small secondary', text: 'Used from your library: ' + [...new Set(p.library.map((x) => `${x.label} (${x.where})`))].join('; ') + '.' + (cited.length ? ` Citations added: ${cited.join(', ')}.` : '') }));
+        const own = p.library.filter((x) => !x.online), found = p.library.filter((x) => x.online);
+        const bits = [];
+        if (own.length) bits.push('Used from your library: ' + [...new Set(own.map((x) => `${x.label} (${x.where})`))].join('; ') + '.');
+        if (found.length) bits.push('Used from the references you found (their abstracts only): ' + [...new Set(found.map((x) => x.label))].join('; ') + '.');
+        if (cited.length) bits.push(`Citations added: ${cited.join(', ')}.`);
+        holder.append(h('p', { class: 'small secondary', text: bits.join(' ') }));
       }
       if (m.data.steps && m.data.steps.length) holder.append(h('details', null, h('summary', { text: 'What I did' }), stepList(m.data.steps)));
       (p.warnings || []).forEach((w) => holder.append(notice('warn', w)));
@@ -701,6 +764,22 @@
 
       // each passage: the explanation, then the changes
       const answers = [];                                   // [{q, box}]: what the author replies to the model's questions
+      let moreBox = null;                                   // the "anything to add or change" box of the discuss panel, once it has been opened
+      const composeFacts = () => {
+        const parts = [];
+        answers.forEach(({ q, box }) => { const a = box.value.trim(); if (a) parts.push(`Question: ${q}\nAnswer: ${a}`); });
+        const extra = moreBox ? moreBox.value.trim() : '';
+        if (extra) parts.push('Further instructions from the author: ' + extra);
+        return parts.join('\n\n');
+      };
+      const CITE_Q = /\b(citations?|cite|references?|sources?|literature|evidence|stud(?:y|ies)|publications?)\b/i;
+      // look for references on the internet for this place, using the question, what the author answered and the text itself
+      const findRefs = (label, q) => guarded(h('button', { type: 'button', class: 'small', text: label,
+        title: 'Searches the internet for papers about this, from this computer. You choose which ones to add to your bibliography; nothing is added by itself.' }), async () => {
+        if (st.busy) throw new Error('A request is still running. Wait for it to finish, then press the button again.');
+        await send(q ? 'Find references for this question: ' + q : 'Find references for: ' + (p.instruction || '').slice(0, 160),
+          Object.assign({ find_refs: true, chunk_ids: m.data.chunk_ids || [], facts: composeFacts(), issue: m.data.issue }, p.kind === 'draft' ? { redraft: p.id } : { revises: p.id }));
+      });
       p.units.forEach((u) => {
         if (u.status === 'failed') { holder.append(notice('bad', `${u.section_path}: ${u.error_plain || u.error || 'failed'}`)); return; }
         // on a wide screen the explanation sits beside the changes instead of above them (see .unit in the stylesheet)
@@ -716,12 +795,20 @@
             const box = h('textarea', { rows: '2', class: 'answer', 'aria-label': 'Your answer to: ' + q, placeholder: 'Your answer (leave it empty to skip this question). Then press "Answer and revise" below.' });
             answers.push({ q, box });
             nq.append(box);
+            if (CITE_Q.test(q)) nq.append(h('div', { class: 'row' }, findRefs('Find references for this', q)));
           }
           why.append(nq);
         });
         const bad = (u.validators || []).filter((v) => !v.ok);
         if (bad.length) why.append(notice('warn', 'Heads up: ', bad.map((v) => v.detail || v.name).join('; ')));
-        if ((u.added_cites || []).length) why.append(notice('ok', h('strong', { text: 'Citations from your library: ' }), u.added_cites.join(', '), '. They stand in your bibliography already. Check each one supports the claim it sits next to.'));
+        if ((u.added_cites || []).length) {
+          const keyOf = (c) => (/\{([^}]*)\}/.exec(c) || [])[1];
+          const fresh = (p.bib_adds || []).filter((a) => u.added_cites.some((c) => keyOf(c) === a.key));
+          const online = (p.library || []).some((x) => x.online && u.added_cites.some((c) => keyOf(c) === x.cite_key));
+          why.append(notice('ok', h('strong', { text: online ? 'Citations from the references you found: ' : 'Citations from your library: ' }), u.added_cites.join(', '),
+            fresh.length ? `. ${plural(fresh.length, 'entry', 'entries')} (${fresh.map((a) => a.key).join(', ')}) will be added to your bibliography when you save, so the citation and its reference are saved together.` : '. They stand in your bibliography already.',
+            online ? ' A reference you found online is cited from its abstract only: read the paper to make sure it says what the sentence says.' : ' Check each one supports the claim it sits next to.'));
+        }
         if ((u.from_files || []).length) why.append(notice('warn', h('strong', { text: 'Numbers that came from your files: ' }), u.from_files.join(', '), '. Check them against the source before you keep the change.'));
         u.hunks.forEach((hk) => changes.append(hunkCard(hk, sel, () => { count.textContent = `${sel.size} of ${nHunks} changes selected`; }, locked, p.rule_labels, srcLabels)));
         if ((u.basis || []).length) {
@@ -784,13 +871,8 @@
         const req = h('textarea', { rows: '3', 'aria-label': isComment ? 'The reviewer\'s comment' : 'What I was asked to do' });
         req.value = p.instruction || '';
         const more = h('textarea', { rows: '3', 'aria-label': 'Anything to add or change', placeholder: 'For example: the criteria were wells with at least six months of production; keep it to two sentences; do not mention the vendor.' });
-        const compose = () => {
-          const parts = [];
-          answers.forEach(({ q, box }) => { const a = box.value.trim(); if (a) parts.push(`Question: ${q}\nAnswer: ${a}`); });
-          const extra = more.value.trim();
-          if (extra) parts.push('Further instructions from the author: ' + extra);
-          return parts.join('\n\n');
-        };
+        moreBox = more;
+        const compose = composeFacts;
         const go = guarded(h('button', { type: 'button', class: 'primary', text: 'Make a new suggestion' }), async () => {
           const facts = compose();
           const request = req.value.trim();
@@ -807,8 +889,9 @@
       };
       const discussBtn = h('button', { type: 'button', class: answers.length ? 'primary' : '', text: answers.length ? 'Answer and revise' : 'Discuss and revise',
         title: 'Answer the questions, change what was asked, or say what to add. You get a new suggestion for the same place that replaces this one.', onclick: openDiscuss });
+      const refsBtn = findRefs('Find references', '');
       if (!nHunks) {
-        if (p.status === 'proposed' || p.status === 'no_changes') holder.append(h('div', { class: 'row actions' }, discussBtn), discuss);
+        if (p.status === 'proposed' || p.status === 'no_changes') holder.append(h('div', { class: 'row actions' }, discussBtn, refsBtn), discuss);
         return;
       }
       const unclean = !st.data.can_apply;             // no text-cleaning service: the text is saved exactly as written, and the card says so
@@ -825,7 +908,7 @@
         guarded(h('button', { type: 'button', class: 'primary', text: 'Save in my files' }), approve(false)),
         guarded(h('button', { type: 'button', text: 'Save and send to Overleaf' }), approve(true)),
         h('button', { type: 'button', text: 'Polish in QuillBot or by hand', title: 'Opens a panel above the message box: take the text to QuillBot, bring the result back, check it and save', onclick: () => openBanner(p, 1) }),
-        discussBtn,
+        discussBtn, refsBtn,
         guarded(h('button', { type: 'button', class: 'ghost', text: 'Not now' }), async () => { await api.post('/api/proposal/record', { paper, id: p.id, accepted: [], rejected: 'all', chat: st.cid }); await redraw(); await reload(); }),
         h('span', { class: 'grow' }), count);
       holder.append(copies, actions, discuss);
@@ -852,7 +935,9 @@
       try {
         const r = await api.post('/api/proposal/approve', Object.assign({ paper, id: p.id, chat: st.cid }, body));
         if (r.ok === false) return r;
-        toast('Saved in ' + r.files.join(', '));
+        const addedRefs = ((r.applied || {}).bibliography || {}).added || [];
+        toast('Saved in ' + r.files.join(', ') + (addedRefs.length ? '; added to your bibliography: ' + addedRefs.map((a) => a.key).join(', ') : ''));
+        (((r.applied || {}).bibliography || {}).warnings || []).forEach((w) => into.append(notice('warn', w)));
         if (r.push) showGit(into, r);
         if (window.OLS.panes && window.OLS.panes.refreshText) window.OLS.panes.refreshText(true);
         if (r.push && r.push.sent && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend(r.push);
@@ -1017,6 +1102,7 @@
       if (m.kind === 'result') return resultBubble(m);
       if (m.kind === 'refs') return refsBubble(m);
       if (m.kind === 'library') return libraryBubble(m);
+      if (m.kind === 'refsearch') return refsearchBubble(m);
       if (m.kind === 'review_plan') return reviewPlanBubble(m);
       if (m.kind === 'review') return reviewBubble(m);
       if (m.kind === 'review_done') return reviewDoneBubble(m);

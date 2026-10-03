@@ -138,29 +138,19 @@ def retry_pending(bib_path):
     return {"tried": len(items), "done": len(items) - len(left), "left": len(left)}
 
 
-def add_reference(doi, bib_path, source="cli", mirror="auto", push=False, push_message=None):
-    """DOI -> references.bib, and on to Mendeley when the paper is linked to a group. Never raises on user-level problems.
-    mirror: 'auto' = the paper's linked Mendeley group (if the author wants it), a group name, or None/False = not this time.
-    -> dict: status added|duplicate|error|invalid, message (one readable block), and for added/duplicate: doi, key, cite, title, authors, year,
-       journal, bibtex, mendeley {state: added|failed|not_linked|off, group, detail}, push {ok, text} | None"""
-    m = DOI_RE.search(urllib.parse.unquote(doi))
-    if not m:
-        return {"status": "invalid", "message": "No DOI found in that message."}
-    doi = m.group(0).rstrip(".,;)")
+def prepare_entry(doi, text, taken=(), fetch=None):
+    """DOI -> (bibtex, key): fetched from doi.org, styled like the rest, under a key that is free in `text` (the bibliography) and in `taken` (keys planned but not written yet)."""
+    bib, key = restyle((fetch or fetch_bibtex)(doi))
+    base, n = key, 2
+    while re.search(r"\{" + re.escape(key) + ",", text) or key in taken:  # same author+year+word collision
+        key = base + chr(96 + n); n += 1
+    return bib.replace("{" + base + ",", "{" + key + ",", 1), key
+
+
+def commit_entry(bib_path, bib, key, doi, source="cli", mirror="auto", push=False, push_message=None):
+    """Write one prepared entry to the bibliography, mirror it to Mendeley, log it. -> the dict add_reference returns (status 'added')."""
     bib_path = Path(bib_path)
     text = bib_path.read_text()
-    if doi.lower() in text.lower():
-        key = _existing_key(text, doi)
-        return {"status": "duplicate", "doi": doi, "key": key, "cite": f"\\cite{{{key}}}" if key else None, "message": f"Already in references.bib: {doi}"}
-    try:
-        bib, key = restyle(fetch_bibtex(doi))
-    except Exception as e:  # 404 = unknown DOI, else network
-        return {"status": "error", "doi": doi, "message": f"Could not resolve {doi}: {e}"}
-    n = 2
-    base = key
-    while re.search(r"\{" + re.escape(key) + ",", text):  # same author+year+word collision
-        key = base + chr(96 + n); n += 1
-    bib = bib.replace("{" + base + ",", "{" + key + ",", 1)
     bib_path.write_text(text.rstrip("\n") + "\n\n" + bib + "\n")
     title, authors, year, journal = _field(bib, "title"), _field(bib, "author"), _field(bib, "year"), _field(bib, "journal") or _field(bib, "booktitle")
     out = {"status": "added", "doi": doi, "key": key, "cite": f"\\cite{{{key}}}", "title": title or "?", "authors": authors.replace(" and ", "; "), "year": year,
@@ -196,6 +186,27 @@ def add_reference(doi, bib_path, source="cli", mirror="auto", push=False, push_m
         msg += "\n" + t
     out["message"] = msg
     return out
+
+
+def add_reference(doi, bib_path, source="cli", mirror="auto", push=False, push_message=None):
+    """DOI -> references.bib, and on to Mendeley when the paper is linked to a group. Never raises on user-level problems.
+    mirror: 'auto' = the paper's linked Mendeley group (if the author wants it), a group name, or None/False = not this time.
+    -> dict: status added|duplicate|error|invalid, message (one readable block), and for added/duplicate: doi, key, cite, title, authors, year,
+       journal, bibtex, mendeley {state: added|failed|not_linked|off, group, detail}, push {ok, text} | None"""
+    m = DOI_RE.search(urllib.parse.unquote(doi))
+    if not m:
+        return {"status": "invalid", "message": "No DOI found in that message."}
+    doi = m.group(0).rstrip(".,;)")
+    bib_path = Path(bib_path)
+    text = bib_path.read_text()
+    if doi.lower() in text.lower():
+        key = _existing_key(text, doi)
+        return {"status": "duplicate", "doi": doi, "key": key, "cite": f"\\cite{{{key}}}" if key else None, "message": f"Already in references.bib: {doi}"}
+    try:
+        bib, key = prepare_entry(doi, text)
+    except Exception as e:  # 404 = unknown DOI, else network
+        return {"status": "error", "doi": doi, "message": f"Could not resolve {doi}: {e}"}
+    return commit_entry(bib_path, bib, key, doi, source=source, mirror=mirror, push=push, push_message=push_message)
 
 
 def add(doi, bib_path, push=False, group=None, source="cli"):

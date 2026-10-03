@@ -909,15 +909,95 @@ def cite_command(proj):
     return "\\" + (n.most_common(1)[0][0] if n else "cite")
 
 
-def relevant(proj, instruction, passage="", mode="auto", k=4, budget=1600):
-    """The parts of the library a request should see, or None. In "auto" a request uses the library when it asks for sources, citations or the author's reading; "always"
-    searches for every request; "never" for none. -> {chunks: [hit with in_bib / cite_key], why}"""
-    if mode == "never" or (mode != "always" and not wants(instruction)) or not _db_path().exists():
+_ENTRY_CACHE = {}                    # doi -> (when, bibtex or the error): what doi.org said, so the request and the later save agree on a citation key
+ENTRY_TTL, ENTRY_FAIL_TTL = 3600, 60
+
+
+def _fetched(doi):
+    import doi_bot
+    hit = _ENTRY_CACHE.get(doi)
+    if hit and time.time() - hit[0] < (ENTRY_TTL if isinstance(hit[1], str) else ENTRY_FAIL_TTL):
+        if isinstance(hit[1], str):
+            return hit[1]
+        raise hit[1]
+    try:
+        bib = doi_bot.fetch_bibtex(doi)
+    except Exception as e:  # noqa: BLE001
+        _ENTRY_CACHE[doi] = (time.time(), e)
+        raise
+    _ENTRY_CACHE[doi] = (time.time(), bib)
+    return bib
+
+
+def _bib_text(proj):
+    try:
+        return (Path(proj["path"]) / proj["bib"]).read_text(encoding="utf-8", errors="replace")
+    except (OSError, KeyError):
+        return ""
+
+
+def plan_entry(proj, chunk, text, taken=()):
+    """The bibliography entry a library document would get, without writing anything. -> {key, bibtex, doi, title, doc} or None when it has neither a record nor a DOI that doi.org knows."""
+    import doi_bot
+    d = get_doc(chunk["doc"])
+    if not d:
         return None
-    res = query(f"{instruction} {passage[:800]}", k=k, budget=budget, per_doc=2)
-    if not res["chunks"]:
+    try:
+        if d["bibtex"]:
+            key, n = d["bib_key"], 1
+            while re.search(r"@\w+\s*\{\s*" + re.escape(key) + r"\s*,", text) or key in taken:
+                n += 1
+                key = f"{d['bib_key']}{chr(96 + n) if n <= 27 else n}"
+            bib = d["bibtex"].replace("{" + d["bib_key"] + ",", "{" + key + ",", 1)
+        elif d["doi"]:
+            bib, key = doi_bot.prepare_entry(d["doi"], text, taken, fetch=_fetched)
+        else:
+            return None
+    except Exception:  # noqa: BLE001 - no network, an unknown DOI: this document simply cannot be cited now
         return None
-    return {"chunks": annotate(res["chunks"], proj), "why": "always" if mode == "always" else "asked", "command": cite_command(proj)}
+    return {"key": key, "bibtex": bib, "doi": d["doi"] or "", "title": d["title"] or chunk.get("title", ""), "doc": chunk["doc"], "label": chunk.get("label", "")}
+
+
+def offer_new(proj, lib):
+    """Documents of the author's library that are not in the paper's bibliography yet but could be (a record or a DOI): give each the key it will have there, so the request can cite
+    it. The entries wait in lib["bib_adds"] and are written to the bibliography only when the text that cites them is saved."""
+    adds = lib.setdefault("bib_adds", [])
+    text = _bib_text(proj)
+    citable = {c["cite_key"] for c in lib["chunks"] if c.get("cite_key")}
+    for c in lib["chunks"]:
+        if c.get("cite_key") or c.get("online"):
+            continue
+        prior = next((a for a in adds if a["doc"] == c["doc"]), None)
+        if prior is None:
+            if len(citable) >= MAX_CITABLE:
+                continue
+            prior = plan_entry(proj, c, text, {a["key"] for a in adds})
+            if not prior:
+                continue
+            adds.append(prior)
+        c.update(cite_key=prior["key"], pending=True, can_add=False)
+        citable.add(prior["key"])
+    return lib
+
+
+def relevant(proj, instruction, passage="", mode="auto", k=4, budget=1600, facts="", online=()):
+    """The parts of the library a request should see, or None. In "auto" a request uses the library when it asks for sources, citations or the author's reading (in the
+    request or in the author's answers to the model's questions); "always" searches for every request; "never" for none. Also the references found online and added to this
+    paper's bibliography that fit the request, and always the ones the author picked (online: their DOIs).
+    -> {chunks: [hit with in_bib / cite_key], bib_adds: [entries that go to the bibliography when the citing text is saved], why, command}"""
+    from . import scholar
+    ask = f"{instruction}\n{facts}".strip()
+    forced = scholar.recall(proj, "", force=online) if online else []
+    if not forced and (mode == "never" or (mode != "always" and not wants(ask))):
+        return None
+    text = f"{ask} {passage[:800]}"
+    chunks = annotate(query(text, k=k, budget=budget, per_doc=2)["chunks"], proj) if mode != "never" and _db_path().exists() else []
+    have = {c["cite_key"] for c in forced + chunks if c.get("cite_key")}
+    found = [] if mode == "never" else [c for c in scholar.recall(proj, text, k=3) if c["cite_key"] not in have and c["id"] not in {x["id"] for x in forced}]
+    every = forced + found + chunks
+    if not every:
+        return None
+    return offer_new(proj, {"chunks": every, "why": "picked" if forced else "always" if mode == "always" else "asked", "command": cite_command(proj)})
 
 
 def request_block(lib):
@@ -932,6 +1012,10 @@ def request_block(lib):
                 tag = f"LX{FIRST_TAG + len(tags)}"
                 tags[tag] = (lib.get("command") or "\\cite") + "{" + c["cite_key"] + "}"
         how = f"Cite it with [[{tag}]]." if tag else "Not in the paper's bibliography: it can inform the wording but must not be cited."
+        if c.get("online"):
+            how += (" Only its abstract is known, found online: state nothing the abstract does not say." if "abstract" in c["where"] else
+                    " Only its title is known, found online: do not state what it found or concluded.")
         lines.append(f"[S{n}] {c['label']}, {c['where']}. {how}\n{c['text']}")
-        shown.append({"id": c["id"], "doc": c["doc"], "label": c["label"], "where": c["where"], "tokens": c["tokens"], "cite_key": c.get("cite_key", ""), "tag": tag, "title": c["title"]})
+        shown.append({"id": c["id"], "doc": c["doc"], "label": c["label"], "where": c["where"], "tokens": c["tokens"], "cite_key": c.get("cite_key", ""), "tag": tag, "title": c["title"],
+                      "online": bool(c.get("online")), "pending": bool(c.get("pending"))})
     return "\n\n".join(lines), tags, shown

@@ -234,7 +234,7 @@ def _target_words(part, text):
     return {"abstract": 200, "results": 450, "discussion": 450, "methods": 350, "introduction": 400, "background": 450, "conclusion": 250, "limitations": 200}.get(part, 250)
 
 
-def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, use_analysis=None, use_library=None, book_id=None):
+def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, use_analysis=None, use_library=None, book_id=None, online=None):
     """Everything the request is made of, without sending it. -> dict used by plan() and run()"""
     facts = (facts or "").strip()[:3000]
     if not instruction or not instruction.strip():
@@ -280,12 +280,13 @@ def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, 
         src["images"] = [i for i in src["images"] if i["name"] in kept]
     sources_text, shown_sources = _sources_block(src if src and src["chunks"] else None)
 
-    lib, lib_text, lib_tags, shown_library = None, "", {}, []
+    lib, lib_text, lib_tags, shown_library, bib_adds = None, "", {}, [], []
     l_mode = use_library or settings.get("use_library") or "auto"
-    if l_mode != "never":
-        lib = library.relevant(proj, instruction, before[-400:] + " " + _topic(name, proj), mode=l_mode)
+    if l_mode != "never" or online:
+        lib = library.relevant(proj, instruction, before[-400:] + " " + _topic(name, proj), mode=l_mode, facts=facts, online=online or ())
         if lib:
             lib_text, lib_tags, shown_library = _library_block(lib)
+            bib_adds = [a for a in lib.get("bib_adds", []) if a["key"] in {x["cite_key"] for x in shown_library if x["tag"]}]
     float_tags, float_lines = _float_tags(proj, tex)
     tags = {**lib_tags, **float_tags}
     tag_lines = "\n".join(float_lines + [f"[[{x['tag']}]] = a citation of {x['ref']}" for x in shown_library if x["tag"]])
@@ -299,16 +300,16 @@ def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, 
     est_out = int(target * 1.6) + 250
     est_cost = revise._price(cfg, {"input_tokens": est_in, "output_tokens": est_out})
     return {"cfg": cfg, "system": system, "user": user, "body": body, "images": pictures, "tags": tags, "offered": sorted(tags), "context": "\n".join([sources_text, lib_text, facts, before, after]).strip(),
-            "rule_ids": rule_ids, "book": book_id, "warnings": warnings, "sources": shown_sources, "library": shown_library,
+            "rule_ids": rule_ids, "book": book_id, "warnings": warnings, "sources": shown_sources, "library": shown_library, "bib_adds": bib_adds, "online": list(online or []),
             "pictures": [{"name": x["name"], "kb": max(1, x["bytes"] // 1024)} for x in pictures], "payload_hash": payload_hash, "est_tokens_in": est_in, "est_cost": est_cost,
             "model": cfg["model"], "where": where, "label": label, "target_words": target, "part": part, "anchor": anchor, "instruction": instruction, "facts": facts, "scope": scope,
             "cites": sorted(lib_tags), "floats": len(float_tags), "surround": before + "\n" + after}
 
 
-def plan(name, proj, instruction, anchor, part="", facts="", book_id=None):
+def plan(name, proj, instruction, anchor, part="", facts="", book_id=None, online=None):
     """What would be sent, without sending it. -> the numbers the chat shows and the hash that confirms exactly this request"""
-    p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id)
-    return {"instruction": instruction, "facts": p["facts"], "anchor": anchor, "part": part, "label": p["label"], "where": p["where"], "est_tokens_in": p["est_tokens_in"], "est_cost": p["est_cost"],
+    p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id, online=online)
+    return {"instruction": instruction, "facts": p["facts"], "online": p["online"], "anchor": anchor, "part": part, "label": p["label"], "where": p["where"], "est_tokens_in": p["est_tokens_in"], "est_cost": p["est_cost"],
             "model": p["model"], "tips": len(p["rule_ids"]), "book": p["book"], "payload_hash": p["payload_hash"], "warnings": p["warnings"], "sources": p["sources"], "library": p["library"],
             "pictures": p["pictures"], "target_words": p["target_words"], "payload": openai_client.redact(p["body"])}
 
@@ -347,17 +348,17 @@ def _paragraph_hunks(unit_id, draft, mapping, basis, rule_ids, default_reason):
     return segs, hunks
 
 
-def run(name, proj, instruction, anchor, part="", facts="", confirm=None, source="web", progress=None, book_id=None, dry_run=False):
+def run(name, proj, instruction, anchor, part="", facts="", confirm=None, source="web", progress=None, book_id=None, dry_run=False, online=None):
     """Draft the text and store it as a proposal. `confirm` must be the payload_hash of plan() for the same request (the author has seen what goes out).
     -> {"status": "proposed" | "failed" | "no_changes" | "preview", "proposal": {...}}"""
     steps = revise.Steps(progress)
     t0 = time.time()
     steps.start("read", "Reading what comes before the new text")
-    p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id)
+    p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id, online=online)
     steps.finish("read", f"for {p['label'].lower()}, {p['where']}", label=f"Read the place for the {p['label'].lower()}")
     n_src = len([s for s in p["sources"] if not s["picture"]])
     steps.add("sources", "Looking at your analysis, notes and reading", detail=f"{n_src} part{'s' if n_src != 1 else ''} of your files, {len(p['pictures'])} picture{'s' if len(p['pictures']) != 1 else ''}, "
-              f"{len(p['library'])} from your library; {len(p['rule_ids'])} tip{'s' if len(p['rule_ids']) != 1 else ''} from the book")
+              f"{len(p['library']) - sum(1 for x in p['library'] if x.get('online'))} from your library{(', %d found online' % sum(1 for x in p['library'] if x.get('online'))) if any(x.get('online') for x in p['library']) else ''}; {len(p['rule_ids'])} tip{'s' if len(p['rule_ids']) != 1 else ''} from the book")
     if dry_run or confirm != p["payload_hash"]:
         return {"status": "preview", "payload_hash": p["payload_hash"], "est_tokens_in": p["est_tokens_in"], "sources": p["sources"]}
     cfg = p["cfg"]
@@ -440,7 +441,7 @@ def run(name, proj, instruction, anchor, part="", facts="", confirm=None, source
               else ("asked again once, then passed" if unit["retries"] else "all supported by the sources"), state="failed" if unit["status"] == "failed" else "done")
     pid = time.strftime("%Y%m%d-%H%M%S") + "-" + p["payload_hash"][:4]
     proposal = {"id": pid, "created": time.time(), "status": "proposed", "kind": "draft", "paper": name, "instruction": instruction, "part": [part] if part else [], "book": p["book"], "rules": p["rule_ids"],
-                "sources": p["sources"], "library": p["library"], "pictures": p["pictures"], "facts": p["facts"], "model": cfg["model"], "source": source, "warnings": list(p["warnings"]),
+                "sources": p["sources"], "library": p["library"], "bib_adds": p["bib_adds"], "pictures": p["pictures"], "facts": p["facts"], "model": cfg["model"], "source": source, "warnings": list(p["warnings"]),
                 "units": [unit], "usage": {"input_tokens": totals["tokens_in"], "output_tokens": totals["tokens_out"]}, "payload_hash": p["payload_hash"], "draft": {"anchor": anchor, "part": part}}
     if unit.get("no_pictures"):
         proposal["warnings"].append("The model you use would not take pictures, so your figures were left out and this draft rests on the text parts only.")

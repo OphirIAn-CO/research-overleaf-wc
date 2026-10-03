@@ -463,6 +463,11 @@ refresh token; if that also fails, re-run `authorize`.
 
 ## Search & cite a new paper (not yet in Mendeley)
 
+The web app does the same from its chat ("find references about ..." searches the web and the OpenAlex and Crossref indexes, shows each paper with its abstract and DOI, and adds the
+ones the author ticks to the bibliography; a suggestion can then cite them from their abstracts, and documents of the author's library that the bibliography does not have yet are
+added to it when the text that cites them is saved). In Claude Code use `WebSearch`/`WebFetch` as below. Either way: show the candidate first, never add one silently, never invent a citation,
+and remember that an abstract is not the paper.
+
 When the user wants a paper cited that isn't already in their Mendeley
 library:
 

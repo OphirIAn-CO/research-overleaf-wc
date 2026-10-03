@@ -36,7 +36,7 @@ class Static(unittest.TestCase):
             urls = re.findall(r"""['"`](https?://[^'"`\s]+)""", self.code(p))
             # the only addresses in the code are the sites shown in the side panes and an Overleaf hint
             for u in urls:
-                self.assertRegex(u, r"^https?://(quillbot\.com|www\.overleaf\.com|platform\.openai\.com|www\.w3\.org/2000/svg|host\.docker\.internal:PORT)", f"{p.name}: {u}")   # the last two are an SVG namespace and an input placeholder, not requests
+                self.assertRegex(u, r"^https?://(quillbot\.com|www\.overleaf\.com|platform\.openai\.com|doi\.org/|www\.w3\.org/2000/svg|host\.docker\.internal:PORT)", f"{p.name}: {u}")   # doi.org/ is the link on a reference that the author clicks; the last two are an SVG namespace and an input placeholder, not requests
 
 
     def test_the_chat_never_rebuilds_what_is_already_on_screen_and_never_appends_a_null(self):

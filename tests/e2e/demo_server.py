@@ -63,6 +63,9 @@ def main():
         return ("@article{x,\n author={%s},\n title={Soil Water Dynamics Under Irrigation},\n year={2021},\n journal={Demo Journal},\n doi={%s}\n}"
                 % ("Lee, K." if len(seen) == 1 else f"Other{len(seen)}, K.", d))
     doi_bot.fetch_bibtex = fake_bibtex
+    from writing_core import scholar  # noqa: E402
+    from tests.test_scholar import Net, routes  # noqa: E402
+    scholar.fetch = Net(routes())          # the internet search answers from fixed pages: a search page, a journal page, OpenAlex and Crossref
     doi_bot.to_mendeley = lambda bib, doi, bib_path, group: f"Mendeley: added to {group}."
     doi_bot.git_sync = lambda bib_path, message: (True, "Pushed to Overleaf.")
     papers_dir = Path(home) / "papers"
@@ -109,6 +112,8 @@ def main():
             return REPORT          # a review asks for free text, not the JSON of an edit
         from writing_core import openai_client
         user = openai_client.user_text(body)
+        if (((body.get("text") or {}).get("format")) or {}).get("name") == "queries":      # the search words for finding references
+            return {"queries": ["armed conflict attacks on oil pipelines Colombia", "violence and the security of energy infrastructure"]}
         if (((body.get("text") or {}).get("format")) or {}).get("name") == "draft":     # new text from the author's analysis, resting on the sources it was given
             m = re.search(r"\[\[(LX\d+)\]\] = the number of Table 1", user)
             return {"approach": "The first paragraph compares the models by their error; the second says how training went. Both rest on your results files.",
@@ -128,7 +133,7 @@ def main():
         t = t.replace("Each region has a distinct climate and soil.", "Each region has its own climate and soil.")
         t = t.replace("The study was conducted in three regions that differ in rainfall and elevation.", "The study covers three regions that differ in rainfall and elevation.")
         return {"approach": "The opening sentences were passive and repeated the same idea. I made the actor explicit and joined the two sentences so the paragraph reads in one line of thought.",
-                "revised_text": t, "questions": (["What was the response rate?"] if "farmers" in t else []) + (["What specific criteria were used for the wells?"] if "reviewer comment" in user and not answered else []), "changes": [
+                "revised_text": t, "questions": (["What was the response rate?"] if "farmers" in t else []) + (["What specific criteria were used for the wells?"] if "reviewer comment" in user and not answered else []) + (["Which citations would support the claim about security and violence?"] if "security" in user and not answered else []), "changes": [
             {"before": "The study was conducted in three regions that differ in rainfall and elevation.", "after": "The study covers three regions that differ in rainfall and elevation.", "reason": "Active voice reads faster.", "rule": "B:mini:c05.s01.k01"},
             {"before": "Each region has a distinct climate and soil.", "after": "Each region has its own climate and soil.", "reason": "Shorter and plainer.", "rule": "B:mini:c02.s01.k01"},
             {"before": "Informed consent was obtained from all farmers.", "after": "All farmers gave informed consent.", "reason": "Use the active voice when the actor matters.", "rule": "B:mini:c05.s01.k01"},

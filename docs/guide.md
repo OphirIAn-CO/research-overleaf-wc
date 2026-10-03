@@ -135,6 +135,27 @@ Point the app at the folder where you keep books, articles and PDFs (**Settings 
 - **From the terminal and Claude Code.** `writing.py library --add PATH --index`, `--search "text" [--paper NAME]`, and the `library_query` tool.
 - **In Docker** the app sees only the folders you share with it: `./ui.sh folders add --read-only ~/Documents/Literature`, then `./ui.sh down && ./ui.sh up`. Folders shared that way are offered as buttons under the folder box.
 
+## Finding references on the internet, and citing them
+
+Ask for them in the chat: *"find references about how armed conflict affects energy infrastructure in Colombia"*, *"suggest sources for the first paragraph of the introduction"*, *"search for papers on pipeline attacks"*.
+The app looks on the open web the way you would (a web search, then the page of each paper that comes up, which carries its title, authors, year, journal, abstract and DOI) and asks two open scholarly
+indexes, OpenAlex and Crossref, as a second source. Only a few search words leave your computer. You get a card with each paper, its abstract, a link to it by DOI and, for a paper already in your
+bibliography, its `\cite`.
+
+- **Nothing is added by itself.** Tick the papers you want and press **Add the ticked to my bibliography**: they go into your `.bib`, your Mendeley group and Overleaf like a pasted DOI, and the card gives the `\cite` to paste.
+- **From a question in a suggestion.** When the model asks which citations would justify a statement (or the reviewer comment you are answering asks for support), the question has a **Find references for this**
+  button, and the suggestion has a general **Find references** button. The search words are chosen from the comment, the question, your answer to it and the text itself. Tick the papers and press
+  **Add them and write the suggestion again with them**: the suggestion is written again with their abstracts, and cites them where its sentences are supported. The first suggestion is marked as replaced.
+- **What the model knows about a paper found online is its abstract.** The app never has the paper itself. The suggestion says so next to the citation ("cited from its abstract only: read the paper"), the model is told to say
+  no more than the abstract says, and a citation is only ever one of those you added; an invented one is refused like any other.
+- **Later requests can cite them too.** Once added, a request that asks for sources or citations ("support the sampling statement with a source about armed groups attacking pipelines, and cite it") is offered the
+  references of this paper that fit it. The author's own answers count as a request: if you answer a question with "add a citation of how violence affects infrastructure", the references (and your library) are used.
+- **Your uploaded reading is cited and referenced the same way, even when the paper's bibliography does not have it yet.** A document of your library with a DOI (or an entry in a `.bib` file there) can be cited right away; the
+  suggestion says "will be added to your bibliography when you save", and the entry is written, with the Mendeley copy, in the same click that saves the text, only if the saved text really cites it.
+- **Switch it off** per paper: **Settings > Literature library > Search the internet for ...: Never**.
+- **If the search finds nothing or cannot connect**, the card or message says so, and says which of the web search, OpenAlex and Crossref did not answer. Search pages sometimes refuse automated requests or change
+  their layout; the two indexes are the backstop. Change the words with **Search again**, or paste the DOI of a paper you know. A page found on the web that names no DOI is listed apart and cannot be added.
+
 ## Your analysis: code and results
 
 ![The Code and results card in Settings](images/code-and-results.png)
@@ -348,6 +369,9 @@ your book), or use **Book check** in the book library (Settings, Advanced).
 | `ui.sh up` says Docker is not running | Start Docker Desktop, wait until it says it is running, try again. |
 | The web app does not list a paper | It only sees papers registered when it started: `ui.sh down`, then `ui.sh up`. |
 | "This app isn't signed in to Overleaf yet" | Paste your Overleaf Git token in **Settings > Overleaf** (the Docker app cannot use your Mac keychain), then press **Test**. |
+| **Test** says the paper "was cloned from GitHub" | The paper's folder came from a GitHub repository (even if that repository is synced with Overleaf), so Pull and Send go to GitHub, where an Overleaf token cannot be used. Save the project's Overleaf web address for the paper (Settings, "Overleaf project address"), press **Test**, then **Clone it from Overleaf**: it makes a copy that comes from Overleaf, in a folder shared with the app (`./ui.sh folders add ~/Documents/overleaf` once), and adds it as a paper. Or keep GitHub and, after Send, use Overleaf's own *Menu > Sync > Pull GitHub changes into Overleaf*. |
+| **Test** says the address has "a password (or token) written into it" | The paper was cloned with `https://git:TOKEN@git.overleaf.com/...`. Git uses that and ignores the token saved in Settings, so a new token cannot help. Press **Remove it from the address**. |
+| **Test** says "Overleaf received the token and refused it" | The token is wrong, was copied with a character missing (Overleaf shows it once), or was made in an Overleaf account that cannot open this project. Make a new one, paste it, press **Save**, then **Test**. The message includes a Terminal check that tells the token from the app. |
 | The book gives odd advice | **Settings > Advanced > Book library > Book check** shows, for each part of a paper, which pages would be used. If the wrong chapter shows up, tell Claude which part and what you expected. A scanned (image-only) PDF needs OCR first. |
 | "Approve and save" is missing | The text-cleaning service is not set in Settings, so the button is **Let Claude apply it**. |
 | The model was not found / the key was rejected | Use **Test** in **Settings > OpenAI**. It says which one it is, and never shows the key. |
