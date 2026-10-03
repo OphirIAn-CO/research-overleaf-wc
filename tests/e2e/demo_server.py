@@ -34,6 +34,16 @@ from tests.helpers import make_paper  # noqa: E402
 TOKEN = "demo-token-" + "x" * 30
 
 
+
+def tiny_png(w=120, h=80):
+    """A small valid PNG (a grey gradient) made by hand, so the demo paper's figure exists without any imaging library."""
+    import struct
+    import zlib
+    raw = b"".join(b"\x00" + bytes((x * 2 + y * 3) % 200 + 30 for x in range(w)) for y in range(h))
+    def chunk(t, d):
+        return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8799)
@@ -58,6 +68,7 @@ def main():
     for name, tweak in (("soil-yield", lambda s: s), ("traffic-gnn", lambda s: s.replace("Soil Moisture Effects on Crop Yield", "Graph Networks for Traffic")
                                                          .replace("Crop yield depends on water and on soil.", "Traffic forecasting depends on graph structure."))):
         root = make_paper(papers_dir, name, tweak(MAIN), bib=BIB, extra={"sections/methods.tex": tweak(METHODS)})
+        (root / "map.png").write_bytes(tiny_png())             # the figure the paper includes, so a compile has a picture to find
         git(root, "add", "-A")
         git(root, "commit", "-q", "-m", "init")
         common.register(str(root), name, group="Demo group" if name == "soil-yield" else None)

@@ -99,7 +99,7 @@ class Launcher(IsolatedHome):
         for need in ("xvfb", "xclip", "chromium", "python-xlib", "pillow", "websocket-client"):
             self.assertIn(need, d, need)
         self.assertIn("bookworm", d, "a Debian release Playwright supports")
-        self.assertIn('IMAGE="overleaf-skill-ui:2"', UI_SH, "a new image tag, so an old image without the browser is rebuilt")
+        self.assertIn('IMAGE="overleaf-skill-ui:3"', UI_SH, "a new image tag, so an old image without LaTeX is rebuilt")
 
     def mount_arg(self, src, dst, *extra):
         r = subprocess.run(["bash", "-c", f'UI_SH_SOURCE_ONLY=1 source "{ROOT / "ui.sh"}"; mount_arg "$@"', "x", src, dst, *extra],
@@ -113,6 +113,38 @@ class Launcher(IsolatedHome):
         self.assertEqual(self.mount_arg(p, p), f'type=bind,"source={p}","target={p}"')
         self.assertEqual(self.mount_arg("/a/scripts", "/app", "readonly"), 'type=bind,"source=/a/scripts","target=/app",readonly')
         self.assertEqual(self.mount_arg('/odd, name/a"b:c', '/odd, name/a"b:c'), 'type=bind,"source=/odd, name/a""b:c","target=/odd, name/a""b:c"')
+
+    def resource_note(self, info, host="x86_64"):
+        """What `ui.sh` says about the share of the computer Docker has, given what `docker info` and `uname -m` report."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            for name, body in (("docker", f'#!/usr/bin/env bash\n[ "$1" = info ] && echo "{info}"\nexit 0\n'), ("uname", f'#!/usr/bin/env bash\necho {host}\n')):
+                f = Path(d) / name
+                f.write_text(body)
+                f.chmod(0o755)
+            r = subprocess.run(["bash", "-c", f'UI_SH_SOURCE_ONLY=1 source "{ROOT / "ui.sh"}"; resource_note'], capture_output=True, text=True,
+                               env={"PATH": f"{d}:/usr/bin:/bin", "HOME": d})
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_it_says_so_when_docker_was_given_too_little_of_the_computer(self):
+        self.assertEqual(self.resource_note("8 17179869184 aarch64", "arm64"), "")                      # plenty
+        few = self.resource_note("2 8000000000 aarch64", "arm64")
+        self.assertIn("only 2 CPU(s)", few)
+        self.assertIn("Settings > Resources", few)
+        self.assertIn("only 4 CPU(s) and 3 GB", self.resource_note("4 3900000000 aarch64", "arm64"))
+        self.assertIn("emulation", self.resource_note("8 17179869184 x86_64", "arm64"))                   # an Intel image on an Apple chip is slow
+        self.assertEqual(self.resource_note("", "arm64"), "")                                           # nothing to go on: stay quiet
+        self.assertEqual(self.resource_note("garbage", "arm64"), "")
+
+    def test_the_containers_keep_their_logs_small_and_the_app_has_a_memory_cap_and_room_for_a_compile(self):
+        self.assertEqual(UI_SH.count("--log-driver local --log-opt max-size=10m --log-opt max-file=3"), 2)     # the app and the browser: a long session never fills the disk
+        self.assertIn("--memory 2g", UI_SH)
+        self.assertIn("-e OLS_BUILD_DIR=/tmp/ols-build", UI_SH)                 # compiled output stays off the (slow) shared folders
+        self.assertRegex(UI_SH, r"--tmpfs /tmp:rw,mode=1777,size=640m")
+        d = (ROOT / "ui" / "Dockerfile").read_text()
+        for need in ("latexmk", "texlive-latex-extra", "texlive-publishers", "biber", "ARG WITH_LATEX"):
+            self.assertIn(need, d, need)
 
     def test_sourcing_the_script_for_tests_runs_nothing(self):
         r = subprocess.run(["bash", "-c", f'UI_SH_SOURCE_ONLY=1 source "{ROOT / "ui.sh"}"; echo sourced'], capture_output=True, text=True)

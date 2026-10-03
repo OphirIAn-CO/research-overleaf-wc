@@ -304,7 +304,10 @@ readable before/after to keep or set aside; the same chat also does a peer revie
 reading the whole paper) and adds a pasted DOI to the bibliography, the paper's Mendeley group and
 Overleaf. QuillBot and Overleaf open inside the app, next to the chat, in a built-in browser that runs in its own Docker
 container (no access to keys or papers; the author's optional QuillBot/Overleaf sign-in is in the data folder's
-`sites.json`, filled in only on request), and so can the paper text. Suggestions the author
+`sites.json`, filled in only on request), and so can the paper text. A LaTeX pane shows the paper's source and the PDF
+compiled on the author's computer (`latexmk`, no shell escape, output outside what is sent to Overleaf); what you save to
+the files appears there. Peer-review comments are followed one by one in the chat (completed, set aside, skipped) until all are
+handled. Suggestions the author
 hands over ("Let Claude apply it") arrive as `chatgpt_revise` proposals, as described above.
 When the user asks to "open the UI / app / dashboard", run `ui.sh up` and give them the printed
 URL (it carries a one-time access token; do not repeat it anywhere else).

@@ -32,19 +32,20 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (activity, book_index, chat, chunk_book, config, events, files, gitmerge, health, latex_mask, openai_client, panes, paper_index, preferences,  # noqa: E402
+from writing_core import (activity, book_index, chat, chunk_book, config, events, files, gitmerge, health, latex_mask, latexbuild, openai_client, panes, paper_index, preferences,  # noqa: E402
                           retrieve, review, revise, rule_cards, stats, taxonomy, watermark, webview)
 
 STATIC = Path(__file__).resolve().parent / "static"
 FILES = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
          "/charts.js": ("charts.js", "text/javascript; charset=utf-8"), "/pages.js": ("pages.js", "text/javascript; charset=utf-8"),
          "/panes.js": ("panes.js", "text/javascript; charset=utf-8"), "/chat.js": ("chat.js", "text/javascript; charset=utf-8"),
-         "/settings.js": ("settings.js", "text/javascript; charset=utf-8"),
+         "/settings.js": ("settings.js", "text/javascript; charset=utf-8"), "/latex.js": ("latex.js", "text/javascript; charset=utf-8"),
          "/style.css": ("style.css", "text/css; charset=utf-8")}
 CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; "
        "frame-src " + " ".join(panes.FRAME_HOSTS) + "; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 MAX_BODY = 1 << 20
 UPLOAD_BODY = (files.MAX_UPLOAD * 4) // 3 + 8192      # a file arrives as base64 inside the JSON body
+LATEX_BODY = latexbuild.MAX_FILE * 2 + 8192             # a saved .tex or .bib file arrives as JSON text (quotes and newlines are escaped, so it can grow)
 PID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
 LOOPBACK = {"127.0.0.1", "localhost", "::1", "[::1]"}
 
@@ -105,7 +106,7 @@ class Jobs:
 def friendly(e):
     """Message for errors we expect and can explain; None for anything else (-> logged, generic 500)."""
     known = (book_index.BookError, config.ConfigError, paper_index.IsolationError, revise.ReviseError, review.ReviewError, ValueError, FileNotFoundError,
-             watermark.WatermarkError, webview.BrowserError)
+             watermark.WatermarkError, webview.BrowserError, latexbuild.LatexProblem)
     if isinstance(e, openai_client.OpenAIError):
         return f"OpenAI error ({e.kind}): {e}"
     if isinstance(e, known):
@@ -936,6 +937,8 @@ def api_browser_signin(r):
 
 
 BROWSER_GET = re.compile(r"^/api/browser/(quillbot|overleaf)/frame$")
+LATEX_GET = re.compile(r"^/latex/(page|pdf)$")
+QUIET = re.compile(r"^/(api/browser/(quillbot|overleaf)/(frame|input)|api/jobs/[0-9a-f]+|latex/page|healthz)$")
 
 
 # ---------------------------------------------------------------------------- chat
@@ -1803,7 +1806,90 @@ def api_handoff(r):
     return revise.handoff(n, p, _pid(r), accept=r.body.get("accept", "all"), source="web")
 
 
+# ---------------------------------------------------------------------------- the LaTeX workspace: the paper's source files and the PDF made from them, on this computer
+
+_LATEX_LOCK = threading.Lock()
+
+
+def _tex_paper(r):
+    return paper_ref(r.arg("paper", "") or (r.body or {}).get("paper", ""))
+
+
+def _latex(fn, *a, **k):
+    try:
+        return fn(*a, **k)
+    except latexbuild.LatexProblem as e:
+        raise ApiError(409 if e.code in ("stale", "unavailable") else 400, str(e), code=e.code) from None
+
+
+def api_latex_status(r):
+    n, p = _tex_paper(r)
+    ok, why = latexbuild.available()
+    out = {"available": ok, "why": why, "tools": {k: bool(v) for k, v in latexbuild.tools().items()}, "main": None, "files": latexbuild.list_files(p), "changed": latexbuild.changed(p),
+           "last": latexbuild.last(p) if ok else None}
+    run = r.app.jobs.running(latex=n)
+    out["job"] = run[0]["id"] if run else None
+    try:
+        out["main"] = latexbuild.main_file(p)
+    except latexbuild.LatexProblem as e:
+        out["no_main"] = str(e)
+    return out
+
+
+def api_latex_file(r):
+    n, p = _tex_paper(r)
+    rel = r.arg("file", "")
+    out = _latex(latexbuild.read_file, p, rel)
+    out["ranges"] = latexbuild.changed(p).get(out["file"], [])
+    return out
+
+
+def api_latex_save(r):
+    """The author's own edit of a source file. Refused (and nothing written) when the file changed on disk since it was opened."""
+    n, p = _tex_paper(r)
+    rel, text, base = str(r.body.get("file", "")), r.body.get("text"), str(r.body.get("base") or "")
+    out = _latex(latexbuild.write_file, p, rel, text, base)
+    try:
+        paper_index.refresh(n, p, trigger="after_edit", source="web")          # the chat finds the new text; cheap, only what changed is read again
+    except Exception:  # noqa: BLE001  (a bonus: the file is already saved)
+        pass
+    out["ranges"] = latexbuild.changed(p).get(rel, [])
+    return out
+
+
+def api_latex_compile(r):
+    """Compile in the background; asking again while it runs returns the same job, so a burst of saves makes one compile at a time."""
+    n, p = _tex_paper(r)
+    with _LATEX_LOCK:
+        run = r.app.jobs.running(latex=n)
+        if run:
+            return {"job": run[0]["id"], "already": True}
+        ok, why = latexbuild.available()
+        if not ok:
+            raise ApiError(409, why, code="unavailable")
+        return {"job": r.app.jobs.submit(f"Compiling {n}", lambda: latexbuild.compile(p), meta={"latex": n})}
+
+
+def api_latex_forward(r):
+    n, p = _tex_paper(r)
+    line = r.body.get("line")
+    if not isinstance(line, int) or line < 1:
+        raise ApiError(400, "line must be a number")
+    return _latex(latexbuild.forward, p, str(r.body.get("file", "")), line)
+
+
+def api_latex_inverse(r):
+    n, p = _tex_paper(r)
+    try:
+        page, x, y = int(r.body.get("page")), float(r.body.get("x")), float(r.body.get("y"))
+    except (TypeError, ValueError):
+        raise ApiError(400, "page, x and y must be numbers") from None
+    return _latex(latexbuild.inverse, p, page, x, y)
+
+
 ROUTES = [
+    ("GET", r"^/api/latex/status$", api_latex_status), ("GET", r"^/api/latex/file$", api_latex_file), ("POST", r"^/api/latex/save$", api_latex_save),
+    ("POST", r"^/api/latex/compile$", api_latex_compile), ("POST", r"^/api/latex/forward$", api_latex_forward), ("POST", r"^/api/latex/inverse$", api_latex_inverse),
     ("GET", r"^/api/state$", api_state), ("POST", r"^/api/papers/active$", api_set_active),
     ("POST", r"^/api/papers/(pull|status|sync)$", None), ("POST", r"^/api/papers/resolve$", api_resolve), ("POST", r"^/api/papers/conflict/handoff$", api_conflict_handoff),
     ("GET", r"^/api/paper/([^/]+)/outline$", api_paper_outline), ("POST", r"^/api/paper/([^/]+)/refresh$", api_paper_refresh),
@@ -1865,7 +1951,10 @@ class Handler(BaseHTTPRequestHandler):
         return self.server.app
 
     def log_request(self, code="-", size="-"):  # the default line carries the full request target, i.e. ?token=...: log the path only
-        sys.stderr.write("%s %s %s -> %s\n" % (time.strftime("%H:%M:%S"), self.command, urlparse(self.path).path, code))
+        path = urlparse(self.path).path
+        if str(code) in ("200", "204") and (self.headers.get("X-Poll") or QUIET.match(path)):
+            return                                   # pictures of the built-in browser and polling answer many times a second: a line each would only fill the log
+        sys.stderr.write("%s %s %s -> %s\n" % (time.strftime("%H:%M:%S"), self.command, path, code))
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s %s\n" % (time.strftime("%H:%M:%S"), (fmt % args if args else fmt).split("?")[0]))
@@ -1876,7 +1965,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        if "Cache-Control" not in (headers or {}):
+            self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Security-Policy", CSP)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
@@ -1928,7 +2018,7 @@ class Handler(BaseHTTPRequestHandler):
             if self.headers.get("X-Requested-With") != "ols":
                 return self._err(403, "missing X-Requested-With")
             n = int(self.headers.get("Content-Length") or 0)
-            if n > (UPLOAD_BODY if path == "/api/files/upload" else MAX_BODY):
+            if n > (UPLOAD_BODY if path == "/api/files/upload" else LATEX_BODY if path == "/api/latex/save" else MAX_BODY):
                 return self._err(413, "request too large" if path != "/api/files/upload" else f"That file is over the {files.MAX_UPLOAD >> 20} MB limit.")
             raw = self.rfile.read(n) if n else b""
             try:
@@ -1940,6 +2030,9 @@ class Handler(BaseHTTPRequestHandler):
         bm = BROWSER_GET.match(path) if method == "GET" else None
         if bm:
             return self._browser_picture(bm.group(1), query)
+        lm = LATEX_GET.match(path) if method == "GET" else None
+        if lm:
+            return self._latex_file(lm.group(1), query)
         if method == "GET" and path in FILES:
             name, ctype = FILES[path]
             return self._send(200, (STATIC / name).read_bytes(), ctype)
@@ -1978,6 +2071,30 @@ class Handler(BaseHTTPRequestHandler):
         except webview.BrowserError as e:
             return self._err(409, str(e))
         return self._send(204, b"", "text/plain") if jpeg is None else self._send(200, jpeg, "image/jpeg", {"X-Seq": str(seq)})
+
+    def _latex_file(self, kind, query):
+        """A page of the compiled PDF as a picture, or the PDF itself to keep. The page address carries the PDF's id, so a picture is never mixed up with a newer compile
+        and the browser may keep it."""
+        if self.command == "HEAD":
+            return self._err(405, "method not allowed")
+        try:
+            n, p = paper_ref(query.get("paper", [""])[0])
+            if kind == "pdf":
+                if not latexbuild.info(p).get("pdf"):
+                    return self._err(404, "There is no PDF yet. Compile first.")
+                name = re.sub(r"[^A-Za-z0-9._-]", "_", Path(latexbuild.main_file(p)).stem) + ".pdf"
+                return self._send(200, latexbuild.pdf_path(p).read_bytes(), "application/pdf", {"Content-Disposition": f'attachment; filename="{name}"'})
+            want = query.get("id", [""])[0]
+            if want and latexbuild.info(p).get("id") != want:
+                return self._err(409, "That version of the PDF is out of date.")
+            img = latexbuild.page_image(p, int(query.get("n", ["1"])[0]), int(query.get("dpi", ["110"])[0]))
+            return self._send(200, img.read_bytes(), "image/jpeg", {"Cache-Control": "private, max-age=86400, immutable"})
+        except ApiError as e:
+            return self._err(e.status, str(e))
+        except latexbuild.LatexProblem as e:
+            return self._err(400, str(e), code=e.code)
+        except (ValueError, OSError) as e:
+            return self._err(400, f"I could not draw that page ({e.__class__.__name__}).")
 
     def do_GET(self):
         self._handle("GET")

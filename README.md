@@ -139,7 +139,7 @@ If you haven't touched that paper for a while, the bot asks which paper first.
 ### 6. (Recommended) The chat app
 
 ```bash
-~/.claude/skills/research-overleaf-wc/install.sh ui      # builds the Docker image once (a few minutes: it includes the built-in browser)
+~/.claude/skills/research-overleaf-wc/install.sh ui      # builds the Docker image once (several minutes, about 1.5 GB: it includes LaTeX and the built-in browser)
 ~/.claude/skills/research-overleaf-wc/ui.sh up           # starts it and opens your browser
 ~/.claude/skills/research-overleaf-wc/ui.sh down         # stops it (it also stops itself when idle)
 ```
@@ -162,6 +162,27 @@ Everything else is set up **inside the app**, in **Settings** (nothing to edit b
 
 Then just talk to it. The pages are **Chat**, **References**, **Activity** and **Settings**; the papers and your chats are in the sidebar.
 The chat uses the width of your window. In an answer the explanation, questions and warnings sit on top (side by side when there is room), and the before/after comparison below them uses the full width of the card, **Now** and **Suggested** side by side; only a card narrower than about 520 pixels stacks them. The comparison's text is sized to the card, not the window, so it stays readable with a pane open beside the chat.
+
+**The LaTeX pane: your paper's source and its PDF, on this computer (like TeXShop).** Press **LaTeX** above the chat. On the left is the
+paper's source (`.tex` and `.bib`, a file menu at the top), coloured, with line numbers; on the right is the PDF made from it, drawn page
+by page and sharp at any zoom. Nothing is sent anywhere to make it: the paper is compiled by `latexmk` on your computer (in the Docker
+image, or with your own MacTeX/TeX Live when you run the app without Docker), and the PDF and the other files LaTeX writes stay out of
+what is sent to Overleaf.
+- **Edit and compile.** Type in the source. A moment after you stop, it is saved and compiled (**Auto** switches that off; **Recompile**
+  or Cmd/Ctrl + Enter does it at once, Cmd/Ctrl + S saves). Errors are listed in words with their file and line; click one to go there
+  (the line is marked red). Undefined citations and references, and missing packages, are listed too. The bibliography runs by itself.
+- **The assistant's changes show up in the source.** When it saves a suggestion (or you get the latest from Overleaf), the file that
+  changed is shown, the changed lines are highlighted for a few seconds, and the PDF is made again. A green mark in the margin shows
+  every line changed here since the last send, i.e. what **Send to Overleaf** will put into Overleaf. Sending itself is unchanged.
+- **Source and PDF lead to each other (SyncTeX).** **Show in PDF**, or Cmd/Ctrl + click a line, finds the line in the PDF; double-click
+  the PDF to go to its source line. **Source / Both / PDF** chooses what to show; the pane stacks the two when it is narrow. **-**, **+**,
+  **Fit**, the page arrows and **Download** work on the PDF.
+- **Safe by design.** A file you are editing is never overwritten behind your back: if the assistant saved a suggestion to the same file
+  meanwhile, you are asked whether to load the new version or keep yours. Only the paper's own text files can be opened. The compiler runs
+  without shell access (`-no-shell-escape`), may not write outside the paper, and is stopped after three minutes
+  (`OLS_TEX_TIMEOUT` seconds) with everything it started.
+- **No LaTeX on the computer?** The source still shows and can be edited; the pane says what to install (MacTeX, or rebuild the Docker
+  image with `./ui.sh build`; `OLS_WITH_LATEX=0 ./ui.sh build` leaves LaTeX out to save about 1 GB). The Overleaf pane stays available.
 
 **QuillBot and Overleaf inside the app (the built-in browser).** Press **QuillBot**, **Overleaf** or **Paper text** above the chat and the
 page opens in the side area. QuillBot and Overleaf refuse to be shown inside another page, so the app starts a real browser (Chromium) in
@@ -337,6 +358,9 @@ your book), or use **Book check** in the book library (Settings, Advanced).
 | "Fill my sign-in" finds no form | Open the site's sign-in page first. Some sites ask for the email, then the password: press the button again after **Continue**. |
 | Typing does nothing | Click inside the page first (a blue outline shows it has the keyboard). |
 | A reference is "waiting for Mendeley" | The bibliography already has it. Mendeley was unreachable or not signed in; the entry is retried after the next success, or press **Try again now** on the References page. |
+| The LaTeX pane says LaTeX is not installed | In Docker the image needs LaTeX: run `./ui.sh down`, then `./ui.sh up` (the first start rebuilds the image with LaTeX, several minutes and about 1 GB more), or `./ui.sh build`. Without Docker, install MacTeX or TeX Live and restart the app. |
+| A package is "not found" when compiling | The Docker image has the usual LaTeX packages (publisher classes, maths, figures, biblatex), not every package ever written. Add the `.sty` file to the paper folder, or ask for the package to be added to `ui/Dockerfile`. |
+| The browser or LaTeX is slow, even though the app is idle | `./ui.sh up` and `./ui.sh status` say when Docker was given fewer than 4 CPUs or 6 GB of memory: Docker Desktop > Settings > Resources, raise both, Apply. On an Apple-silicon Mac Docker must run the arm64 image, not x86 under emulation (`./ui.sh up` tells you). |
 | Anything else | `common.py doctor` lists per-paper problems; `writing.py stats` prints what the system has been doing. |
 
 Self-check for the DOI code: `python3 scripts/doi_bot.py demo` (needs internet).

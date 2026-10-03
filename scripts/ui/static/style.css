@@ -323,3 +323,61 @@ input[type="number"] { width: 90px; }
 .stepper li.now .n { background: var(--accent); color: var(--accent-ink); }
 .stepper li.done { color: var(--good-text); border-color: var(--good); }
 .stepper li.done .n { background: var(--good); color: #fff; }
+
+/* the LaTeX pane: source on one side, the PDF on the other */
+.lx-card { padding: 8px 10px; gap: 6px; overflow: hidden; }
+.lx-bar { flex: none; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.lx-bar h2 { font-size: 15px; margin: 0; }
+.lx-file { max-width: 220px; min-height: 30px; }
+.lx-state { color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.lx-state.bad { color: var(--critical-text); font-weight: 600; } .lx-state.warn { color: var(--ink); }
+.lx-views button[aria-pressed="true"], .lx-bar button[aria-pressed="true"] { background: var(--hover); font-weight: 600; border-color: var(--accent); }
+.lx-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
+.lx-body[data-view="source"] { grid-template-columns: minmax(0, 1fr); } .lx-body[data-view="source"] .lx-pdf { display: none; }
+.lx-body[data-view="pdf"] { grid-template-columns: minmax(0, 1fr); } .lx-body[data-view="pdf"] .lx-src { display: none; }
+.lx-body[data-view="both"][data-narrow="1"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+.lx-src, .lx-pdf { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); overflow: hidden; }
+.lx-src > .lx-notice { padding: 0 6px; } .lx-src > .lx-notice:empty { display: none; } .lx-notice .notice { margin: 6px 0 0; font-size: 13px; }
+.lx-srcbar, .lx-pdfbar { flex: none; padding: 4px 6px 0; align-items: center; }
+.lx-pdfbar .tool { min-width: 30px; padding: 2px 8px; } .lx-zoom { min-width: 36px; text-align: center; } .lx-pagelabel { min-width: 44px; text-align: center; }
+.lx-pdfbar a.button-like { padding: 3px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-2); color: var(--ink); text-decoration: none; }
+
+/* the editor: a coloured copy of the text sits behind a transparent text box with the same font, so they line up letter for letter */
+.lx-ed { flex: 1; min-height: 120px; overflow: auto; position: relative; border-top: 1px solid var(--grid); background: var(--surface-1); --gut: 3.4ch; }
+.lx-stack { display: grid; min-height: 100%; }
+.lx-over, .lx-ta { grid-area: 1 / 1; margin: 0; border: 0; padding: 8px 10px 40px calc(var(--gut) + 18px); font: 13px/1.6 ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0; tab-size: 4; white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; box-sizing: border-box; min-width: 0; }
+.lx-over { counter-reset: ln; pointer-events: none; user-select: none; color: var(--ink); }
+.lx-ta { background: transparent; color: transparent; caret-color: var(--ink); resize: none; overflow: hidden; outline: none; align-self: stretch; height: 100%; width: 100%; border-radius: 0; }
+.lx-ta::selection { background: color-mix(in srgb, var(--accent) 35%, transparent); color: transparent; }
+.lx-ta:focus-visible { box-shadow: inset 0 0 0 2px var(--focus); }
+.lx-over .l { position: relative; counter-increment: ln; }
+.lx-over .l::before { content: counter(ln); position: absolute; left: calc(-1 * (var(--gut) + 18px) + 4px); width: var(--gut); text-align: right; color: var(--ink-3); font-size: 11.5px; user-select: none; }
+.lx-over .l.cur { background: var(--hover); }
+.lx-over .l.chg::after { content: ""; position: absolute; left: calc(-1 * (var(--gut) + 18px)); top: 0; bottom: 0; width: 3px; background: var(--good); border-radius: 2px; }
+.lx-over .l.err { background: color-mix(in srgb, var(--critical) 14%, transparent); text-decoration: underline wavy var(--critical); text-decoration-skip-ink: none; }
+.lx-over .l.err::before { color: var(--critical-text); font-weight: 700; }
+.lx-over .l.flash { animation: lxflash 4.5s ease-out; }
+@keyframes lxflash { 0%, 55% { background: color-mix(in srgb, var(--warning) 45%, transparent); } 100% { background: transparent; } }
+.t-c { color: var(--ink-3); font-style: italic; } .t-h { color: var(--ink); font-weight: 700; } .t-e { color: var(--series-3); font-weight: 600; }
+.t-k { color: #8a4fc7; } .t-x { color: var(--series-1); } .t-m { color: var(--series-2); }
+:root[data-theme="dark"] .t-k { color: #b58ae6; } @media (prefers-color-scheme: dark) { :root:where(:not([data-theme="light"])) .t-k { color: #b58ae6; } }
+
+.lx-problems { flex: none; max-height: 34%; overflow: auto; border-top: 1px solid var(--border); padding: 4px 8px 6px; font-size: 13px; background: var(--surface-2); }
+.lx-problems[hidden] { display: none; }
+.lx-problems summary { cursor: pointer; font-weight: 600; }
+.lx-rows { list-style: none; margin: 4px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.lx-rows li { border-left: 3px solid var(--warning); padding-left: 8px; } .lx-rows li.bad { border-left-color: var(--critical); }
+.lx-rows pre { margin: 2px 0 0; white-space: pre-wrap; color: var(--ink-2); }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-decoration: underline; min-height: 0; }
+
+/* the PDF: a page per picture, drawn when it comes into view */
+.lx-pages { flex: 1; min-height: 0; overflow: auto; padding: 8px 14px 24px; background: var(--cell-empty); display: flex; flex-direction: column; align-items: center; gap: 10px; border-top: 1px solid var(--grid); }
+.lx-pages .pg { position: relative; flex: none; background: #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25); }
+.lx-pages .pg img { display: block; width: 100%; height: 100%; opacity: 0; transition: opacity 0.15s; user-select: none; }
+.lx-pages .pg.ready img { opacity: 1; }
+.lx-pages .pg.failed::after { content: "This page could not be drawn."; position: absolute; inset: 40% 10% auto; text-align: center; color: #555; font-size: 13px; }
+.lx-empty { margin: 24px 12px; text-align: center; }
+.lx-hit { position: absolute; border-radius: 3px; background: color-mix(in srgb, var(--warning) 40%, transparent); outline: 2px solid var(--warning); animation: lxhit 2.8s ease-out forwards; pointer-events: none; }
+@keyframes lxhit { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .lx-over .l.flash { animation: none; background: color-mix(in srgb, var(--warning) 35%, transparent); } .lx-hit { animation: none; } .lx-pages .pg img { transition: none; } }
+@media (max-width: 760px) { .lx-body[data-view="both"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); } }

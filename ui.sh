@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The one-place web app, in Docker, only when you want it.
-#   ./ui.sh build       build the image once (Python + git + poppler + the built-in browser)
+#   ./ui.sh build       build the image once (Python + git + poppler + LaTeX + the built-in browser; OLS_WITH_LATEX=0 leaves LaTeX out)
 #   ./ui.sh up          start it, print the URL (with this launch's access token) and open the browser (--no-open to skip)
 #   ./ui.sh down        stop it     |  ./ui.sh status  |  ./ui.sh logs [browser]
 #   ./ui.sh folders add ~/Documents/overleaf   let the app list and add the Overleaf clones in that folder (also: rm <folder>, list)
@@ -15,11 +15,28 @@ DATA="${OVERLEAF_SKILL_HOME:-$HOME/.config/overleaf-skill}"
 NAME="overleaf-ui"
 BROWSER="overleaf-browser"
 NET="overleaf-skill-net"
-IMAGE="overleaf-skill-ui:2"
+IMAGE="overleaf-skill-ui:3"
 
 need_docker() {
   command -v docker >/dev/null 2>&1 || { echo "Docker is not installed. Install Docker Desktop (or Docker Engine), then run this again."; exit 1; }
   docker info >/dev/null 2>&1 || { echo "Docker is installed but not running. Start Docker Desktop, wait until it says running, then run this again."; exit 1; }
+}
+# What Docker itself was given. The built-in browser and a LaTeX compile are the heavy parts, and on a Mac they run inside Docker Desktop's virtual machine, whose
+# default share of the computer is small: that, more than anything in the app, is what makes them slow.
+resource_note() {
+  local info ncpu mem arch host
+  info="$(docker info --format '{{.NCPU}} {{.MemTotal}} {{.Architecture}}' 2>/dev/null || true)"
+  [ -n "$info" ] || return 0
+  read -r ncpu mem arch <<<"$info"
+  case "$ncpu$mem" in ""|*[!0-9]*) return 0 ;; esac
+  if [ "$ncpu" -lt 4 ] || [ "$mem" -lt 5800000000 ]; then
+    echo "Note: Docker has only ${ncpu} CPU(s) and $((mem / 1000000000)) GB of memory for this. The built-in browser and LaTeX are much smoother with 4+ CPUs and 6+ GB:"
+    echo "      Docker Desktop > Settings > Resources, raise CPUs and Memory, then Apply."
+  fi
+  host="$(uname -m 2>/dev/null || true)"
+  case "$host/$arch" in
+    arm64/x86_64|arm64/amd64|aarch64/x86_64|aarch64/amd64) echo "Note: this Mac is Apple silicon but Docker runs x86 images by emulation, which is several times slower. Turn off \"Use Rosetta/emulation\" for x86, or rebuild the image: ./ui.sh build" ;;
+  esac
 }
 # Bind mounts use --mount, never -v: "-v source:target" breaks on any path that contains a colon (a folder like ".../2026:27/..."
 # is perfectly legal on macOS), and --mount with quoted fields also copes with spaces, commas and quotes.
@@ -90,7 +107,7 @@ cmd="${1:-help}"
 case "$cmd" in
   build)
     need_docker
-    docker build -t "$IMAGE" -f "$DIR/ui/Dockerfile" "$DIR/ui"
+    docker build --build-arg "WITH_LATEX=${OLS_WITH_LATEX:-1}" -t "$IMAGE" -f "$DIR/ui/Dockerfile" "$DIR/ui"
     ;;
   up)
     need_docker
@@ -101,7 +118,8 @@ case "$cmd" in
       URL="http://127.0.0.1:${P}/?token=$(cat "$DATA/.ui_token")"; echo "$URL"; open_url "$URL" "${2:-}"; exit 0
     fi
     docker rm -f "$NAME" >/dev/null 2>&1 || true   # a half-started leftover of our own, if any
-    docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "Building the image. This takes a few minutes the first time: it includes the built-in browser for QuillBot and Overleaf..."; docker build -q -t "$IMAGE" -f "$DIR/ui/Dockerfile" "$DIR/ui" >/dev/null; }
+    docker image inspect "$IMAGE" >/dev/null 2>&1 || { echo "Building the image. This takes several minutes the first time (and about 1.5 GB of disk): it includes LaTeX for the paper preview and the built-in browser for QuillBot and Overleaf..."; docker build -q --build-arg "WITH_LATEX=${OLS_WITH_LATEX:-1}" -t "$IMAGE" -f "$DIR/ui/Dockerfile" "$DIR/ui" >/dev/null; }
+    resource_note
     mkdir -p "$DATA/inbox" "$DATA/browser"; chmod 700 "$DATA" "$DATA/browser" 2>/dev/null || true
     ( umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > "$DATA/.ui_token" )
     ( umask 077; python3 -c 'import secrets; print(secrets.token_urlsafe(32))' > "$DATA/.browser_token" )
@@ -128,7 +146,7 @@ case "$cmd" in
     if docker network inspect "$NET" >/dev/null 2>&1 || docker network create "$NET" >/dev/null 2>&1; then
       if bout="$(docker run -d --rm --init --name "$BROWSER" --network "$NET" \
         --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp:rw,mode=1777,size=512m --shm-size=512m \
-        --cap-drop ALL --security-opt no-new-privileges --pids-limit 1024 --memory 3g \
+        --cap-drop ALL --security-opt no-new-privileges --pids-limit 1024 --memory 3g --log-driver local --log-opt max-size=10m --log-opt max-file=3 \
         --tmpfs /var/lib/xkb:rw,mode=1777,size=8m ${tz_env[@]+"${tz_env[@]}"} -e OLS_BROWSER_REAL=quillbot -e HOME=/tmp/home -e OLS_BROWSER_BIND=0.0.0.0 -e OLS_BROWSER_PORT=9233 -e OLS_BROWSER_TOKEN_FILE=/run/browser_token -e OLS_BROWSER_PROFILES=/profiles \
         --mount "$(mount_arg "$DATA/browser" /profiles)" --mount "$(mount_arg "$DATA/.browser_token" /run/browser_token readonly)" --mount "$(mount_arg "$DIR/scripts" /app readonly)" \
         "$IMAGE" python3 /app/ui/browser_service.py 2>&1)"; then
@@ -143,12 +161,12 @@ case "$cmd" in
     start_container() {  # start_container PORT -> 0 started | 98 port taken | 1 other failure (message printed)
       local out
       if out="$(docker run -d --rm --init --name "$NAME" --label "ols.port=$1" \
-        --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp:rw,mode=1777,size=128m \
-        --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+        --user "$(id -u):$(id -g)" --read-only --tmpfs /tmp:rw,mode=1777,size=640m \
+        --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --memory 2g --log-driver local --log-opt max-size=10m --log-opt max-file=3 \
         -p "127.0.0.1:${1}:${1}" \
         ${browser_env[@]+"${browser_env[@]}"} \
         -e OVERLEAF_UI_BIND=0.0.0.0 -e OVERLEAF_UI_PORT="$1" -e OVERLEAF_UI_PUBLIC_PORT="$1" \
-        -e OVERLEAF_UI_TOKEN_FILE="$DATA/.ui_token" -e OVERLEAF_SKILL_HOME="$DATA" -e OLS_HOST_DIR="$DIR" -e HOME=/tmp/home ${rubric_env[@]+"${rubric_env[@]}"} \
+        -e OVERLEAF_UI_TOKEN_FILE="$DATA/.ui_token" -e OVERLEAF_SKILL_HOME="$DATA" -e OLS_HOST_DIR="$DIR" -e HOME=/tmp/home -e OLS_BUILD_DIR=/tmp/ols-build ${rubric_env[@]+"${rubric_env[@]}"} \
         -e GIT_AUTHOR_NAME="${GN:-Overleaf skill}" -e GIT_COMMITTER_NAME="${GN:-Overleaf skill}" \
         -e GIT_AUTHOR_EMAIL="${GE:-overleaf-skill@localhost}" -e GIT_COMMITTER_EMAIL="${GE:-overleaf-skill@localhost}" \
         -e GIT_CONFIG_COUNT=2 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
@@ -200,6 +218,7 @@ case "$cmd" in
     need_docker
     if running; then echo "Running: http://127.0.0.1:$(running_port || cfg_port)/ (token in $DATA/.ui_token)"; else echo "Not running. Start it with ./ui.sh up"; fi
     if [ -n "$(docker ps -q -f "name=^/${BROWSER}$" 2>/dev/null)" ]; then echo "Built-in browser: running (sign-ins are kept in $DATA/browser)"; else echo "Built-in browser: not running"; fi
+    resource_note
     ;;
   logs)
     need_docker

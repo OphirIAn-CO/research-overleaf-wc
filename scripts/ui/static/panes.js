@@ -372,7 +372,7 @@
   // ------------------------------------------------------------------ the panes beside the chat
   const enc = encodeURIComponent;
   const KEY = 'ols-panes';
-  const TITLES = { quillbot: 'QuillBot', overleaf: 'Overleaf', text: 'Paper text' };
+  const TITLES = { latex: 'LaTeX', quillbot: 'QuillBot', overleaf: 'Overleaf', text: 'Paper text' };
   const A = { enabled: [], layout: 'tabs', wide: false, width: 0, ids: [], prev: {}, urls: {}, mounted: {}, bars: [], sig: '' };
   try {
     A.enabled = JSON.parse(window.OLS.store.get(KEY) || '[]').filter((k) => TITLES[k]);
@@ -464,7 +464,7 @@
     host.hidden = false;
     host.dataset.layout = A.layout;
     if (A.width) host.style.setProperty('--panes-w', A.width + 'px');
-    else host.style.setProperty('--panes-w', A.wide ? '62vw' : '46vw');
+    else host.style.setProperty('--panes-w', A.wide ? '62vw' : A.enabled.includes('latex') ? '58vw' : '46vw');
     const grip = h('div', { class: 'grip', role: 'separator', 'aria-orientation': 'vertical', title: 'Drag to resize' });
     grip.addEventListener('pointerdown', (ev) => {
       ev.preventDefault();
@@ -477,6 +477,7 @@
     if (A.sig !== sig) return;                                  // the author switched again while this was loading
     for (const key of A.enabled) {
       if (key === 'text') { const card = h('div', { class: 'card pane fill' }); host.append(card); await mountText(card); continue; }
+      if (key === 'latex') { const card = h('div', { class: 'card pane fill lx-card' }); host.append(card); A.mounted.latex = window.OLS.latex.mount(card, S.paper); continue; }     // the source and the PDF, made here
       const d = info[key] || { url: null, how: 'window', reason: 'Could not read the settings.' };
       const how = howOf(d);
       if (how === 'browser') {
@@ -537,7 +538,10 @@
       }
     }
   }
-  function refreshText(afterApply) { if (A.textBox) loadText(A.textBox).catch(() => {}); }
+  function refreshText(afterApply) {
+    if (A.textBox) loadText(A.textBox).catch(() => {});
+    if (A.mounted.latex) A.mounted.latex.refresh();               // the LaTeX pane shows what changed in the files and makes the PDF again
+  }
   function onRoute(page) { document.body.dataset.page = page; renderArea(); }
 
   // ---- what the chat can do with the built-in browser

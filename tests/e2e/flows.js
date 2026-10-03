@@ -21,6 +21,7 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
     const page = await ctx.newPage();
     page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`console ${m.type()}: ${m.text()}`); });
     page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
+    if (process.env.E2E_DEBUG) page.on('console', (m) => { if (m.text().startsWith('[lx]')) console.log(m.text().slice(0, 900)); });
     if (process.env.E2E_DEBUG) page.on('response', async (r) => { if (r.url().includes('/api/') && r.status() >= 400) console.log('API', r.status(), r.url().replace(/\?.*/, ''), (await r.text().catch(() => '')).slice(0, 300)); });
     page.on('requestfailed', (r) => errors.push('requestfailed: ' + r.url()));
     await page.goto(url);
@@ -376,6 +377,95 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   await page.click('.memory button:has-text("Delete this chat")');
   await page.waitForFunction((n) => document.querySelectorAll('#chat-list .side-item').length === n, chatsBefore);
   ok(true, 'deleting a chat removes it from the list and shows another one');
+  await page.close();
+
+  // ---- the LaTeX pane: the source and the PDF made from it, on this computer
+  page = await open({ width: 1700, height: 950 });
+  const texFile = (rel) => `${home}/papers/soil-yield/${rel}`;
+  const stateText = () => text(page, '.lx-state');
+  await page.click('.pane-bar button:has-text("LaTeX")');
+  await page.waitForSelector('.lx-over .l', { timeout: 20000 });
+  ok((await page.$$eval('.lx-over .l', (a) => a.length)) > 10 && /documentclass/.test(await text(page, '.lx-over .l')), 'the pane shows the paper\'s source with a line for each line');
+  await page.waitForSelector('.lx-pages .pg.ready', { timeout: 90000 });
+  ok(await page.$eval('.lx-pages .pg.ready img', (i) => i.naturalWidth > 300), 'the compiled PDF is drawn as a picture of its page');
+  const geometry = await page.evaluate(() => { const a = document.querySelector('.lx-ta').getBoundingClientRect(), b = document.querySelector('.lx-over').getBoundingClientRect(); return [a.x - b.x, a.y - b.y, a.width - b.width, a.height - b.height].every((d) => Math.abs(d) < 1); });
+  ok(geometry, 'the text box and the coloured text behind it line up exactly');
+  // the first compile finds the missing package: the error names the line and the pane can jump to it
+  await page.waitForSelector('.lx-problems:not([hidden]) summary');
+  ok(/1 error/.test(await text(page, '.lx-problems summary')) && /Undefined control sequence/.test(await text(page, '.lx-problems')), 'the compiler\'s error is listed in words');
+  await page.click('.lx-problems button.link');
+  await page.waitForSelector('.lx-over .l.cur');
+  ok(/includegraphics/.test(await text(page, '.lx-over .l.cur')) && (await page.$$eval('.lx-over .l.err', (a) => a.length)) === 1, 'clicking the error goes to its line, which is marked');
+  await shot(page, '11-latex-error');
+  // typing the missing line: saved by itself, compiled by itself, the error goes
+  await page.click('.lx-ta', { position: { x: 120, y: 12 } });
+  await page.keyboard.press('Control+Home');
+  await page.keyboard.press('End');
+  await page.keyboard.type('\n\\usepackage{graphicx}');
+  ok(/Unsaved changes/.test(await stateText()), 'typing says the changes are not saved yet');
+  await page.waitForFunction(() => /^Compiled/.test(document.querySelector('.lx-state').innerText) && !/\d+ errors?/.test(document.querySelector('.lx-problems').innerText), null, { timeout: 90000 });
+  ok(fs.readFileSync(texFile('main.tex'), 'utf8').includes('\\usepackage{graphicx}'), 'the edit reached the file by itself');
+  ok(/Compiled .*1 page/.test(await stateText()), 'the PDF was made again without pressing anything');
+  ok((await page.$$eval('.lx-over .l.chg', (a) => a.length)) >= 1, 'lines changed since the last send are marked in the margin');
+  ok(!/\d+ error/.test(await text(page, '.lx-state')), 'the error is gone');
+  // the source and the PDF lead to each other
+  await page.click('.lx-ta', { position: { x: 160, y: 8 * 21 + 20 } });
+  await page.click('.lx-srcbar button:has-text("Show in PDF")');
+  await page.waitForSelector('.lx-hit');
+  ok(true, 'Show in PDF marks where the line landed');
+  const hit = await page.$eval('.lx-hit', (e) => { const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; });
+  const lineBefore = await text(page, '.lx-over .l.cur');
+  await page.click('.lx-ta', { position: { x: 50, y: 400 } });                       // the caret goes elsewhere
+  await page.mouse.dblclick(hit[0], hit[1]);
+  await page.waitForFunction((t) => { const c = document.querySelector('.lx-over .l.cur'); return c && c.innerText.trim() === t.trim(); }, lineBefore, { timeout: 15000 });
+  ok(true, 'double-clicking the PDF comes back to the same line of the source');
+  // views and zoom
+  await page.click('.lx-views button:has-text("PDF")');
+  ok(await page.isHidden('.lx-src') && await page.isVisible('.lx-pdf'), 'PDF alone');
+  const z0 = await text(page, '.lx-zoom');
+  await page.click('.lx-pdfbar button[aria-label="Zoom in"]');
+  ok(parseInt(await text(page, '.lx-zoom'), 10) > parseInt(z0, 10), 'zoom in makes the page larger: ' + z0 + ' to ' + (await text(page, '.lx-zoom')));
+  await page.click('.lx-views button:has-text("Source")');
+  ok(await page.isHidden('.lx-pdf') && await page.isVisible('.lx-src'), 'source alone');
+  await page.click('.lx-views button:has-text("Both")');
+  // a change made behind the pane's back (the assistant saved a suggestion, or the latest came from Overleaf) shows up, marked, and the PDF follows
+  const id0 = await page.$eval('.lx-pages .pg img', (i) => new URL(i.src).searchParams.get('id'));
+  const mainNow = fs.readFileSync(texFile('main.tex'), 'utf8');
+  fs.writeFileSync(texFile('main.tex'), mainNow.replace('Crop yield depends on water and on soil.', 'Crop yield depends on water, soil and management.'));
+  await page.evaluate(() => window.OLS.panes.refreshText(true));
+  await page.waitForSelector('.lx-over .l.flash', { timeout: 15000 });
+  ok(/management/.test(await text(page, '.lx-over .l.flash')), 'a change made to the file appears in the source and is marked for a moment');
+  await page.waitForFunction((o) => { const i = document.querySelector('.lx-pages .pg.ready img'); return i && new URL(i.src).searchParams.get('id') !== o; }, id0, { timeout: 90000 });
+  ok(true, 'and the PDF is made again');
+  // typing while the file changes underneath: nothing is overwritten without a word
+  await page.click('.lx-ta', { position: { x: 160, y: 40 } });
+  await page.keyboard.type('X');
+  fs.writeFileSync(texFile('main.tex'), fs.readFileSync(texFile('main.tex'), 'utf8').replace('management', 'management and climate'));
+  await page.evaluate(() => window.OLS.panes.refreshText(true));
+  await page.waitForSelector('.lx-stale', { timeout: 15000 });
+  ok(/changed on disk/.test(await text(page, '.lx-stale')), 'edits that clash with a change on disk are held back and the choice is given');
+  ok(fs.readFileSync(texFile('main.tex'), 'utf8').includes('management and climate') && !fs.readFileSync(texFile('main.tex'), 'utf8').includes('XCrop'), 'nothing was overwritten meanwhile');
+  await page.click('.lx-stale button:has-text("Load the new version")');
+  await page.waitForFunction(() => !document.querySelector('.lx-stale') && /management and climate/.test(document.querySelector('.lx-over').innerText), null, { timeout: 15000 });
+  ok(true, 'loading the new version shows what is on disk');
+  // the assistant's own change, through the chat
+  const chatsNow = await page.$$eval('#chat-list .side-item', (a) => a.length);
+  await page.click('#new-chat');                                                          // a clean chat: the only suggestion on screen is the one asked for now
+  await page.waitForFunction((n) => document.querySelectorAll('#chat-list .side-item').length === n + 1 && document.querySelector('.welcome'), chatsNow);
+  await page.waitForTimeout(500);
+  await page.fill('#composer', 'improve the statistical analysis');
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('.thread .actions button:has-text("Save in my files")', { timeout: 30000 });
+  await page.click('.thread .actions button:has-text("Save in my files")');
+  await page.waitForSelector('.lx-over .l.flash', { timeout: 30000 }).catch(async (e) => { console.log('toasts:', await page.$$eval('.toast', (a) => a.map((x) => x.innerText)), 'state:', await text(page, '.lx-state'), 'file:', await page.$eval('.lx-file', (s) => s.value)); throw e; });
+  const changedFile = require('child_process').execSync(`git -C ${home}/papers/soil-yield diff --name-only HEAD`).toString().split('\n').filter(Boolean);
+  ok(changedFile.includes(await page.$eval('.lx-file', (s) => s.value)), 'what the assistant saved is shown in the file it changed: ' + changedFile.join(', '));
+  await shot(page, '12-latex-assistant-change');
+  await page.close();
+  page = await open({ width: 1300, height: 800 }, 'dark');
+  await page.click('.pane-bar button:has-text("LaTeX")');
+  await page.waitForSelector('.lx-pages .pg.ready', { timeout: 90000 });
+  await shot(page, '13-latex-dark');
   await page.close();
 
   // ---- phone and dark
