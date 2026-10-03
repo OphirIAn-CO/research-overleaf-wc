@@ -1054,11 +1054,11 @@ def _start_pass(app, n, p, cid, plan_mid):
 
     def work(progress, set_steps):
         try:
-            again = chat.plan(n, p, plan["instruction"], plan["chunk_ids"], book_id=plan.get("book"))
+            again = chat.plan(n, p, plan["instruction"], plan["chunk_ids"], book_id=plan.get("book"), facts=plan.get("facts", ""))
             if again["payload_hash"] != plan["payload_hash"]:
                 raise ValueError("Your paper changed after I prepared this request (for example after getting the latest from Overleaf). Please ask again.")
             res = revise.run(n, p, plan["instruction"], chunk_ids=plan["chunk_ids"], book_id=plan.get("book"), dry_run=False,
-                             confirm=plan["payload_hash"], source="web", progress=set_steps)
+                             confirm=plan["payload_hash"], source="web", progress=set_steps, facts=plan.get("facts", ""))
             if res["status"] == "preview":
                 raise ValueError("Your paper changed after I prepared this request. Please ask again.")
         except Exception as e:  # noqa: BLE001
@@ -1071,8 +1071,11 @@ def _start_pass(app, n, p, cid, plan_mid):
             chat.update(p, cid, plan_mid, state="failed")
             chat.append(p, cid, "assistant", "error", PLAIN_OPENAI[api_kind])
             return {"proposal": prop["id"], "failed": api_kind}
+        old = msg["data"].get("revises")
+        replaced = bool(old) and prop["status"] == "proposed" and revise.supersede(p, old, prop["id"])      # the suggestion this one revises can no longer be saved by mistake
         chat.append(p, cid, "assistant", "result", "", proposal=prop["id"], chunk_ids=plan["chunk_ids"], plan=plan_mid, status=prop["status"],
-                    usage=prop["usage"], steps=prop.get("steps", []), **({"issue": msg["data"]["issue"]} if msg["data"].get("issue") else {}))
+                    usage=prop["usage"], steps=prop.get("steps", []), **({"issue": msg["data"]["issue"]} if msg["data"].get("issue") else {}),
+                    **({"revises": old, "replaced": replaced} if old else {}))
         chat.close_reviews(p, cid)                      # a comment OpenAI would change nothing for can be the last one open
         return {"proposal": prop["id"]}
     return app.jobs.submit(f"Improving {n}", work, with_steps=True, meta={"paper": n, "chat": cid})
@@ -1127,7 +1130,11 @@ def api_chat_send(r):
         raise ApiError(400, "say what you want")
     text = text or "Improve this."
     issue = _issue_ref(p, cid, r.body.get("issue"))
-    out = [chat.append(p, cid, "user", "text", text, **({"chunk_ids": ticked} if ticked else {}), **({"issue": issue} if issue else {}))]
+    facts = str(r.body.get("facts") or "").strip()[:3000] if ticked else ""          # the author's answers to the model's questions; only for a revision of a chosen place
+    revises = str(r.body.get("revises") or "")
+    if not (facts and PID_RE.match(revises)):
+        revises = ""
+    out = [chat.append(p, cid, "user", "text", text, **({"chunk_ids": ticked} if ticked else {}), **({"issue": issue} if issue else {}), **({"facts": facts} if facts else {}))]
     kind = chat.intent(text) if not ticked else "edit"
     job = None
     if kind == "help":
@@ -1162,7 +1169,7 @@ def api_chat_send(r):
                                    in_part=u["in_part"], limit=u["limit"], notes=u["notes"]))
         else:
             try:
-                pl = chat.plan(n, p, chat.instruction_for(text), u["chunk_ids"])
+                pl = chat.plan(n, p, chat.instruction_for(text), u["chunk_ids"], facts=facts)
             except (revise.ReviseError, config.ConfigError, openai_client.OpenAIError) as e:
                 out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
                 return {"messages": out}
@@ -1170,7 +1177,7 @@ def api_chat_send(r):
             ask = config.paper_settings(p)["confirm_before_send"] or pl["units"] > guard
             reason = ("big" if pl["units"] > guard else "setting") if ask else None
             m = chat.append(p, cid, "assistant", "plan", "", plan=pl, title=u["title"], notes=u["notes"], chunk_ids=u["chunk_ids"], state="waiting", confirm=reason,
-                            **({"issue": issue} if issue else {}))
+                            **({"issue": issue} if issue else {}), **({"revises": revises} if revises else {}))
             out.append(m)
             if not ask:
                 job = _start_pass(r.app, n, p, cid, m["id"])
@@ -2088,7 +2095,7 @@ class Handler(BaseHTTPRequestHandler):
             if want and latexbuild.info(p).get("id") != want:
                 return self._err(409, "That version of the PDF is out of date.")
             img = latexbuild.page_image(p, int(query.get("n", ["1"])[0]), int(query.get("dpi", ["110"])[0]))
-            return self._send(200, img.read_bytes(), "image/jpeg", {"Cache-Control": "private, max-age=86400, immutable"})
+            return self._send(200, img.read_bytes(), "image/png", {"Cache-Control": "private, max-age=86400, immutable"})
         except ApiError as e:
             return self._err(e.status, str(e))
         except latexbuild.LatexProblem as e:

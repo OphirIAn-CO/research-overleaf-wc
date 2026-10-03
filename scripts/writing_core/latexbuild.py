@@ -4,7 +4,7 @@ Nothing here touches Overleaf. The paper is compiled in its own folder, but ever
 <paper>/.overleaf-skill/build/, which git ignores, so a compile never adds files to what is sent to Overleaf. Sending is the usual "Send to Overleaf".
 
   compile(proj)               latexmk (or pdflatex and bibtex) -> {pdf, pages, errors, warnings, undefined, seconds, ...}
-  page_image(proj, n, dpi)    one page of the PDF as a JPEG, drawn at the size it will be shown at
+  page_image(proj, n, dpi)    one page of the PDF as a PNG, drawn at twice the size it will be shown at
   forward(...) / inverse(...) SyncTeX: from a line of the source to its place in the PDF, and from a click on the PDF back to the source line
   list_files / read_file / write_file   the source files, with a check that nothing changed on disk behind the author's back
 """
@@ -412,7 +412,7 @@ def last(proj):
 def _clean_pages(proj, keep_id):
     d = _build_dir(proj, create=False) / "pages"
     if d.is_dir():
-        for f in d.glob("*.jpg"):
+        for f in list(d.glob("*.png")) + list(d.glob("*.jpg")):
             if keep_id and f".{keep_id}." not in f.name:
                 try:
                     f.unlink()
@@ -421,26 +421,27 @@ def _clean_pages(proj, keep_id):
 
 
 def page_image(proj, n, dpi=110):
-    """A JPEG of page n (1 based) drawn at `dpi`; kept until the PDF changes. -> path"""
+    """A PNG of page n (1 based) drawn at `dpi`; kept until the PDF changes. -> path
+    PNG, not JPEG: JPEG blurs the edges of small black text and smears coloured text, which is exactly what a page of a paper is made of."""
     cur = info(proj)
     if not cur.get("pdf"):
         raise LatexProblem("There is no PDF yet. Compile first.", "nopdf")
     n = int(n)
     if not 1 <= n <= cur["pages"]:
         raise LatexProblem("There is no such page.", "nopage")
-    dpi = max(36, min(int(round(int(dpi) / 12.0) * 12), 300))
+    dpi = max(36, min(int(round(int(dpi) / 6.0) * 6), 300))
     d = _build_dir(proj) / "pages"
     d.mkdir(exist_ok=True)
-    out = d / f"p{n}-{dpi}.{cur['id']}.jpg"
+    out = d / f"p{n}-{dpi}.{cur['id']}.png"
     if out.is_file():
         return out
     with _PAGES:
         if out.is_file():
             return out
         prefix = d / f".tmp-{os.getpid()}-{threading.get_ident()}-{n}"
-        r = subprocess.run(["pdftoppm", "-jpeg", "-jpegopt", "quality=90", "-r", str(dpi), "-f", str(n), "-l", str(n), "-singlefile", str(pdf_path(proj)), str(prefix)],
-                           capture_output=True, text=True, timeout=90)
-        tmp = Path(str(prefix) + ".jpg")
+        r = subprocess.run(["pdftoppm", "-png", "-r", str(dpi), "-f", str(n), "-l", str(n), "-singlefile", "-aa", "yes", "-aaVector", "yes", "-freetype", "yes",
+                            str(pdf_path(proj)), str(prefix)], capture_output=True, text=True, timeout=90)
+        tmp = Path(str(prefix) + ".png")
         if r.returncode != 0 or not tmp.is_file():
             raise LatexProblem("I could not draw that page: " + (r.stderr or "")[:160], "draw")
         os.replace(tmp, out)

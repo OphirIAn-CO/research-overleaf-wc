@@ -159,8 +159,11 @@
     const measure = () => {
       const r = view.getBoundingClientRect();
       if (r.width < 50 || r.height < 50) return null;
-      const w = Math.min(MAX_W, Math.max(r.width, st.big ? NARROW_W : DESKTOP_W));    // sites switch to a cramped phone layout below ~1000 px, so draw wide and shrink to fit (unless the author wants bigger text)
-      return { w: Math.round(w), h: Math.round(Math.max(MIN_H, Math.min(MAX_H, r.height * w / r.width))) };
+      let w = Math.max(r.width, st.big ? NARROW_W : DESKTOP_W);          // sites switch to a cramped phone layout below ~1000 px, so draw wide and shrink to fit (unless the author wants bigger text)
+      let hgt = r.height * w / r.width;                                   // the same proportions as the pane, so the picture fills it
+      const f = Math.min(1, MAX_W / w, MAX_H / hgt);                      // a very large pane (a big screen, or a page zoomed out) is drawn smaller, in the same proportions: clipping one side would leave an empty strip
+      w *= f; hgt *= f;
+      return { w: Math.round(w), h: Math.round(Math.max(MIN_H, hgt)) };
     };
 
     // ---- input goes to the page in order, one request at a time; mouse moves are thinned out
@@ -324,17 +327,28 @@
     }
 
     // ---- size follows the pane
+    const close = (a, b) => !!a && !!b && Math.abs(a.w - b.w) < 8 && Math.abs(a.h - b.h) < 8;
     async function fit() {
-      if (!st.alive || !st.started || st.fitting) return;
-      const sz = measure();
-      const cur = canvas.dataset.live ? { w: canvas.width, h: canvas.height } : st.size || {};
-      if (!sz || (Math.abs(sz.w - cur.w) < 8 && Math.abs(sz.h - cur.h) < 8)) return;
+      if (!st.alive || !st.started) return;
+      if (st.fitting) { st.refit = true; return; }                          // a resize is on its way: look again when it is done, so the last size always wins
       st.fitting = true;
-      try { const r = await post('resize', sz); st.size = { w: r.w, h: r.h }; } catch (e) { /* shown by the next picture */ }
-      st.fitting = false;
+      try {
+        for (let round = 0; round < 6 && st.alive; round++) {
+          st.refit = false;
+          const sz = measure();
+          const shown = canvas.dataset.live ? { w: canvas.width, h: canvas.height } : null;
+          if (!sz || (close(sz, st.size) && (!shown || close(sz, shown) || Date.now() - (st.askedAt || 0) < 4000))) { if (!st.refit) break; else continue; }
+          try { const r = await post('resize', sz); st.size = { w: r.w, h: r.h }; st.askedAt = Date.now(); } catch (e) { break; /* shown by the next picture */ }
+          if (!st.refit && close(measure(), st.size)) break;
+        }
+      } finally { st.fitting = false; }
     }
-    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => { clearTimeout(st.rsz); st.rsz = setTimeout(fit, 250); }) : null;
+    const later = () => { clearTimeout(st.rsz); st.rsz = setTimeout(fit, 200); };
+    const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(later) : null;
     if (ro) ro.observe(view);
+    window.addEventListener('resize', later);                              // the window, and the browser's own zoom
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', later);
+    st.keep = setInterval(fit, 3000);                                      // a last safety net: whatever went wrong, the picture is made to match the pane within seconds
 
     // ---- the toolbar
     const nav = (action) => post('nav', Object.assign({ action }, action === 'home' ? { paper: S.paper } : {})).catch((e) => { toast(e.message); });
@@ -359,7 +373,10 @@
     const ready = begin();
     return {
       el, ready,
-      destroy() { st.alive = false; clearTimeout(st.poll); clearTimeout(st.moveTimer); clearTimeout(st.rsz); if (ro) ro.disconnect(); stopStream(); },
+      destroy() {
+        st.alive = false; clearTimeout(st.poll); clearTimeout(st.moveTimer); clearTimeout(st.rsz); clearInterval(st.keep); if (ro) ro.disconnect(); stopStream();
+        window.removeEventListener('resize', later); if (window.visualViewport) window.visualViewport.removeEventListener('resize', later);
+      },
       api: {
         ready,
         selection: selectedText, clipboard: copiedText,

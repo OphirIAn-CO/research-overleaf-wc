@@ -383,12 +383,12 @@ def missing_details(original, text, mapping, context_words=6):
     return out
 
 
-def check_author_text(original, text, mapping):
+def check_author_text(original, text, mapping, context=""):
     """The author's own version of a masked passage. -> (normalized text, validator results, missing-piece details).
     Same validators as for the model's answer, run on the text after forgiving tag spellings."""
     fixed = restore_literals(normalize_tags(text), mapping, original)
     fixed, doubled = collapse_doubled(original, fixed)
-    results = validate(original, fixed)
+    results = validate(original, fixed, context=context)
     if doubled:
         results.append({"name": "doubled_backslashes_fixed", "ok": False, "severity": "warn", "detail": f"I turned {', '.join(dict.fromkeys(doubled))} back into a single backslash, as in your paper (a doubled one would break the LaTeX)"})
     return fixed, results, missing_details(original, fixed, mapping)

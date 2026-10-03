@@ -48,7 +48,7 @@ pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
 
 /* shell: sidebar, page, side panes */
-.app { display: grid; grid-template-columns: 250px minmax(0, 1fr) auto; height: 100vh; }
+.app { display: grid; grid-template-columns: 250px minmax(0, 1fr) auto; height: 100vh; overflow: hidden; overflow: clip; }
 .mobile-bar { display: none; }
 .sidebar { background: var(--surface-1); border-right: 1px solid var(--border); padding: 12px 10px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; min-height: 0; }
 .brand { font-weight: 600; } .brand-row { padding: 2px 6px 8px; }
@@ -63,7 +63,7 @@ pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .side-nav a:hover { background: var(--hover); } .side-nav a[aria-current="page"] { background: var(--hover); color: var(--ink); font-weight: 600; }
 .badge-local { font-size: 12px; color: var(--ink-2); border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; align-self: flex-start; margin: 6px 6px 0; }
 main { padding: 20px; min-width: 0; overflow-y: auto; min-height: 0; }
-body[data-page="chat"] main { padding: 0; overflow: hidden; display: flex; }
+body[data-page="chat"] main { padding: 0; overflow: hidden; overflow: clip; display: flex; }
 body[data-page="chat"] main > .page-box { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; margin: 0; }
 .panes-area { width: var(--panes-w, 46vw); min-width: 300px; max-width: min(80vw, calc(100vw - 640px)); border-left: 1px solid var(--border); background: var(--page); padding: 10px; display: flex; flex-direction: column; gap: 10px; position: relative; min-height: 0; overflow-y: auto; }
 .panes-area[hidden] { display: none; }
@@ -202,10 +202,10 @@ main:focus { outline: none; }
 .bkeys { position: absolute; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; resize: none; overflow: hidden; }
 .bmsg { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 20px; text-align: center; background: var(--surface-1); } .bmsg[hidden] { display: none; }
 .site-form { padding: 4px 0; } .site-form h3 { margin: 0; }
-.panes-area[data-layout="tabs"] { overflow: hidden; }
+.panes-area[data-layout="tabs"] { overflow: hidden; overflow: clip; }      /* clip, not hidden: a hidden box can still be scrolled by script or by the browser, and the buttons at its top slide away */
 
 /* chat */
-.chat-page { display: flex; flex-direction: column; height: 100%; min-height: 0; position: relative; }
+.chat-page { display: flex; flex-direction: column; height: 100%; min-height: 0; position: relative; overflow: hidden; overflow: clip; }
 .drop-hint { display: none; position: absolute; inset: 0; z-index: 8; align-items: center; justify-content: center; background: color-mix(in srgb, var(--accent) 12%, var(--page)); border: 3px dashed var(--accent); border-radius: 12px; font-size: 18px; font-weight: 600; pointer-events: none; }
 .chat-page.dropping .drop-hint { display: flex; }
 .composer .attach { align-self: flex-end; min-height: 44px; white-space: nowrap; }
@@ -325,7 +325,7 @@ input[type="number"] { width: 90px; }
 .stepper li.done .n { background: var(--good); color: #fff; }
 
 /* the LaTeX pane: source on one side, the PDF on the other */
-.lx-card { padding: 8px 10px; gap: 6px; overflow: hidden; }
+.lx-card { padding: 8px 10px; gap: 6px; overflow: hidden; overflow: clip; }
 .lx-bar { flex: none; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
 .lx-bar h2 { font-size: 15px; margin: 0; }
 .lx-file { max-width: 220px; min-height: 30px; }
@@ -336,7 +336,7 @@ input[type="number"] { width: 90px; }
 .lx-body[data-view="source"] { grid-template-columns: minmax(0, 1fr); } .lx-body[data-view="source"] .lx-pdf { display: none; }
 .lx-body[data-view="pdf"] { grid-template-columns: minmax(0, 1fr); } .lx-body[data-view="pdf"] .lx-src { display: none; }
 .lx-body[data-view="both"][data-narrow="1"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
-.lx-src, .lx-pdf { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); overflow: hidden; }
+.lx-src, .lx-pdf { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-1); overflow: hidden; overflow: clip; }
 .lx-src > .lx-notice { padding: 0 6px; } .lx-src > .lx-notice:empty { display: none; } .lx-notice .notice { margin: 6px 0 0; font-size: 13px; }
 .lx-srcbar, .lx-pdfbar { flex: none; padding: 4px 6px 0; align-items: center; }
 .lx-pdfbar .tool { min-width: 30px; padding: 2px 8px; } .lx-zoom { min-width: 36px; text-align: center; } .lx-pagelabel { min-width: 44px; text-align: center; }
@@ -381,3 +381,9 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); cur
 @keyframes lxhit { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .lx-over .l.flash { animation: none; background: color-mix(in srgb, var(--warning) 35%, transparent); } .lx-hit { animation: none; } .lx-pages .pg img { transition: none; } }
 @media (max-width: 760px) { .lx-body[data-view="both"] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); } }
+
+/* answering the model's questions and asking for a revised suggestion */
+.notice textarea.answer { display: block; width: 100%; margin-top: 8px; min-height: 52px; background: var(--surface-1); }
+.discuss { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; background: color-mix(in srgb, var(--accent) 6%, var(--surface-1)); margin-top: 8px; }
+.discuss[hidden] { display: none; } .discuss textarea { width: 100%; resize: vertical; } .discuss p { margin: 0; }
+.msg.user .bubble .facts { margin-top: 6px; font-size: 13px; opacity: 0.95; } .msg.user .bubble .facts summary { cursor: pointer; } .msg.user .bubble .facts div { white-space: pre-wrap; margin-top: 4px; }

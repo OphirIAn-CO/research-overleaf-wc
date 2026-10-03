@@ -135,8 +135,14 @@
     let info = null, zoom = 1, io = null, bucket = 0, pageNow = 1, raf = 0;
     const pgs = () => Array.from(box.querySelectorAll('.pg'));
     const fit = () => Math.max(220, box.clientWidth - 28);
-    const wide = () => Math.round(fit() * zoom);
-    const dpiFor = () => Math.max(48, Math.min(300, Math.round(wide() / (info.width / 72) * (window.devicePixelRatio || 1))));
+    const ideal = () => Math.round(fit() * zoom);
+    // The picture has at least two pixels for each pixel the page takes on the page of the app (more on a sharper screen), whatever the browser's own zoom does to
+    // devicePixelRatio: a picture with only as many pixels as the screen shows, or fewer, looks soft. The dpi goes in steps of 6 and the page is shown at exactly the width
+    // of its picture divided by that ratio, so the browser maps picture pixels to screen pixels evenly instead of stretching them by a few percent.
+    const ratio = () => Math.max(2, window.devicePixelRatio || 1);
+    const rawDpi = () => ideal() / (info.width / 72) * ratio();
+    const dpiFor = () => Math.max(72, Math.min(300, 6 * Math.round(rawDpi() / 6)));
+    const wide = () => (rawDpi() > 300 ? ideal() : Math.round(Math.ceil(info.width * dpiFor() / 72) / ratio()));
     const url = (n) => `/latex/page?paper=${enc(paper)}&n=${n}&dpi=${dpiFor()}&id=${enc(info.id)}`;
     function load(pg) {
       if (!info || !pg.isConnected) return;

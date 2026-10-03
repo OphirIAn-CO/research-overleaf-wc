@@ -87,7 +87,7 @@ class Engine(IsolatedHome):
     def test_pages_are_drawn_once_per_pdf_at_the_size_asked_for(self):
         latexbuild.compile(self.proj)
         a = latexbuild.page_image(self.proj, 1, 110)
-        self.assertEqual(a.read_bytes()[:2], b"\xff\xd8")
+        self.assertEqual(a.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
         self.assertEqual(latexbuild.page_image(self.proj, 1, 110), a, "the same picture is reused")
         self.assertNotEqual(latexbuild.page_image(self.proj, 1, 200), a)
         self.assertTrue(latexbuild.page_image(self.proj, 1, 5).name.startswith("p1-36."), "far too small is raised")
@@ -275,7 +275,7 @@ class Api(UiBase):
         self.assertEqual((s["last"]["pages"], s["last"]["ok"]), (1, True))
         pid = res["id"]
         st, hd, body = self.c.raw("GET", f"/latex/page?paper=alpha&n=1&dpi=100&id={pid}")
-        self.assertEqual((st, hd["content-type"], body[:2]), (200, "image/jpeg", b"\xff\xd8"))
+        self.assertEqual((st, hd["content-type"], body[:4]), (200, "image/png", b"\x89PNG"))
         self.assertIn("immutable", hd["cache-control"])
         self.assertEqual(hd["cache-control"].count("max-age"), 1)
         self.assertEqual(self.c.raw("GET", "/latex/page?paper=alpha&n=1&dpi=100&id=old")[0], 409, "a picture of an older PDF is refused")

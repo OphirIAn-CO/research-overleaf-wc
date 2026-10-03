@@ -549,11 +549,11 @@ CHIPS = [("Make it clearer", "Make this clearer and easier to follow."), ("More 
 
 # ------------------------------------------------------------------------------------------- the request, ready to send
 
-def plan(name, proj, instruction, chunk_ids, book_id=None):
+def plan(name, proj, instruction, chunk_ids, book_id=None, facts=""):
     """Prepare the request without sending anything. -> what the chat shows ("2 passages, about 900 tokens") plus the hash that proves
     exactly this payload is what gets sent."""
-    res = revise.run(name, proj, instruction, chunk_ids=chunk_ids, book_id=book_id, dry_run=True, source="web")
-    return {"instruction": instruction, "chunk_ids": chunk_ids, "units": res["units"], "passages": res["passages"], "est_tokens_in": res["est_tokens_in"],
+    res = revise.run(name, proj, instruction, chunk_ids=chunk_ids, book_id=book_id, dry_run=True, source="web", facts=facts)
+    return {"instruction": instruction, "facts": (facts or "").strip()[:3000], "chunk_ids": chunk_ids, "units": res["units"], "passages": res["passages"], "est_tokens_in": res["est_tokens_in"],
             "est_cost": res["est_cost"], "manuscript_tokens": res["manuscript_tokens"], "model": res["model"], "tips": len(res["rules"]),
             "payload_hash": res["payload_hash"], "warnings": res["warnings"], "book": res["book"], "parts": res["parts"], "sources": res.get("sources", [])}
 

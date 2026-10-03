@@ -212,6 +212,22 @@ async function until(fn, ms) { const end = Date.now() + (ms || 12000); for (;;) 
   await page.waitForSelector('.checks .chk');
   await shot('b7-taken-back');
 
+  // ---- the picture fills the pane whatever the window (or the browser's zoom) does to its size: a huge pane is drawn smaller in the same proportions
+  await page.click('#panes-area .pane-strip button:has-text("Close")');
+  await page.click('.pane-bar button:has-text("Overleaf")');
+  await page.waitForSelector('#panes-area .bshot[data-live="1"]', { timeout: 60000 });
+  for (const [w, h] of [[3600, 2000], [1500, 900], [2600, 1700], [1000, 800]]) {
+    await page.setViewportSize({ width: w, height: h });
+    let r = null;
+    for (let i = 0; i < 30; i++) {
+      await sleep(500);
+      r = await page.evaluate(() => { const v = document.querySelector('.bview').getBoundingClientRect(), c = document.querySelector('.bshot'); return { view: v.width / v.height, canvas: c.width / c.height, size: [c.width, c.height] }; });
+      if (Math.abs(r.view - r.canvas) / r.view < 0.03) break;
+    }
+    ok(Math.abs(r.view - r.canvas) / r.view < 0.03, `at ${w}x${h} the picture has the pane's proportions, so nothing is cut off or left empty (${r.canvas.toFixed(2)} for ${r.view.toFixed(2)}, ${r.size.join('x')})`);
+  }
+  await page.setViewportSize({ width: 1500, height: 900 });
+
   // ---- phone width has no side area to break the page
   await ctx.close();
   const phone = await browser.newContext({ viewport: { width: 390, height: 800 } });

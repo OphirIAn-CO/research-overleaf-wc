@@ -41,6 +41,17 @@ SYSTEM_PROMPT_SOURCES = (SYSTEM_PROMPT
                          .replace("\n\nAnswer with JSON only", "\n" + RULE_SOURCES + "\n\nAnswer with JSON only"))
 assert RULE_SOURCES in SYSTEM_PROMPT_SOURCES and "<source_material>, " not in SYSTEM_PROMPT
 
+RULE_FACTS = """<author_answers> holds the author's replies to questions you asked earlier, and further instructions from the author. Follow them. Besides the passage itself (and <source_material>, when it is there) they are the only place a fact, number or name may come from: use them exactly and add nothing beyond them. If they leave something open, ask again in "questions"."""
+
+
+def system_for(sources=False, facts=False):
+    """The instructions for the model: the base ones, plus the rule about the author's own files when parts of them go along, plus the rule about the author's answers."""
+    s = SYSTEM_PROMPT_SOURCES if sources else SYSTEM_PROMPT
+    if facts:
+        s = (s.replace('ask in "questions" instead of inventing it.', 'ask in "questions" instead of inventing it. The one exception is what <author_answers> states.')
+              .replace("\n\nAnswer with JSON only", "\n" + ("8" if sources else "7") + ". " + RULE_FACTS + "\n\nAnswer with JSON only"))
+    return s
+
 
 class ReviseError(Exception):
     pass
@@ -217,13 +228,14 @@ def _attr(text):
     return text.replace(">", "/").replace('"', "'").replace("<", "(")
 
 
-def build_user(instruction, card, rules_text, unit, masked, prefs="", sources=""):
+def build_user(instruction, card, rules_text, unit, masked, prefs="", sources="", facts=""):
     return "\n".join([
         f"<instruction>{instruction.strip()}</instruction>",
         f"<paper_card>\n{card}\n</paper_card>" if card else "",
         f"<author_preferences>\n{prefs}\n</author_preferences>" if prefs else "",
         f"<book_rules>\n{rules_text}\n</book_rules>" if rules_text else "<book_rules>(none available)</book_rules>",
         f"<source_material>\n{sources}\n</source_material>" if sources else "",
+        f"<author_answers>\n{facts}\n</author_answers>" if facts else "",
         f'<passage part="{",".join(unit["parts"]) or "unknown"}" section="{_attr(unit["section_path"])}">\n{masked}\n</passage>',
     ]).strip()
 
@@ -246,12 +258,15 @@ def _what(parts):
 
 
 def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_run=None, confirm=None, source="cli",
-        use_book=True, max_units=MAX_UNITS, guard_units=None, confirm_big=False, progress=None, use_files=None):
+        use_book=True, max_units=MAX_UNITS, guard_units=None, confirm_big=False, progress=None, use_files=None, facts=""):
     """Build (and, unless dry-run, send) a revision. -> dict with status 'preview' | 'needs_confirm' | 'proposed' | 'failed' and the proposal.
 
     guard_units: above this many passages the call stops with status 'needs_confirm' (and an estimate) unless confirm_big is set.
     use_files:   "auto" | "always" | "never": whether parts of the author's uploaded and project files go with the request (default: the paper's setting, "auto").
+    facts:       the author's answers to the model's earlier questions, and further instructions from the author (a revision of a suggestion). They go to the model
+                 as <author_answers>, and the numbers, acronyms and names in them are not treated as invented.
     progress:    callable(list_of_steps), see Steps."""
+    facts = (facts or "").strip()[:3000]
     if not instruction or not instruction.strip():
         raise ReviseError("say what to do (e.g. 'tighten the methods and follow the book')")
     t0 = time.time()
@@ -296,15 +311,15 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
         if src:
             steps.add("files", "Looking at your files", detail=f"{len(src['chunks'])} part{'s' if len(src['chunks']) != 1 else ''} of {', '.join(src['files'][:3])}" + ("…" if len(src["files"]) > 3 else ""))
     sources_text = files.block(src) if src else ""
-    system = SYSTEM_PROMPT_SOURCES if src else SYSTEM_PROMPT
+    system = system_for(bool(src), bool(facts))
 
     prepared = []
     for u in units:
         masked, mapping = latex_mask.mask(u["text"])
         head, send, tail = latex_mask.split_frame(masked)  # headings at the top or bottom are not sent: nothing to edit there, and they cannot be lost
-        user = build_user(instruction, card, rules_text, u, send, prefs, sources_text)
+        user = build_user(instruction, card, rules_text, u, send, prefs, sources_text, facts)
         _, body = openai_client.build_request(cfg, system, user)
-        prepared.append({"unit": u, "masked": masked, "mapping": mapping, "frame": (head, tail), "user": user, "body": body, "system": system, "source_text": sources_text})
+        prepared.append({"unit": u, "masked": masked, "mapping": mapping, "frame": (head, tail), "user": user, "body": body, "system": system, "source_text": sources_text, "facts": facts})
     shown_sources = [{"id": c["id"], "file": c["file"], "where": c["where"], "tokens": c["tokens"]} for c in (src["chunks"] if src else [])]
     payload_hash = store.sha256_text(json.dumps([p["body"] for p in prepared], sort_keys=True))
     est_tokens = sum(store.approx_tokens(p["system"] + p["user"]) for p in prepared)
@@ -339,7 +354,7 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
 
     pid = time.strftime("%Y%m%d-%H%M%S") + "-" + payload_hash[:4]
     proposal = {"id": pid, "created": time.time(), "status": "proposed", "paper": name, "instruction": instruction, "part": parts,
-                "book": book_id, "rules": rule_ids, "sources": shown_sources, "model": cfg["model"], "source": source, "warnings": warnings, "units": [],
+                "book": book_id, "rules": rule_ids, "sources": shown_sources, "facts": facts, "model": cfg["model"], "source": source, "warnings": warnings, "units": [],
                 "usage": {"input_tokens": 0, "output_tokens": 0}, "payload_hash": payload_hash}
     totals = {"latency_ms": 0, "retries": 0, "tokens_in": 0, "tokens_out": 0}
     validators_all = {}
@@ -438,7 +453,9 @@ def _run_unit(cfg, p, rule_ids, totals):
         totals["tokens_in"] += r["usage"]["input_tokens"]
         totals["tokens_out"] += r["usage"]["output_tokens"]
         totals["latency_ms"] += r["latency_ms"]
-        results = latex_mask.validate(masked, revised, context=p.get("source_text", ""))
+        context = (p.get("source_text", "") + "\n" + p.get("facts", "")).strip()
+        unit["context"] = context[:12000]            # kept with the suggestion: saving it (and the author's own edits of it) are checked against the same text the model may draw on
+        results = latex_mask.validate(masked, revised, context=context)
         if doubled:
             results.append({"name": "doubled_backslashes_fixed", "ok": False, "severity": "warn",
                             "detail": f"OpenAI doubled the backslash in {', '.join(dict.fromkeys(doubled))}; I put it back as it is in your paper"})
@@ -536,7 +553,7 @@ def check_adopted(proj, pid, texts):
     for u in proposal["units"]:
         if u["unit_id"] not in texts or u["status"] == "failed":
             continue
-        fixed, results, missing = latex_mask.check_author_text(u["masked_original"], str(texts[u["unit_id"]]), u["mapping"])
+        fixed, results, missing = latex_mask.check_author_text(u["masked_original"], str(texts[u["unit_id"]]), u["mapping"], context=u.get("context", ""))
         errs, warns = latex_mask.errors(results), [r for r in results if not r["ok"] and r["severity"] == "warn"]
         tags = len(latex_mask.placeholders(u["masked_original"]))
         suggested = unit_views(u)["suggested_masked"]
@@ -593,8 +610,8 @@ def _selected(proposal, accept):
 def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source="cli", note=""):
     """Write the accepted hunks into the manuscript. `cleaner(text) -> text` is the step-6b watermark clean."""
     proposal = get_proposal(proj, pid)
-    if proposal["status"] in ("applied", "rejected"):
-        raise ReviseError(f"proposal {pid} is already {proposal['status']}")
+    if proposal["status"] in ("applied", "rejected", "superseded"):
+        raise ReviseError(f"proposal {pid} is already {proposal['status']}" if proposal["status"] != "superseded" else f"proposal {pid} was replaced by a revised one ({proposal.get('superseded_by')})")
     if cleaner is None and not unclean_ok:
         raise ReviseError("step 6b (the watermark clean) is not available here, and an unclean pass is never applied. "
                           "Hand this proposal to Claude, or configure the cleaner in Settings.")
@@ -610,7 +627,7 @@ def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source=
             stale.append(u["unit_id"])
             continue
         final_masked = latex_mask.assemble(u["segments"], ids)
-        bad = latex_mask.errors(latex_mask.validate(u["masked_original"], final_masked))
+        bad = latex_mask.errors(latex_mask.validate(u["masked_original"], final_masked, context=u.get("context", "")))
         if bad:
             refused.append(f"{u['unit_id']}: {latex_mask.summarize(bad)} (hunks that move a citation or formula must be accepted together)")
             continue
@@ -683,6 +700,20 @@ def record(name, proj, pid, accepted=None, rejected=None, applied=False, synced=
         paper_index.refresh(name, proj, trigger="after_edit", source=source)
     _log_decisions(name, proj, proposal, applied=applied, synced=synced, source=source, note=note)
     return {"proposal": pid, "status": proposal["status"], "accepted": len(acc), "rejected": len(rej), "pending": len(pending)}
+
+
+def supersede(proj, pid, by):
+    """A revised suggestion (made after the author answered the model's questions) replaces the one it came from, which can then no longer be saved by mistake.
+    -> True when the old one was still waiting for a decision."""
+    try:
+        prop = get_proposal(proj, pid)
+    except ReviseError:
+        return False
+    if prop.get("status") != "proposed" or prop.get("handoff"):
+        return False
+    prop["status"], prop["superseded_by"] = "superseded", by
+    _atomic_json(proposals_dir(proj) / f"{pid}.json", prop)
+    return True
 
 
 def mark_sent(proj):

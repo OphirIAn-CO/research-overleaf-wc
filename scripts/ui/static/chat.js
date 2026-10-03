@@ -449,7 +449,8 @@
       const hit = st.cache.get(id);
       if (!hit) return;
       st.stuck = false;
-      hit.node.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      // only the conversation moves: scrollIntoView would also slide the whole page frame up, and the buttons at the top with it
+      threadEl.scrollTo({ top: Math.max(0, threadEl.scrollTop + hit.node.getBoundingClientRect().top - threadEl.getBoundingClientRect().top - 8), behavior: 'smooth' });
       hit.node.classList.add('spot');
       setTimeout(() => hit.node.classList.remove('spot'), 2400);
     }
@@ -588,7 +589,7 @@
       clear(holder);
       let p = prop;
       st.cards.set(p.id, { holder, m, status: p.status, sent: !!p.sent_at });
-      const locked = p.status === 'applied' || p.status === 'rejected';
+      const locked = p.status === 'applied' || p.status === 'rejected' || p.status === 'superseded';
       const sel = new Set(p.units.flatMap((u) => u.hunks.map((x) => x.uid)));
       const nHunks = sel.size;
       const usage = p.usage || {};
@@ -596,7 +597,7 @@
       const redraw = async () => { const fresh = await api.get(`/api/proposal?paper=${enc(paper)}&id=${enc(p.id)}`); renderSuggestion(clear(holder), fresh, m); };
 
       holder.append(h('div', { class: 'row small secondary' }, h('span', { text: `${p.model} · ${fmtTok(usage.input_tokens)} in / ${fmtTok(usage.output_tokens)} out${usage.cost != null ? ' · cost ' + usage.cost : ''}` }),
-        p.status === 'applied' ? h('span', { class: 'badge ok', text: 'saved in your files' }) : p.status === 'rejected' ? h('span', { class: 'badge', text: 'set aside' }) : null,
+        p.status === 'applied' ? h('span', { class: 'badge ok', text: 'saved in your files' }) : p.status === 'rejected' ? h('span', { class: 'badge', text: 'set aside' }) : p.status === 'superseded' ? h('span', { class: 'badge', text: 'replaced' }) : null,
         p.edited_by_author ? h('span', { class: 'badge', text: 'your own version' }) : null));
       if ((p.sources || []).length) {
         const per = new Map();
@@ -612,6 +613,7 @@
       if (p.status === 'no_changes') holder.append(notice('ok', 'OpenAI found nothing it would change in this text.'));
 
       // each passage: the explanation, then the changes
+      const answers = [];                                   // [{q, box}]: what the author replies to the model's questions
       p.units.forEach((u) => {
         if (u.status === 'failed') { holder.append(notice('bad', `${u.section_path}: ${u.error_plain || u.error || 'failed'}`)); return; }
         // on a wide screen the explanation sits beside the changes instead of above them (see .unit in the stylesheet)
@@ -621,7 +623,15 @@
         if (u.approach) why.append(h('p', { class: 'approach', text: u.approach }));
         const back = (u.restored || []).filter((x) => !x.own_line);
         if (back.length) why.append(notice('warn', `OpenAI left out ${plural(back.length, 'citation or formula', 'citations or formulas')} (${back.map((x) => x.latex).join(', ')}). I put ${back.length === 1 ? 'it' : 'them'} back where ${back.length === 1 ? 'it' : 'they'} stood; check ${back.length === 1 ? 'it still sits' : 'they still sit'} next to the claim ${back.length === 1 ? 'it supports' : 'they support'}.`));
-        (u.questions || []).forEach((q) => why.append(notice('warn', h('strong', { text: 'A question for you: ' }), q)));
+        (u.questions || []).forEach((q) => {
+          const nq = notice('warn', h('strong', { text: 'A question for you: ' }), q);
+          if (!locked) {
+            const box = h('textarea', { rows: '2', class: 'answer', 'aria-label': 'Your answer to: ' + q, placeholder: 'Your answer (leave it empty to skip this question). Then press "Answer and revise" below.' });
+            answers.push({ q, box });
+            nq.append(box);
+          }
+          why.append(nq);
+        });
         const bad = (u.validators || []).filter((v) => !v.ok);
         if (bad.length) why.append(notice('warn', 'Heads up: ', bad.map((v) => v.detail || v.name).join('; ')));
         if ((u.from_files || []).length) why.append(notice('warn', h('strong', { text: 'Numbers that came from your files: ' }), u.from_files.join(', '), '. Check them against the source before you keep the change.'));
@@ -658,6 +668,7 @@
         copyBtn('for QuillBot', 'Copies the text with citations and formulas as tags like [[LX001]] (so QuillBot cannot damage them) and opens the panel where you bring QuillBot\'s result back', async () => (await textOf()).masked, 'The text for QuillBot', () => openBanner(p, 2)),
         copyBtn('everything', 'The explanation, each change with its reason, and the new text', everything, 'The whole answer'));
       if (locked) {
+        if (p.status === 'superseded') holder.append(notice('ok', h('strong', { text: 'Replaced. ' }), 'You asked for a revised suggestion with your answers; it is further down the conversation, and this one can no longer be saved.'));
         if (p.status === 'applied' && p.sent_at) {
           holder.append(notice('ok', h('strong', { text: 'Saved and sent to Overleaf.' })));
         } else if (p.status === 'applied') {
@@ -671,7 +682,43 @@
         }
         return;
       }
-      if (!nHunks) return;
+      // Discuss and revise: answer the model's questions, change what was asked (the reviewer's comment, if this is one), say what to add. The answer is a new suggestion
+      // for the same place, built with those answers; it replaces this one, and the reviewer's comment follows the new one.
+      const isComment = !!(m.data.issue);
+      const discuss = h('div', { class: 'discuss', hidden: true });
+      const openDiscuss = () => {
+        discuss.hidden = !discuss.hidden;
+        if (discuss.hidden || discuss.childNodes.length) return;
+        const req = h('textarea', { rows: '3', 'aria-label': isComment ? 'The reviewer\'s comment' : 'What I was asked to do' });
+        req.value = p.instruction || '';
+        const more = h('textarea', { rows: '3', 'aria-label': 'Anything to add or change', placeholder: 'For example: the criteria were wells with at least six months of production; keep it to two sentences; do not mention the vendor.' });
+        const compose = () => {
+          const parts = [];
+          answers.forEach(({ q, box }) => { const a = box.value.trim(); if (a) parts.push(`Question: ${q}\nAnswer: ${a}`); });
+          const extra = more.value.trim();
+          if (extra) parts.push('Further instructions from the author: ' + extra);
+          return parts.join('\n\n');
+        };
+        const go = guarded(h('button', { type: 'button', class: 'primary', text: 'Make a new suggestion' }), async () => {
+          const facts = compose();
+          const request = req.value.trim();
+          if (!request) throw new Error('Say what the suggestion should do.');
+          if (!facts && request === (p.instruction || '').trim()) throw new Error('Answer a question, write what to add or change, or change the request first.');
+          if (st.busy) throw new Error('A request is still running. Wait for it to finish, then press the button again.');
+          await send(request, { chunk_ids: m.data.chunk_ids, facts, revises: p.id, issue: m.data.issue });
+        });
+        discuss.append(h('p', { class: 'small secondary', text: answers.length ? 'Your answers to the questions above go with it. Everything you write here is used as given: I add nothing beyond it, and the numbers and names in it are allowed in the new text.' : 'Everything you write here is used as given: I add nothing beyond it, and the numbers and names in it are allowed in the new text.' }),
+          h('label', { class: 'small secondary', text: isComment ? 'The reviewer\'s comment (change it if you read it differently)' : 'What I was asked to do (change it if you want it understood differently)' }), req,
+          h('label', { class: 'small secondary', text: 'Anything to add or change?' }), more,
+          h('div', { class: 'row' }, go, h('button', { type: 'button', class: 'ghost', text: 'Cancel', onclick: () => { discuss.hidden = true; } }),
+            h('span', { class: 'small muted', text: 'This asks OpenAI again for this place and costs about as much as the first time.' })));
+      };
+      const discussBtn = h('button', { type: 'button', class: answers.length ? 'primary' : '', text: answers.length ? 'Answer and revise' : 'Discuss and revise',
+        title: 'Answer the questions, change what was asked, or say what to add. You get a new suggestion for the same place that replaces this one.', onclick: openDiscuss });
+      if (!nHunks) {
+        if (p.status === 'proposed' || p.status === 'no_changes') holder.append(h('div', { class: 'row actions' }, discussBtn), discuss);
+        return;
+      }
       const unclean = !st.data.can_apply;             // no text-cleaning service: the text is saved exactly as written, and the card says so
       const approve = (push) => async () => {
         if (!sel.size) throw new Error('Tick at least one change.');
@@ -686,9 +733,10 @@
         guarded(h('button', { type: 'button', class: 'primary', text: 'Save in my files' }), approve(false)),
         guarded(h('button', { type: 'button', text: 'Save and send to Overleaf' }), approve(true)),
         h('button', { type: 'button', text: 'Polish in QuillBot or by hand', title: 'Opens a panel above the message box: take the text to QuillBot, bring the result back, check it and save', onclick: () => openBanner(p, 1) }),
+        discussBtn,
         guarded(h('button', { type: 'button', class: 'ghost', text: 'Not now' }), async () => { await api.post('/api/proposal/record', { paper, id: p.id, accepted: [], rejected: 'all', chat: st.cid }); await redraw(); await reload(); }),
         h('span', { class: 'grow' }), count);
-      holder.append(copies, actions);
+      holder.append(copies, actions, discuss);
       holder.append(h('p', { class: 'small muted' }, unclean ? 'Saved exactly as written: no text-cleaning service is set up. ' : '', 'Saving puts the ticked changes into your files here; "send" then puts them in Overleaf. ', handoff));
     }
 
@@ -743,7 +791,7 @@
       const panes = window.OLS.panes;
       if (panes && panes.has && panes.has('quillbot')) panes.show('quillbot');                 // QuillBot opens beside the chat
       if (st.banner && st.banner.pid === p.id) {                                               // already open for this suggestion: keep what was typed, move to the step
-        st.banner.setStep(Math.max(st.banner.step, step || 1)); st.banner.minimised(false); banner.scrollIntoView({ block: 'nearest' });
+        st.banner.setStep(Math.max(st.banner.step, step || 1)); st.banner.minimised(false);
         return;
       }
       clear(banner); banner.hidden = false;
@@ -868,7 +916,8 @@
     // ---- the thread. Every message keeps its element until its own content changes, so a refresh never flashes, never loses an open toggle or text
     // being edited, and never throws the reading position away.
     function buildMessage(m) {
-      if (m.role === 'user') return h('div', { class: 'msg user' }, h('div', { class: 'bubble', text: m.text }));
+      if (m.role === 'user') return h('div', { class: 'msg user' }, h('div', { class: 'bubble' }, h('div', { text: m.text }),
+        (m.data && m.data.facts) ? h('details', { class: 'facts' }, h('summary', { text: 'My answers that went with it' }), h('div', { class: 'small', text: m.data.facts })) : null));
       if (m.kind === 'plan') return planBubble(m);
       if (m.kind === 'ask') return askBubble(m);
       if (m.kind === 'result') return resultBubble(m);

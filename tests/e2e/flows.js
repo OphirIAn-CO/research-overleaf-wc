@@ -107,6 +107,29 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   await page.waitForSelector('.review-dock .issue.st-decide', { timeout: 25000 });
   ok(true, '"Fix this" produced a normal suggestion');
   ok(/Suggestion ready/.test(await text(page, '.review-dock .issue.st-decide')), 'the comment that was fixed says its suggestion waits for a decision');
+  await page.click('.review-dock .issue.st-decide button:has-text("Show it")');
+  await page.waitForTimeout(900);
+  const frame = await page.evaluate(() => ({ main: document.querySelector('#main').scrollTop, doc: document.scrollingElement.scrollTop, head: document.querySelector('.chat-head').getBoundingClientRect().top, strip: (document.querySelector('#panes-area .pane-strip') || document.body).getBoundingClientRect().top }));
+  ok(frame.main === 0 && frame.doc === 0 && frame.head >= 0 && frame.strip >= 0, 'Show it moves the conversation only: the buttons at the top of the page stay where they are ' + JSON.stringify(frame));
+  // the suggestion asks a question: answer it and ask for a new suggestion, which replaces this one
+  ok(await page.isVisible('.thread textarea.answer') && await page.isVisible('.thread .actions button:has-text("Answer and revise")'), 'a question from the model has a box for the answer and an Answer and revise button');
+  await page.click('.thread .actions button:has-text("Answer and revise")');
+  await page.waitForSelector('.discuss:not([hidden])');
+  ok(/reviewer.s comment/.test(await text(page, '.discuss')) && /No uncertainty|uncertainty/.test(await page.$eval('.discuss textarea', (t) => t.value)), 'the panel shows the reviewer\'s comment so it can be changed');
+  await page.click('.discuss button:has-text("Make a new suggestion")');
+  await page.waitForSelector('.toast:has-text("Answer a question")');
+  ok(true, 'it asks for an answer or a change before it spends anything');
+  await page.fill('.thread textarea.answer', 'Wells with at least 6 months of data.');
+  await page.fill('.discuss textarea >> nth=1', 'Keep it to one sentence.');
+  await page.click('.discuss button:has-text("Make a new suggestion")');
+  await page.waitForSelector('.thread .badge:has-text("replaced")', { timeout: 30000 });
+  ok(/Replaced/.test(await text(page, '.thread')), 'the old suggestion says it was replaced and cannot be saved any more');
+  await page.waitForSelector('.thread .msg.user .facts');
+  ok(/6 months/.test(await page.$eval('.thread .msg.user .facts', (e) => e.textContent)), 'the answer that went with the request is shown in the conversation');
+  await page.waitForFunction(() => /6 months/.test(document.querySelector('.thread').innerText) && document.querySelectorAll('.thread .actions').length === 1, null, { timeout: 30000 });
+  await page.waitForSelector('.review-dock .issue.st-decide');
+  ok(true, 'the reviewer comment follows the new suggestion');
+  await shot(page, '04a-answer-and-revise');
   await page.click('.thread .actions button:has-text("Save in my files")');
   await page.waitForSelector('.review-dock .issue.st-saved');
   ok(/Completed/.test(await text(page, '.review-dock .issue.st-saved')) && /1 of 3 handled/.test(await text(page, '.review-dock')), 'after saving, the comment shows as completed and the panel still lists the others, with no scrolling back');
@@ -213,6 +236,7 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   // ---- coming back later: the conversation is still there
   await page.reload();
   await page.waitForSelector('.msg.user');
+  await page.waitForSelector('.approach', { timeout: 15000 });                       // the suggestions are fetched one by one after the messages are drawn
   ok((await page.$$eval('.msg.user', (a) => a.length)) >= 5 && await page.isVisible('.approach'), 'after a reload the whole conversation is back');
 
   // ---- other pages
@@ -388,6 +412,7 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   ok((await page.$$eval('.lx-over .l', (a) => a.length)) > 10 && /documentclass/.test(await text(page, '.lx-over .l')), 'the pane shows the paper\'s source with a line for each line');
   await page.waitForSelector('.lx-pages .pg.ready', { timeout: 90000 });
   ok(await page.$eval('.lx-pages .pg.ready img', (i) => i.naturalWidth > 300), 'the compiled PDF is drawn as a picture of its page');
+  ok(await page.$eval('.lx-pages .pg.ready img', (i) => i.naturalWidth >= 1.9 * i.getBoundingClientRect().width), 'the picture has about twice as many pixels as it takes on screen, so small text stays sharp');
   const geometry = await page.evaluate(() => { const a = document.querySelector('.lx-ta').getBoundingClientRect(), b = document.querySelector('.lx-over').getBoundingClientRect(); return [a.x - b.x, a.y - b.y, a.width - b.width, a.height - b.height].every((d) => Math.abs(d) < 1); });
   ok(geometry, 'the text box and the coloured text behind it line up exactly');
   // the first compile finds the missing package: the error names the line and the pane can jump to it

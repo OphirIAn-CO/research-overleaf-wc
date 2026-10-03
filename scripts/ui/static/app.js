@@ -313,5 +313,14 @@
   }
 
   window.OLS = { h, clear, api, waitJob, toast, notice, busy, guarded, tile, fmtTok, ago, registerPage, S, route, loadState, loadThreads, renderThreads, paperObj, setPaper, store };
+  /* The frame of the chat page (the page itself, the main area, the side area) is never meant to scroll; only the conversation, the source and the PDF do. Something
+     that scrolls it anyway (a focus, a link to an anchor, a browser quirk) would slide the buttons at the top out of sight, so it is put back at once. */
+  document.addEventListener('scroll', (e) => {
+    const t = e.target === document ? document.scrollingElement : e.target;
+    if (!t || !t.scrollTop || !t.classList) return;
+    const chat = document.body.dataset.page === 'chat';
+    if (t === document.scrollingElement || t.classList.contains('app') || (chat && (t.id === 'main' || t.classList.contains('chat-page') || t.classList.contains('lx-card'))) ||
+        (t.id === 'panes-area' && t.dataset.layout === 'tabs')) t.scrollTop = 0;
+  }, true);
   window.addEventListener('load', init);
 }());

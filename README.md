@@ -37,6 +37,13 @@ each change and the new text). Nothing needs selecting by hand.
 Also in the chat: **"peer review my paper"** (it asks first, because it reads the whole paper) and **pasting a DOI**, which adds
 the reference to your bibliography, to your Mendeley group and to Overleaf, and gives you the `\cite{...}` to use.
 
+**Answering the model's questions and changing a suggestion.** When OpenAI asks a question ("What specific criteria were used?"), the question has a box under it for your reply, and
+the suggestion has an **Answer and revise** button (**Discuss and revise** when there was no question). It opens a small panel with the request as it was understood (for a
+reviewer's comment: the comment itself, which you can reword) and a box for anything to add or change ("keep it to two sentences"). **Make a new suggestion** asks OpenAI again for
+the same place with your replies, which it uses as given: it adds nothing beyond them, and the numbers and names in them are not treated as invented (everything else is checked as
+before). The new suggestion replaces the old one, which can then no longer be saved by mistake, and the reviewer's comment it belongs to follows the new one in the panel.
+It costs about as much as the first request. If the new try fails or finds nothing to change, the first suggestion stays open.
+
 **Going through a peer review.** The review lists its comments; **Fix this** on one turns it into an ordinary suggestion. While a review with
 two or more comments still has open ones, a **Reviewer comments** panel stays above the message box with all of them, so after every decision you
 see what is left without scrolling back. Each comment shows where it stands, with a colour and a mark: *Working on it*, *Suggestion ready: your
@@ -355,6 +362,9 @@ your book), or use **Book check** in the book library (Settings, Advanced).
 | Scrolling in the Overleaf pane lags | Press the **↗** button in the pane header (or the button in the "is slow here" note) to use a window of your own browser, which is always smooth. To keep the built-in one: Docker Desktop > Settings > Resources > more CPUs, and close other heavy tabs. |
 | The page keeps asking "Verify you are human", or the sign-in is refused | Click the checkbox in the picture. If it comes back, use **Open QuillBot in a window instead** in the note above the pane (or switch the built-in browser off for that site in **Settings**); your own browser passes these checks. A Google/Apple/university sign-in does not work in an embedded browser: use an email and password. If Overleaf says the email or password is wrong, check them in Settings; the app never sees what you type in the page itself. |
 | The picture is small or blurry | The page is drawn wide and shrunk to fit: press **Wider**, or **Aa** for bigger text. |
+| The Overleaf or QuillBot picture stops short and leaves an empty strip | It follows the pane's size and proportions by itself within a couple of seconds, also when the window or the browser's zoom changes (a very large pane is drawn smaller in the same proportions, never cut). If it ever stays wrong, press **Reload** in the pane. |
+| The buttons at the top of the page slid out of sight | They no longer move: only the conversation, the source and the PDF scroll. If you still see it, reload the page (Cmd/Ctrl + R) and tell me what you pressed. |
+| The PDF in the LaTeX pane looks soft | It is drawn as a lossless picture with at least twice as many pixels as the screen shows, so small text stays sharp, also when the browser is zoomed out. After an update, reload the page so the new code is used. |
 | "Fill my sign-in" finds no form | Open the site's sign-in page first. Some sites ask for the email, then the password: press the button again after **Continue**. |
 | Typing does nothing | Click inside the page first (a blue outline shows it has the keyboard). |
 | A reference is "waiting for Mendeley" | The bibliography already has it. Mendeley was unreachable or not signed in; the entry is retried after the next success, or press **Try again now** on the References page. |
