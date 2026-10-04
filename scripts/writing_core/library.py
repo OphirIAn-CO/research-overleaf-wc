@@ -892,6 +892,14 @@ def wants(instruction):
     return bool(WANTS_LIBRARY.search(instruction or ""))
 
 
+REQUIRES_CITATIONS = re.compile(r"\\cite\b|\b(?:in[ -]?text\s+)?cit(?:e|ation|ations)\b|\bproperly\s+reference(?:d)?\b", re.I)
+
+
+def requires_citations(instruction):
+    """True only when the author explicitly requires citation commands in the manuscript."""
+    return bool(REQUIRES_CITATIONS.search(instruction or ""))
+
+
 _CITE_USED = re.compile(r"\\(cite[a-z]*|parencite|textcite|autocite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{")
 
 

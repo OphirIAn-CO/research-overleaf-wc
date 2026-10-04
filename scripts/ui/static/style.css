@@ -58,8 +58,12 @@ pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .side-item:hover { background: var(--hover); } .side-item[aria-current="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
 .chat-side-row { display: flex; align-items: center; gap: 2px; }
 .chat-side-row .side-item { min-width: 0; }
-.chat-delete { flex: 0 0 auto; padding: 4px 6px; color: var(--ink-3); }
-.chat-side-row:hover .chat-delete, .chat-delete:focus-visible { color: var(--critical-text); }
+.chat-menu-trigger { flex: 0 0 auto; padding: 4px 7px; color: var(--ink-3); font-size: 17px; line-height: 1; }
+.chat-side-row:hover .chat-menu-trigger, .chat-menu-trigger:focus-visible { color: var(--ink); }
+.chat-context-menu { position: fixed; z-index: 80; display: grid; min-width: 170px; padding: 4px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.28); }
+.chat-context-menu button { border: 0; border-radius: 5px; background: transparent; color: var(--ink); text-align: left; padding: 7px 9px; }
+.chat-context-menu button:hover, .chat-context-menu button:focus-visible { background: var(--hover); }
+.chat-context-menu .danger { color: var(--critical-text); }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; } .dot.ok { background: var(--good); } .dot.bad { background: var(--critical); }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-nav { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }

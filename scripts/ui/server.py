@@ -1265,8 +1265,8 @@ def api_chat_send(r):
         except (draft.DraftError, revise.ReviseError, config.ConfigError, openai_client.OpenAIError, ValueError, FileNotFoundError, KeyError, paper_index.IsolationError) as e:
             out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
             return {"messages": out}
-        ask = config.paper_settings(p)["confirm_before_send"]
-        m = chat.append(p, cid, "assistant", "draft_plan", "", plan=pl, where=loc["where"], notes=loc["notes"], state="waiting", confirm="setting" if ask else None,
+        ask = config.paper_settings(p)["confirm_before_send"] or pl.get("require_citations", False)
+        m = chat.append(p, cid, "assistant", "draft_plan", "", plan=pl, where=loc["where"], notes=loc["notes"], state="waiting", confirm="citations" if pl.get("require_citations") else "setting" if ask else None,
                         **({"revises": redraft} if redraft else {}))
         out.append(m)
         if not ask:

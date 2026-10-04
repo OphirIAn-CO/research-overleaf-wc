@@ -433,7 +433,7 @@
         h('button', { type: 'button', class: 'small', text: 'Show the exact text', onclick: (ev) => { ev.target.disabled = true; exact.append(h('pre', { class: 'payload small', text: requestText(pl.payload) })); } }), exact);
       const foot = h('div');
       if (d.state === 'waiting') {
-        foot.append(notice('warn', 'You asked me to check with you before anything is sent.'),
+        foot.append(notice('warn', d.confirm === 'citations' ? 'You required in-text citations. Review the proposed literature below before this is sent.' : 'You asked me to check with you before anything is sent.'),
           h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Send to OpenAI' }), async () => {
             const r = await api.post('/api/chat/run', { paper, id: st.cid, message: m.id });
             await reload(); await watch(r.job);
@@ -944,8 +944,14 @@
       });
       handoff.title = 'For when you work in Claude Code: it saves the ticked changes itself, after your text-cleaning step. You do not need this to save from here.';
       const actions = h('div', { class: 'row actions' },
-        guarded(h('button', { type: 'button', class: 'primary', text: isDraft ? 'Insert in my files' : 'Save in my files' }), approve(false)),
-        guarded(h('button', { type: 'button', text: isDraft ? 'Insert and send to Overleaf' : 'Save and send to Overleaf' }), approve(true)),
+        guarded(h('button', { type: 'button', class: 'primary', text: isDraft ? 'Accept all and insert in my files' : 'Accept all and save in my files' }), async () => {
+          const all = p.units.flatMap((u) => u.hunks.map((hk) => hk.uid));
+          await doApprove(notices, p, { accept: all, push: false, unclean_ok: unclean }, redraw);
+        }),
+        guarded(h('button', { type: 'button', text: isDraft ? 'Accept all, insert and send to Overleaf' : 'Accept all, save and send to Overleaf' }), async () => {
+          const all = p.units.flatMap((u) => u.hunks.map((hk) => hk.uid));
+          await doApprove(notices, p, { accept: all, push: true, unclean_ok: unclean }, redraw);
+        }),
         h('button', { type: 'button', text: 'Polish in QuillBot or by hand', title: 'Opens a panel above the message box: take the text to QuillBot, bring the result back, check it and save', onclick: () => openBanner(p, 1) }),
         discussBtn, refsBtn,
         guarded(h('button', { type: 'button', class: 'ghost', text: 'Not now' }), async () => { await api.post('/api/proposal/record', { paper, id: p.id, accepted: [], rejected: 'all', chat: st.cid }); await redraw(); await reload(); }),

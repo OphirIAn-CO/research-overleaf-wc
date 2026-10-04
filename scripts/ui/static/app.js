@@ -151,22 +151,39 @@
   }
   function renderThreads() {
     const box = clear(document.getElementById('chat-list'));
-    for (const t of S.threads.slice(0, 12)) {
-      const open = () => { S.chatId = t.id; if (S.page === 'chat') route(); else location.hash = '#/chat'; };
+    const closeMenu = () => document.querySelectorAll('.chat-context-menu').forEach((x) => x.remove());
+    const showMenu = (t, x, y) => {
+      closeMenu();
+      const rename = async () => {
+        const title = window.prompt('Name this chat', t.title);
+        if (title == null) return;
+        try { await api.post('/api/chat/rename', { paper: S.paper, id: t.id, title }); await loadThreads(); toast('Chat renamed.'); } catch (e) { toast(e.message); }
+      };
+      const clear = async () => {
+        if (!window.confirm(`Start over in “${t.title}”? This clears its conversation, not your paper or saved suggestions.`)) return;
+        try { await api.post('/api/chat/clear', { paper: S.paper, id: t.id }); S.chatId = t.id; await loadThreads(); if (S.page === 'chat') route(); toast('Chat started over.'); } catch (e) { toast(e.message); }
+      };
       const remove = async () => {
         if (!window.confirm(`Delete the chat “${t.title}”? Suggestions already saved stay in your files.`)) return;
-        try {
-          await api.post('/api/chat/delete', { paper: S.paper, id: t.id });
-          if (S.chatId === t.id) S.chatId = null;
-          await loadThreads();
-          if (S.page === 'chat') route();
-          toast('Chat deleted.');
-        } catch (e) { toast(e.message); }
+        try { await api.post('/api/chat/delete', { paper: S.paper, id: t.id }); if (S.chatId === t.id) S.chatId = null; await loadThreads(); if (S.page === 'chat') route(); toast('Chat deleted.'); } catch (e) { toast(e.message); }
       };
-      box.append(h('div', { class: 'chat-side-row' },
-        h('button', { type: 'button', class: 'side-item', 'aria-current': t.id === S.chatId && S.page === 'chat' ? 'true' : null, onclick: open },
+      const menu = h('div', { class: 'chat-context-menu', role: 'menu' },
+        h('button', { type: 'button', role: 'menuitem', text: 'Rename', onclick: () => { closeMenu(); rename(); } }),
+        h('button', { type: 'button', role: 'menuitem', text: 'Start over', onclick: () => { closeMenu(); clear(); } }),
+        h('button', { type: 'button', role: 'menuitem', text: 'New chat', onclick: () => { closeMenu(); document.getElementById('new-chat').click(); } }),
+        h('button', { type: 'button', role: 'menuitem', class: 'danger', text: 'Delete', onclick: () => { closeMenu(); remove(); } }));
+      menu.style.left = Math.min(x, window.innerWidth - 180) + 'px';
+      menu.style.top = Math.min(y, window.innerHeight - 170) + 'px';
+      document.body.append(menu);
+      setTimeout(() => document.addEventListener('pointerdown', (ev) => { if (!menu.contains(ev.target)) closeMenu(); }, { once: true }), 0);
+    };
+    for (const t of S.threads.slice(0, 12)) {
+      const open = () => { S.chatId = t.id; if (S.page === 'chat') route(); else location.hash = '#/chat'; };
+      const menu = (ev) => { ev.preventDefault(); showMenu(t, ev.clientX, ev.clientY); };
+      box.append(h('div', { class: 'chat-side-row', oncontextmenu: menu },
+        h('button', { type: 'button', class: 'side-item', 'aria-current': t.id === S.chatId && S.page === 'chat' ? 'true' : null, title: 'Open chat. Right-click for options.', onclick: open },
           h('span', { class: 'grow ellipsis', text: t.title })),
-        h('button', { type: 'button', class: 'ghost small chat-delete', text: 'Delete', title: `Delete “${t.title}”`, 'aria-label': `Delete chat: ${t.title}`, onclick: remove })));
+        h('button', { type: 'button', class: 'ghost small chat-menu-trigger', text: '⋯', title: `Options for “${t.title}”`, 'aria-label': `Chat options: ${t.title}`, onclick: (ev) => { const r = ev.currentTarget.getBoundingClientRect(); showMenu(t, r.right - 170, r.bottom + 4); } })));
     }
   }
 

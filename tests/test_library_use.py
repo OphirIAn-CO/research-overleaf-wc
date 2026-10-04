@@ -164,6 +164,12 @@ class Words(unittest.TestCase):
         for no in ("tighten the methods", "fix grammar", "make the abstract shorter", "improve the flow of the discussion"):
             self.assertFalse(library.wants(no), no)
 
+    def test_explicit_in_text_citations_are_required_but_a_library_mention_alone_is_not(self):
+        self.assertTrue(library.requires_citations("write this with in-text citations such as \\cite{smith2020}"))
+        self.assertTrue(library.requires_citations("use \\cite{smith2020}"))
+        self.assertTrue(library.requires_citations("cite properly based on my literature library"))
+        self.assertFalse(library.requires_citations("use my literature review to improve the flow"))
+
     def test_an_added_citation_tag_alone_is_allowed_only_when_it_was_offered(self):
         o = "Yield rose [[LX001]]."
         self.assertTrue(all(r["ok"] for r in latex_mask.validate(o, "Yield rose [[LX001]] [[LX901]].", extra_tags=["LX901"]) if r["severity"] == "error"))

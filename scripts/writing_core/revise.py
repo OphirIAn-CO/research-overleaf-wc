@@ -363,6 +363,9 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
                                                    f"{n_on} found online" if n_on else "") if x)
                       + (f"; {citable} can be cited" if citable else "; none of them is in your bibliography yet, so none is cited")
                       + (f" ({len(bib_adds)} would be added to it when you save)" if bib_adds else ""))
+    require_citations = library.requires_citations(instruction)
+    if require_citations and not lib_tags:
+        warnings.append("You required in-text citations, but none of the retrieved literature excerpts has a usable bibliography entry. I will not make an uncited revision.")
     system = system_for(bool(sources_text), bool(facts), bool(lib), bool(pictures))
 
     prepared = []
@@ -372,7 +375,7 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
         user = build_user(instruction, card, rules_text, u, send, prefs, sources_text, facts, lib_text)
         _, body = openai_client.build_request(cfg, system, user, images=pictures)
         prepared.append({"unit": u, "masked": masked, "mapping": {**mapping, **lib_tags}, "frame": (head, tail), "user": user, "body": body, "system": system, "source_text": sources_text, "facts": facts,
-                         "library_text": lib_text, "new_tags": sorted(lib_tags), "images": pictures})
+                         "library_text": lib_text, "new_tags": sorted(lib_tags), "require_citations": require_citations, "images": pictures})
     shown_sources = [{"id": c["id"], "file": c["file"], "where": c["where"], "tokens": c["tokens"], "picture": bool(c.get("picture"))} for c in (src["chunks"] if src else [])]
     shown_pictures = [{"name": x["name"], "kb": max(1, x["bytes"] // 1024)} for x in pictures]
     payload_hash = store.sha256_text(json.dumps([p["body"] for p in prepared], sort_keys=True))
@@ -402,6 +405,8 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
                               "request": openai_client.redact(p["body"])} for p in prepared],
                 "note": ("Nothing has been sent. Show this to the author. To send, call again with dry_run=false and confirm=payload_hash."
                          if settings["dry_run"] else "Nothing has been sent (dry run requested).")}
+    if require_citations and not lib_tags:
+        raise ReviseError("You required in-text citations, but no retrieved source can be cited in this paper yet. I did not make an uncited revision. Add bibliography data to the relevant library sources, or use Find references and select the sources you want.")
     if guard_units is not None and len(prepared) > guard_units and not confirm_big:
         return {"status": "needs_confirm", "units": len(prepared), "est_tokens_in": est_tokens, "est_cost": est_cost, "passages": passages,
                 "parts": parts, "model": cfg["model"], "payload_hash": payload_hash, "sources": shown_sources, "library": shown_library, "pictures": shown_pictures}
@@ -524,6 +529,9 @@ def _run_unit(cfg, p, rule_ids, totals):
         unit["context"] = context[:12000]            # kept with the suggestion: saving it (and the author's own edits of it) are checked against the same text the model may draw on
         offered = p.get("new_tags") or []
         results = latex_mask.validate(masked, revised, context=context, extra_tags=offered)
+        used_offered_cites = set(latex_mask.placeholders(revised)) & set(offered)
+        if p.get("require_citations") and not used_offered_cites:
+            results.append({"name": "required_citations", "ok": False, "severity": "error", "detail": "the author required in-text citations, but the revision did not use any offered library citation"})
         if doubled:
             results.append({"name": "doubled_backslashes_fixed", "ok": False, "severity": "warn",
                             "detail": f"OpenAI doubled the backslash in {', '.join(dict.fromkeys(doubled))}; I put it back as it is in your paper"})

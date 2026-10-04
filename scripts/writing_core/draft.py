@@ -353,6 +353,9 @@ def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, 
         if lib:
             lib_text, lib_tags, shown_library = _library_block(lib)
             bib_adds = [a for a in lib.get("bib_adds", []) if a["key"] in {x["cite_key"] for x in shown_library if x["tag"]}]
+    require_citations = library.requires_citations(instruction)
+    if require_citations and not lib_tags:
+        warnings.append("You required in-text citations, but none of the retrieved literature excerpts has a usable bibliography entry. I will not create an uncited draft. Add or select references with bibliography data, then ask again.")
     float_tags, float_lines = _float_tags(proj, tex)
     tags = {**lib_tags, **float_tags}
     tag_lines = "\n".join(float_lines + [f"[[{x['tag']}]] = a citation of {x['ref']}" for x in shown_library if x["tag"]])
@@ -369,14 +372,14 @@ def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, 
             "rule_ids": rule_ids, "book": book_id, "warnings": warnings, "outline": shown_outline, "sources": shown_sources, "library": shown_library, "bib_adds": bib_adds, "online": list(online or []),
             "pictures": [{"name": x["name"], "kb": max(1, x["bytes"] // 1024)} for x in pictures], "payload_hash": payload_hash, "est_tokens_in": est_in, "est_cost": est_cost,
             "model": cfg["model"], "where": where, "label": label, "target_words": target, "part": part, "anchor": anchor, "instruction": instruction, "facts": facts, "scope": scope,
-            "cites": sorted(lib_tags), "floats": len(float_tags), "surround": before + "\n" + after}
+            "cites": sorted(lib_tags), "require_citations": require_citations, "floats": len(float_tags), "surround": before + "\n" + after}
 
 
 def plan(name, proj, instruction, anchor, part="", facts="", book_id=None, online=None):
     """What would be sent, without sending it. -> the numbers the chat shows and the hash that confirms exactly this request"""
     p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id, online=online)
     return {"instruction": instruction, "facts": p["facts"], "online": p["online"], "anchor": anchor, "part": part, "label": p["label"], "where": p["where"], "est_tokens_in": p["est_tokens_in"], "est_cost": p["est_cost"],
-            "model": p["model"], "tips": len(p["rule_ids"]), "book": p["book"], "payload_hash": p["payload_hash"], "warnings": p["warnings"], "outline": p["outline"], "sources": p["sources"], "library": p["library"],
+            "model": p["model"], "tips": len(p["rule_ids"]), "book": p["book"], "payload_hash": p["payload_hash"], "warnings": p["warnings"], "require_citations": p["require_citations"], "outline": p["outline"], "sources": p["sources"], "library": p["library"],
             "pictures": p["pictures"], "target_words": p["target_words"], "payload": openai_client.redact(p["body"])}
 
 
@@ -427,6 +430,8 @@ def run(name, proj, instruction, anchor, part="", facts="", confirm=None, source
               f"{len(p['library']) - sum(1 for x in p['library'] if x.get('online'))} from your library{(', %d found online' % sum(1 for x in p['library'] if x.get('online'))) if any(x.get('online') for x in p['library']) else ''}; {len(p['rule_ids'])} tip{'s' if len(p['rule_ids']) != 1 else ''} from the book")
     if dry_run or confirm != p["payload_hash"]:
         return {"status": "preview", "payload_hash": p["payload_hash"], "est_tokens_in": p["est_tokens_in"], "sources": p["sources"]}
+    if p["require_citations"] and not p["cites"]:
+        raise DraftError("You required in-text citations, but no retrieved source can be cited in this paper yet. I did not create an uncited draft. Add bibliography data to the relevant library sources, or use Find references and select the sources you want.")
     cfg = p["cfg"]
     totals = {"latency_ms": 0, "retries": 0, "tokens_in": 0, "tokens_out": 0}
     unit_id = "u1"
@@ -469,6 +474,9 @@ def run(name, proj, instruction, anchor, part="", facts="", confirm=None, source
         totals["latency_ms"] += r["latency_ms"]
         draft, _ = latex_mask.collapse_doubled("", draft.strip())
         results = _draft_checks(draft, p["context"], p["offered"])
+        used_cites = set(latex_mask.placeholders(draft)) & set(p["cites"])
+        if p["require_citations"] and not used_cites:
+            results.append({"name": "required_citations", "ok": False, "severity": "error", "detail": "the author required in-text citations, but the draft did not use any offered library citation"})
         bad = latex_mask.errors(results)
         unit["context"] = p["context"][:12000]
         if bad and attempt == 0:
