@@ -18,7 +18,7 @@ const PARA = 'The second paragraph describes soils, slopes and the access roads 
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
   await page.goto(url);
   await page.waitForSelector('.chat-page');
-  await page.fill('#composer', `For this paragraph:\n\n${PARA}\n\nthere was no in-text citation added in the methodology`);
+  await page.fill('#composer', `For this paragraph:\n\n${PARA}\n\nthe sentences are too long in the methodology`);
   await page.press('#composer', 'Enter');
   await page.waitForSelector('.msg.assistant .approach', { timeout: 40000 });
   const thread = await page.$eval('.thread', (e) => e.innerText);
@@ -27,6 +27,16 @@ const PARA = 'The second paragraph describes soils, slopes and the access roads 
   ok(!/bigger than a usual request/.test(thread), 'so it does not stop to ask about the size of a whole section');
   ok(!/Statistical analysis|Failure count|10 passages/.test(thread), 'and the rest of the methodology is not in it');
   await page.screenshot({ path: `${out}/pasted-paragraph.png` });
+
+  // ---- the same paragraph, with an in-text citation asked for: nothing in the library can be cited, so the search for references starts, for that paragraph
+  await page.fill('#composer', `For this paragraph:\n\n${PARA}\n\nthere was no in-text citation added in the methodology`);
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('.msg.assistant:has-text("You asked for in-text citations")', { timeout: 30000 });
+  await page.waitForSelector('.refcand', { timeout: 40000 });
+  const card = await page.$eval('.msg.assistant:has(.refcand)', (e) => e.innerText);
+  ok(/Tick the ones you want/.test(card), 'it offers references to choose from, and adds nothing by itself');
+  ok(await page.isVisible('button:has-text("Add them and cite them in the text")'), 'and can cite the ticked ones in that paragraph');
+  await page.screenshot({ path: `${out}/pasted-paragraph-citation.png` });
   await browser.close();
   const real = errors.filter((e) => !/Failed to load resource/i.test(e));
   ok(real.length === 0, 'no console errors' + (real.length ? ': ' + real.join(' | ') : ''));

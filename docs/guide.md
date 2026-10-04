@@ -208,6 +208,27 @@ Asking to *write* something (not to improve what is there) is understood as a re
 6. **Saving** puts the text between the two lines it was written for, with a blank line each side, exactly like any other suggestion (**Save in my files**, **Save and send to Overleaf**, or polish it in QuillBot first).
    If either of those two lines changed since the draft was written (for example after you got the latest from Overleaf), nothing is written and you are asked to write it again.
 
+### Writing from an outline, with your reading and your citations
+
+*"Write the introduction of my paper based on `outlined_intro.md` sections 1-4 and the literature review in my library. Use the rules of the writing book for cohesion and flow. Cite properly in-text."*
+
+- **The outline.** Add it with **Add outline** (it stays on this computer, is never cited and never sent to Overleaf). Name its file in the request, or say "the outline" when the paper has only one (with several, the one whose
+  name shares a word with the request, such as `outlined_intro.md` for "the introduction"; if that cannot be told, the app says so and uses none, so name the file). Say which sections you mean ("sections 1-4",
+  "points 2 and 3", "the first three sections") and only those go to the model, together with any general guidance written before the first numbered section. The plan says which sections went ("sections 1-4 of 5");
+  if the numbers you asked for are not in the outline, all of it goes and the plan says that too.
+- **What is looked up is the subject, not the way of writing.** The words used to search your library and the internet are made from the outline sections you asked for and the paper's abstract and notes. The sentences of
+  your request that only say how to write (the book's rules, grammar, cohesion, flow, orthography, how to cite, which file to follow) are never searched for. **The writing book gives rules of style and nothing else**: it is
+  not a source, is not searched for subject matter, and a guide to writing that sits in your library (a book on academic writing, a style manual, a copy of the book you imported) is skipped as literature. Searches that
+  would be about academic writing itself are refused, and so are such papers in the results of an internet search, unless your paper is about writing.
+- **Citations.** When the request asks for them ("cite", "in-text citation", `\cite`), the papers and books of your library on the subject are cited. Each document needs a bibliography entry, and the app gets it for you: from a
+  `.bib` file in the library if one has it, otherwise from the document's DOI (read from its first pages, from a publisher's footer, from its copyright pages and from the PDF's own metadata; the reference list is never
+  read for it), otherwise by looking its title up at Crossref. The entry (`Author2019Word`, and the Mendeley copy) is written to your bibliography only when you save a text that really cites it, and the `\cite{key}` uses that key.
+  A document that cannot be cited says why in the plan ("the file names no DOI and has no bibliography record", "I could not get the reference data for DOI ... from doi.org"), so you know what to fix: add its DOI, or a `.bib` with its entry,
+  to the library folder.
+- **When nothing in the library can be cited**, the app does not write an uncited text. It searches the internet for references on the subject of your outline, shows them with their abstracts, and
+  **Add them and cite them in the text** writes the paragraphs again with the ones you ticked. The same happens when you ask for an in-text citation in a pasted paragraph or a selected text: the search is made from that text.
+- **Complete paragraphs.** A request to write a section from an outline produces the paragraphs themselves, with the section heading when the section does not exist yet, not edits.
+
 ## Your files and writing material
 
 Everything else you want the text to draw on goes in **Settings > Your files and writing material** (or press **Add a file** next to the message box, or drop files on the chat).

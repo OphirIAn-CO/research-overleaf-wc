@@ -51,7 +51,7 @@ This leads to an important methodological implication: models based exclusively 
   ok(/\\section\{Introduction\}/.test(card), 'the card shows the heading that will be added');
   ok(/Risk perception is not homogeneous/.test(card), 'and the text written from the outline');
   await page.screenshot({ path: `${out}/new-section.png` });
-  await page.click('button:has-text("Save in my files")');
+  await page.click('button:has-text("Accept all and insert in my files")');
   await page.waitForFunction(() => document.body.innerText.includes('Saved in'), null, { timeout: 20000 });
   const saved = fs.readFileSync(file, 'utf8');
   ok(/\\end\{abstract\}\n\n\\section\{Introduction\}\n\nRisk perception is not homogeneous/.test(saved), 'saving puts the heading and the text after the abstract, with blank lines around them');

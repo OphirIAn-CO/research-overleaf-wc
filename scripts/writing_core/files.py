@@ -946,31 +946,75 @@ def block(res):
     return "\n\n".join(f"[{c['where']}]\n{c['text']}" for c in res["chunks"])
 
 
-def outline_context(name, proj, instruction, budget=5000):
-    """A named author outline, kept separate from evidence and sent whole enough to preserve its order.
+GENERIC_OUTLINE = re.compile(r"\b(?:outline[ds]?|writing[- ]?plan|the\s+brief|my\s+brief)\b", re.I)
 
-    An outline never becomes a hidden global instruction. The author must name
-    it in the request, such as "follow Promp_Intro.md".
-    """
-    from . import paper_index
+
+def _stem_tokens(f):
+    stem = f.rsplit("/", 1)[-1].rsplit(".", 1)[0].lower()
+    return {w[:5] for w in re.findall(r"[a-z]{4,}", stem) if w not in ("outline", "outlined", "prompt", "brief", "writing", "plan", "instructions", "instruction")}
+
+
+def named_outlines(outlines, instruction):
+    """-> (the outline files the request means, a note when it could not tell). An outline is meant when the request names its file; when it only says "the outline", the one outline
+    the paper has, or the ones whose names share a word with the request ("outlined_intro.md" for "write the introduction")."""
+    named = mentions(outlines, instruction)
+    if named:
+        return named, ""
+    if not GENERIC_OUTLINE.search(instruction or ""):
+        return [], ""
+    if len(outlines) == 1:
+        return [outlines[0]["file"]], ""
+    words = {w[:5] for w in re.findall(r"[a-z]{4,}", (instruction or "").lower())}
+    close = [f["file"] for f in outlines if _stem_tokens(f["file"]) & words]
+    if close:
+        return close, ""
+    return [], ("You mention an outline and there are several (" + ", ".join(f["file"].rsplit("/", 1)[-1] for f in outlines[:6]) + "): I did not use any. Say which one by its file name.")
+
+
+def outline_select(name, proj, instruction, budget=5000):
+    """A named author outline, kept separate from evidence and sent whole enough to preserve its order. -> (text, shown, notes)
+
+    An outline never becomes a hidden global instruction: the request names it ("follow Promp_Intro.md") or calls it "the outline" when there is only one that fits. When the request asks
+    for some of its sections ("sections 1-4"), only those are sent, with whatever general guidance comes before the first numbered section."""
+    from . import paper_index, subject
     outlines = [f for f in listing(name, proj) if role_of(f) == "outline" and f.get("parts")]
     if not outlines:
-        return "", []
-    named = set(mentions(outlines, instruction))
+        return "", [], []
+    named, note = named_outlines(outlines, instruction)
+    notes = [note] if note else []
     if not named:
-        return "", []
-    allowed = named
+        return "", [], notes
+    wanted = subject.requested_sections(instruction)
     con = paper_index.open_index(name, proj)
-    chosen, used = [], 0
     try:
         rows = con.execute("SELECT * FROM chunks WHERE kind IN ('source','project') ORDER BY ord").fetchall()
-        for row in rows:
-            if row["file"] not in allowed or used + row["tokens"] > budget:
-                continue
-            used += row["tokens"]
-            chosen.append({"file": row["file"], "where": row["section_path"], "tokens": row["tokens"], "text": row["text"]})
     finally:
         con.close()
-    text = "\n\n".join(f"[{c['file']} · {c['where']}]\n{c['text']}" for c in chosen)
-    shown = [{k: c[k] for k in ("file", "where", "tokens")} for c in chosen]
+    by_file = {}
+    for row in rows:
+        if row["file"] in named:
+            by_file.setdefault(row["file"], []).append(row)
+    chosen, shown, per = [], [], max(400, budget // max(1, len(by_file)))
+    for f in named:
+        if f not in by_file:
+            continue
+        full = "\n\n".join(r["text"] for r in by_file[f])
+        text, kept, present = subject.pick_sections(full, wanted)
+        if wanted and present and not kept:
+            notes.append(f"You asked for outline section(s) {', '.join(str(n) for n in sorted(wanted))} but {f.rsplit('/', 1)[-1]} numbers its sections {', '.join(str(n) for n in present)}: I sent all of it.")
+        elif wanted and not present:
+            notes.append(f"{f.rsplit('/', 1)[-1]} has no numbered sections, so I sent all of it instead of sections {', '.join(str(n) for n in sorted(wanted))}.")
+        text = subject.trim_to(text, per)
+        if not text.strip():
+            continue
+        where = (f"sections {kept[0]}-{kept[-1]} of {present[-1]}" if len(kept) > 1 and kept == list(range(kept[0], kept[-1] + 1)) else
+                 f"section(s) {', '.join(str(n) for n in kept)} of {present[-1]}" if kept else "all of it")
+        chosen.append(f"[{f} · {where}]\n{text}")
+        shown.append({"file": f, "where": where, "tokens": store.approx_tokens(text), "sections": kept})
+    return "\n\n".join(chosen), shown, notes
+
+
+def outline_context(name, proj, instruction, budget=5000):
+    """outline_select without the notes: -> (text, shown)"""
+    text, shown, _ = outline_select(name, proj, instruction, budget)
     return text, shown

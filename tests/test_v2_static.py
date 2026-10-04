@@ -60,7 +60,7 @@ class Static(unittest.TestCase):
     def test_saving_without_a_text_cleaning_service_is_the_authors_explicit_choice_in_the_request(self):
         js = (STATIC / "chat.js").read_text()
         self.assertIn("unclean_ok", js)
-        self.assertIn("Save in my files", js)
+        self.assertIn("Save only", js)
         self.assertIn("Save and send to Overleaf", js)
 
 

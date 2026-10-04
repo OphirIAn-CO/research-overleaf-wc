@@ -161,7 +161,7 @@ class UploadedButNotInTheBibliography(Offline):
         self.DOIS.clear()
         self.addCleanup(self.DOIS.update, {"10.1234/abc.2020.001": DOI_ENTRY})
         self.srv.script = [reply(("We sampled", "We drew a sample of"))]
-        r = self.go(self.ASK, part="methods")
+        r = self.go(self.ASK.replace(" and cite it", ""), part="methods")
         self.assertIn("Not in the paper's bibliography: it can inform the wording but must not be cited.", user_of(self.srv.requests[-1]["body"]))
         self.assertEqual(r["proposal"]["bib_adds"], [])
         self.assertEqual(r["proposal"]["units"][0]["new_tags"], [])

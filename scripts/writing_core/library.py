@@ -22,10 +22,10 @@ import time
 import zipfile
 from pathlib import Path
 
-from . import chunk_book, config, files as pfiles, retrieve, store, taxonomy
+from . import chunk_book, config, files as pfiles, retrieve, store, subject as subj_mod, taxonomy
 
 DIRNAME = "library"
-LOGIC_VERSION = 1                  # bump when the reading or splitting changes, so everything is read again
+LOGIC_VERSION = 2                  # bump when the reading or splitting changes, so everything is read again
 SCHEMA = 1
 MAX_FOLDERS = 12
 MAX_DOCS = 6000                    # files read besides the entries of .bib files
@@ -247,6 +247,26 @@ def _doi_of(text):
     return ""
 
 
+LABELLED_DOI = re.compile(r"(?:\bdoi\b\s*[:=#]?\s*|https?://(?:dx\.)?doi\.org/\s*)(10\.\d{4,9}/[^\s\"<>{}|\\^`]+)", re.I)
+
+
+def _labelled_doi(text):
+    """A DOI that the page names as its own ("DOI: 10....", "https://doi.org/10...."), not one that happens to stand in a list of references."""
+    for m in LABELLED_DOI.finditer(text or ""):
+        d = m.group(1).rstrip(".,;:)]}\"'")
+        if len(d) > 9:
+            return d
+    return ""
+
+
+def _pdf_doi(raw, info, xmp, article):
+    """The DOI of a PDF, from where a publisher puts it. An article names it on its first pages (header or footer) or in its last page; a book on its title and copyright pages. A DOI
+    inside the reference list is somebody else's, so only the front pages are read, and further in only a DOI that is labelled as such."""
+    front = "\n".join(raw[:3 if article else 10])
+    return (_labelled_doi(front) or _doi_of("\n".join(raw[:2])) or _doi_of(info.get("subject", "")) or _doi_of(info.get("doi", "")) or _doi_of(xmp) or
+            (_labelled_doi("\n".join(raw[-1:])) if article else "") or _doi_of(front if not article else ""))
+
+
 _SKIP_FIRST = re.compile(r"(?i)^(?:research\s+article|original\s+(?:article|paper|research)|article|review(?:\s+article)?|short\s+communication|letter|journal|volume|vol\.|issn|doi|https?:|www\.|©|copyright|"
                          r"received|accepted|available\s+online|contents\s+lists|sciencedirect|elsevier|springer|ieee|preprint|arxiv|published|open\s+access|check\s+for\s+updates|"
                          r"citation|cite\s+this|keywords?|abstract|highlights|graphical\s+abstract|article\s+info|a\s+r\s+t\s+i\s+c\s+l\s+e)")
@@ -303,6 +323,16 @@ def _pdf_info(path):
     return info
 
 
+def _pdf_xmp(path):
+    """The XMP metadata of a PDF as text (publishers put the DOI in it as prism:doi or dc:identifier), or ''."""
+    import subprocess
+    try:
+        r = subprocess.run([chunk_book._poppler("pdfinfo"), "-meta", str(path)], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return r.stdout[r.stdout.find("Metadata:"):][:20000] if "Metadata:" in r.stdout else ""
+
+
 def _loose_heading(lines):
     """A heading in a PDF that is not one of the usual section names: a short line, with no full stop, above lines that are clearly longer (the text wraps wider than it)."""
     if len(lines) < 2:
@@ -352,7 +382,8 @@ def read_pdf(path):
         raw = raw[:MAX_PAGES]
     info = _pdf_info(path)
     first = "\n".join(raw[:2])
-    meta = {"title": _plausible_title(info.get("title")) or _title_from_page(raw[0]), "authors": _plausible_authors(info.get("author")), "doi": _doi_of(first) or _doi_of(info.get("subject", "")),
+    article = len(raw) <= BOOK_PAGES
+    meta = {"title": _plausible_title(info.get("title")) or _title_from_page(raw[0]), "authors": _plausible_authors(info.get("author")), "doi": _pdf_doi(raw, info, _pdf_xmp(path), article),
             "year": _year_from_page(first), "pages": len(raw), "source": "text"}
     byname = _from_name(Path(path).stem)
     for k in ("authors", "year"):
@@ -360,7 +391,7 @@ def read_pdf(path):
             meta[k], meta["source"] = byname[k], "name"
     if not meta["title"]:
         meta["title"], meta["source"] = byname.get("title", ""), "name"
-    parts = _parts_from_pages(chunk_book.clean_pages(raw), article=len(raw) <= BOOK_PAGES)
+    parts = _parts_from_pages(chunk_book.clean_pages(raw), article=article)
     return meta, parts, "pages", note
 
 
@@ -787,9 +818,10 @@ def _hit(r, score):
             "where": _where(r["noun"], r["lo"], r["hi"], r["head"]), "pages": f"{r['lo']}" if r["lo"] == r["hi"] else f"{r['lo']}-{r['hi']}", "text": r["text"], "tokens": r["tokens"], "score": float(score)}
 
 
-def query(text, k=6, budget=2400, per_doc=2, doc_ids=None):
+def query(text, k=6, budget=2400, per_doc=2, doc_ids=None, guides=True):
     """The best parts of the library for a text. -> {chunks: [hit], terms, docs, tokens}. A hit says which document it is from and where in it (page or paragraph), and carries its text.
-    At most `per_doc` parts of one document, so one long book does not crowd out the articles."""
+    At most `per_doc` parts of one document, so one long book does not crowd out the articles. With guides=False the guides to writing (a book on academic writing, a style manual, a
+    copy of the imported writing book) are left out: they give rules for the style of a text and say nothing about its subject, so a request never reads them as literature."""
     terms = retrieve.fts_terms(text)
     out = {"chunks": [], "terms": terms, "docs": 0, "tokens": 0}
     if not terms or not _db_path().exists():
@@ -802,11 +834,14 @@ def query(text, k=6, budget=2400, per_doc=2, doc_ids=None):
         if doc_ids:
             sql += " AND d.id IN (%s)" % ",".join("?" * len(doc_ids))
             args += list(doc_ids)
-        rows = con.execute(sql + " ORDER BY score LIMIT ?", args + [k * 8]).fetchall()
+        rows = con.execute(sql + " ORDER BY score LIMIT ?", args + [k * 8 * (3 if not guides else 1)]).fetchall()
     finally:
         con.close()
     used, per = 0, {}
+    books = None if guides else subj_mod.book_files()
     for r in rows:
+        if not guides and subj_mod.is_style_source(r["title"], r["rel"], books):
+            continue
         if len(out["chunks"]) >= k or per.get(r["doc_id"], 0) >= per_doc or (out["chunks"] and used + r["tokens"] > budget):
             continue
         per[r["doc_id"]] = per.get(r["doc_id"], 0) + 1
@@ -946,32 +981,95 @@ def _bib_text(proj):
         return ""
 
 
-def plan_entry(proj, chunk, text, taken=()):
-    """The bibliography entry a library document would get, without writing anything. -> {key, bibtex, doi, title, doc} or None when it has neither a record nor a DOI that doi.org knows."""
+def _sidecar():
+    return root() / "found_dois.json"
+
+
+def _recalled(doc_id):
+    """The DOI found online for a document that names none, remembered so that the same title is not looked up for every request. -> DOI or ''"""
+    try:
+        return str((json.loads(_sidecar().read_text(encoding="utf-8")) or {}).get(doc_id, {}).get("doi") or "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+def _remember(doc_id, doi, title):
+    try:
+        data = json.loads(_sidecar().read_text(encoding="utf-8")) if _sidecar().exists() else {}
+    except (OSError, ValueError):
+        data = {}
+    data[doc_id] = {"doi": doi, "title": title[:200], "ts": int(time.time())}
+    try:
+        root().mkdir(parents=True, exist_ok=True)
+        _sidecar().write_text(json.dumps(data, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+
+
+_TITLE_CACHE = {}                    # doc id -> (when, DOI or ''): what Crossref said for a title, so a library without internet does not wait for it with every request
+TITLE_TTL, TITLE_MISS_TTL = 3600, 300
+
+
+def _doi_from_title(proj, d):
+    """The DOI of a document that names none, from Crossref by its title (the title must be nearly the same, and the year must agree when both have one). -> DOI or ''"""
+    from . import scholar
+    title = d["title"] or ""
+    if len(_tokens_of(title)) < 4 or config.paper_settings(proj).get("use_online") == "never":
+        return ""
+    hit = _TITLE_CACHE.get(d["id"])
+    if hit and time.time() - hit[0] < (TITLE_TTL if hit[1] else TITLE_MISS_TTL):
+        return hit[1]
+    c = scholar.doi_by_title(title)
+    try:
+        doi = "" if not c or (d["year"] and c.get("year") and abs(int(d["year"]) - int(c["year"])) > 1) else c["doi"]
+    except (TypeError, ValueError):
+        doi = c["doi"] if c else ""
+    _TITLE_CACHE[d["id"]] = (time.time(), doi)
+    return doi
+
+
+def entry_for(proj, chunk, text, taken=()):
+    """The bibliography entry a library document would get, without writing anything. -> ({key, bibtex, doi, title, doc, label}, '') or (None, why it cannot be cited, in words for the author)"""
     import doi_bot
     d = get_doc(chunk["doc"])
     if not d:
-        return None
+        return None, "it is no longer in the library"
     try:
         if d["bibtex"]:
             key, n = d["bib_key"], 1
             while re.search(r"@\w+\s*\{\s*" + re.escape(key) + r"\s*,", text) or key in taken:
                 n += 1
                 key = f"{d['bib_key']}{chr(96 + n) if n <= 27 else n}"
-            bib = d["bibtex"].replace("{" + d["bib_key"] + ",", "{" + key + ",", 1)
-        elif d["doi"]:
-            bib, key = doi_bot.prepare_entry(d["doi"], text, taken, fetch=_fetched)
+            bib, doi = d["bibtex"].replace("{" + d["bib_key"] + ",", "{" + key + ",", 1), d["doi"] or ""
         else:
-            return None
-    except Exception:  # noqa: BLE001 - no network, an unknown DOI: this document simply cannot be cited now
-        return None
-    return {"key": key, "bibtex": bib, "doi": d["doi"] or "", "title": d["title"] or chunk.get("title", ""), "doc": chunk["doc"], "label": chunk.get("label", "")}
+            doi, how = d["doi"] or _recalled(d["id"]), "its DOI"
+            if not doi:
+                doi, how = _doi_from_title(proj, d), "a title match at Crossref"
+                if not doi:
+                    return None, ("the file names no DOI and has no bibliography record, and Crossref has no work with its title" if len(_tokens_of(d["title"])) >= 4 and
+                                  config.paper_settings(proj).get("use_online") != "never" else
+                                  "the file names no DOI and has no bibliography record (add its DOI or a .bib with its entry to the library folder)")
+                _remember(d["id"], doi, d["title"])
+            try:
+                bib, key = doi_bot.prepare_entry(doi, text, taken, fetch=_fetched)
+            except Exception as e:  # noqa: BLE001 - no network, an unknown DOI
+                return None, f"I could not get the reference data for DOI {doi} from doi.org ({str(e)[:90] or type(e).__name__}); check the connection, then ask again"
+    except Exception as e:  # noqa: BLE001
+        return None, f"its record could not be used ({str(e)[:90] or type(e).__name__})"
+    return {"key": key, "bibtex": bib, "doi": doi or "", "title": d["title"] or chunk.get("title", ""), "doc": chunk["doc"], "label": chunk.get("label", "")}, ""
+
+
+def plan_entry(proj, chunk, text, taken=()):
+    """entry_for without the reason: the entry, or None."""
+    return entry_for(proj, chunk, text, taken)[0]
 
 
 def offer_new(proj, lib):
     """Documents of the author's library that are not in the paper's bibliography yet but could be (a record or a DOI): give each the key it will have there, so the request can cite
-    it. The entries wait in lib["bib_adds"] and are written to the bibliography only when the text that cites them is saved."""
+    it. The entries wait in lib["bib_adds"] and are written to the bibliography only when the text that cites them is saved. The documents that cannot be cited are listed in
+    lib["uncitable"] with the reason, so the author is told why instead of being left to guess."""
     adds = lib.setdefault("bib_adds", [])
+    bad = lib.setdefault("uncitable", [])
     text = _bib_text(proj)
     citable = {c["cite_key"] for c in lib["chunks"] if c.get("cite_key")}
     for c in lib["chunks"]:
@@ -979,10 +1077,11 @@ def offer_new(proj, lib):
             continue
         prior = next((a for a in adds if a["doc"] == c["doc"]), None)
         if prior is None:
-            if len(citable) >= MAX_CITABLE:
+            if len(citable) >= MAX_CITABLE or any(b["doc"] == c["doc"] for b in bad):
                 continue
-            prior = plan_entry(proj, c, text, {a["key"] for a in adds})
+            prior, why = entry_for(proj, c, text, {a["key"] for a in adds})
             if not prior:
+                bad.append({"doc": c["doc"], "label": c.get("label") or c.get("title") or c.get("rel", ""), "why": why})
                 continue
             adds.append(prior)
         c.update(cite_key=prior["key"], pending=True, can_add=False)
@@ -990,18 +1089,29 @@ def offer_new(proj, lib):
     return lib
 
 
-def relevant(proj, instruction, passage="", mode="auto", k=4, budget=1600, facts="", online=()):
+def retrieval_text(instruction="", passage="", facts="", subject=""):
+    """The words a request is looked up with: first what the request and the author's answers say about the subject, then the subject of the writing (its outline, abstract) and the text
+    around the place, picked by how often they occur. The words about the task (rules, style, grammar, the book, citing, the outline file) are never searched for."""
+    from . import scholar
+    first = scholar.focus_terms(subj_mod.drop_how(subj_mod.plain(instruction)), facts, max_terms=8)
+    rest = scholar.focus_terms(subject, passage, max_terms=14)
+    return " ".join(list(dict.fromkeys(first + rest))[:14])
+
+
+def relevant(proj, instruction, passage="", mode="auto", k=4, budget=1600, facts="", online=(), subject=""):
     """The parts of the library a request should see, or None. In "auto" a request uses the library when it asks for sources, citations or the author's reading (in the
     request or in the author's answers to the model's questions); "always" searches for every request; "never" for none. Also the references found online and added to this
     paper's bibliography that fit the request, and always the ones the author picked (online: their DOIs).
-    -> {chunks: [hit with in_bib / cite_key], bib_adds: [entries that go to the bibliography when the citing text is saved], why, command}"""
+    What is looked up is the subject (`subject`: the outline sections asked for and the abstract; `passage`: the text around the place), never the words that say how to write; and a
+    guide to writing is never returned as literature.
+    -> {chunks: [hit with in_bib / cite_key], bib_adds: [entries that go to the bibliography when the citing text is saved], uncitable: [{label, why}], why, command}"""
     from . import scholar
     ask = f"{instruction}\n{facts}".strip()
     forced = scholar.recall(proj, "", force=online) if online else []
     if not forced and (mode == "never" or (mode != "always" and not wants(ask))):
         return None
-    text = f"{ask} {passage[:800]}"
-    chunks = annotate(query(text, k=k, budget=budget, per_doc=2)["chunks"], proj) if mode != "never" and _db_path().exists() else []
+    text = retrieval_text(instruction, passage, facts, subject) or f"{ask} {passage[:800]}"
+    chunks = annotate(query(text, k=k, budget=budget, per_doc=2, guides=False)["chunks"], proj) if mode != "never" and _db_path().exists() else []
     have = {c["cite_key"] for c in forced + chunks if c.get("cite_key")}
     found = [] if mode == "never" else [c for c in scholar.recall(proj, text, k=3) if c["cite_key"] not in have and c["id"] not in {x["id"] for x in forced}]
     every = forced + found + chunks

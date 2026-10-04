@@ -772,7 +772,7 @@ def plan(name, proj, instruction, chunk_ids, book_id=None, facts="", online=None
     return {"instruction": instruction, "facts": (facts or "").strip()[:3000], "chunk_ids": chunk_ids, "online": list(online or []), "units": res["units"], "passages": res["passages"], "est_tokens_in": res["est_tokens_in"],
             "est_cost": res["est_cost"], "manuscript_tokens": res["manuscript_tokens"], "model": res["model"], "tips": len(res["rules"]),
             "payload_hash": res["payload_hash"], "warnings": res["warnings"], "book": res["book"], "parts": res["parts"], "sources": res.get("sources", []),
-            "library": res.get("library", []), "pictures": res.get("pictures", [])}
+            "library": res.get("library", []), "uncitable": res.get("uncitable", []), "outline": res.get("outline", []), "require_citations": bool(res.get("require_citations")), "pictures": res.get("pictures", [])}
 
 
 # ------------------------------------------------------------------------------------------- finding references: about which text?

@@ -19,6 +19,8 @@ and never saves or sends anything you have not approved.
   with the page, cite them in your text, and add them to your bibliography. ([Details](docs/guide.md#your-reading-the-literature-library))
 - **Find references on the internet and cite them.** *"Find references about armed conflict and pipeline attacks in Colombia"* searches the web and two open scholarly indexes, shows each paper with its abstract and DOI, and adds
   the ones you tick to your bibliography; a suggestion can then be written again with them, citing them from their abstracts. ([Details](docs/guide.md#finding-references-on-the-internet-and-citing-them))
+- **Write from an outline, citing your reading.** *"Write the introduction from `outlined_intro.md` sections 1-4 and my library, and cite in-text"* uses only those sections, looks up your library and the internet by the **subject**
+  (the outline and abstract), never by the words about style, and takes each cited paper's reference from its DOI. The writing book is used for style rules only. ([Details](docs/guide.md#writing-from-an-outline-with-your-reading-and-your-citations))
 - **Peer review.** *"Peer review my paper"* scores it against a rubric and lists the problems; **Fix this** turns a comment into an ordinary suggestion. Nothing changes by itself.
 - **References.** Paste a DOI: it goes into your `.bib`, your Mendeley group and Overleaf, and you get the `\cite{...}` to use. (Also from your phone, through a Telegram bot.)
 - **See your paper.** Your LaTeX source and the compiled PDF side by side, on your computer; QuillBot and Overleaf in panes next to the chat for the tone pass.

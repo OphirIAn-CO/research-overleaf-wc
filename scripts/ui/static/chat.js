@@ -379,7 +379,7 @@
         lines.push(h('p', { class: 'small secondary', text: `${plural(lib.length, 'part')} of your library go with it (${[...new Set(lib.map((x) => x.label))].slice(0, 3).join(', ')}${new Set(lib.map((x) => x.label)).size > 3 ? '...' : ''}). ` +
           (cites ? `${plural(cites, 'source')} can be cited when an excerpt directly supports the claim, because ${cites === 1 ? 'it is' : 'they are'} in your bibliography.` : 'None of them is in your bibliography yet, so none will be cited.') }));
       }
-      if (outline.length) lines.push(h('p', { class: 'small secondary', text: `Following your outline: ${[...new Set(outline.map((x) => x.file.split('/').pop()))].join(', ')}. It is an instruction, not a source and will not be cited.` }));
+      if (outline.length) lines.push(h('p', { class: 'small secondary', text: `Following your outline: ${outline.map((x) => x.file.split('/').pop() + (x.where && x.where !== 'all of it' ? ' (' + x.where + ')' : '')).join(', ')}. It is an instruction, not a source and will not be cited.` }));
       (pl.warnings || []).forEach((x) => lines.push(notice('warn', x)));
       const exact = h('div');
       const details = h('details', null, h('summary', { text: 'What goes out' }),
@@ -413,7 +413,7 @@
       const lines = [h('p', null, 'I will write new text for the ', h('strong', { text: pl.label.toLowerCase() }), `, ${d.where}, about ${pl.target_words} words or fewer.`)];
       (d.notes || []).forEach((x) => lines.push(h('p', { class: 'small secondary', text: x })));
       const bits = [];
-      if (outline.length) bits.push(`your outline (${[...new Set(outline.map((x) => x.file.split('/').pop()))].join(', ')})`);
+      if (outline.length) bits.push(`your outline (${outline.map((x) => x.file.split('/').pop() + (x.where && x.where !== 'all of it' ? ', ' + x.where : '')).join('; ')})`);
       if (src.length) bits.push(`${plural(src.length, 'part')} of your files (${[...new Set(src.map((x) => x.file.split('/').pop()))].slice(0, 4).join(', ')}${new Set(src.map((x) => x.file)).size > 4 ? '...' : ''})`);
       if (pics.length) bits.push(`${plural(pics.length, 'picture')} (${pics.map((x) => x.name).join(', ')})`);
       if (lib.length) bits.push(`${plural(lib.length, 'part')} of your library`);

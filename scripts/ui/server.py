@@ -1269,7 +1269,9 @@ def api_chat_send(r):
             if config.paper_settings(p).get("use_online") == "never":
                 out.append(chat.append(p, cid, "assistant", "error", "Your request requires in-text citations, but the local library has no citable bibliography records and online reference search is switched off in Settings."))
                 return {"messages": out}
-            out.append(chat.append(p, cid, "assistant", "text", "I found relevant passages in your literature library, but no citable bibliography record for them. I am looking for verified online reference records so you can choose which ones to add and cite."))
+            why = "; ".join(f"{u['label']}: {u['why']}" for u in (pl.get("uncitable") or [])[:4])
+            out.append(chat.append(p, cid, "assistant", "text", ("I could not cite anything from your literature library" + (f" ({why})" if why else " (nothing in it matches this subject)") +
+                                                              ". I am looking for verified online reference records on the subject of your outline, so you can choose which ones to add and cite.")))
             job = _start_refsearch(r.app, n, p, cid, text, ticked, facts, "", issue, "", chat.last_target({"messages": chat.get_thread(p, cid)["messages"]}), force_draft=True)
             return {"messages": out, "job": job}
         ask = config.paper_settings(p)["confirm_before_send"] or pl.get("require_citations", False)
@@ -1311,6 +1313,15 @@ def api_chat_send(r):
             except (revise.ReviseError, config.ConfigError, openai_client.OpenAIError) as e:
                 out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
                 return {"messages": out}
+            if pl.get("require_citations") and not any(x.get("tag") for x in pl.get("library", [])):       # asked to cite, and nothing in the library can be cited
+                if config.paper_settings(p).get("use_online") == "never":
+                    out.append(chat.append(p, cid, "assistant", "error", "Your request requires in-text citations, but nothing in your literature library can be cited and searching the internet for references is switched off in Settings."))
+                    return {"messages": out}
+                why = "; ".join(f"{x['label']}: {x['why']}" for x in (pl.get("uncitable") or [])[:4])
+                out.append(chat.append(p, cid, "assistant", "text", ("You asked for in-text citations, but I could not cite anything from your literature library" + (f" ({why})" if why else "") +
+                                                                  ". I am looking for verified references on the subject of this text, so you can choose which ones to add and cite.")))
+                job = _start_refsearch(r.app, n, p, cid, text, u["chunk_ids"], facts, "", issue, "", [], auto_cite=True)
+                return {"messages": out, "job": job}
             guard = config.ui_cfg()["guard_passages"]
             ask = config.paper_settings(p)["confirm_before_send"] or pl["units"] > guard
             reason = ("big" if pl["units"] > guard else "setting") if ask else None
@@ -1356,7 +1367,7 @@ CITE_REQUEST = "Support the claims of this text with citations from the sources 
 _CITE_WORDS = re.compile(r"\b(?:citation|citations|cite|reference|references|source|sources|literature|evidence|studies|study|publication|publications|peer-reviewed)\b", re.I)
 
 
-def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words, last_ids, force_draft=False):
+def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words, last_ids, force_draft=False, auto_cite=False):
     """Look for references on the internet in the background; the candidates land in the chat as a card. The search words are chosen from what the author wrote, the passage it is
     about and the author's answers; nothing but those few words leaves this computer, and nothing is added to the bibliography until the author ticks it."""
     def work(progress, set_steps):
@@ -1364,7 +1375,7 @@ def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words,
         try:
             steps.start("words", "Working out what to look for")
             ctx = chat.refs_context(n, p, text, chunk_ids=ticked, last_ids=last_ids)
-            instruction, questions, is_draft, rev = (text if force_draft else ""), [], bool(force_draft), revises or ""
+            instruction, questions, is_draft, rev = (text if (force_draft or auto_cite) else ""), [], bool(force_draft), revises or ""
             if PID_RE.match(rev):
                 try:
                     prop = revise.get_proposal(p, rev)
@@ -1372,14 +1383,21 @@ def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words,
                     questions = [q for u in prop["units"] for q in (u.get("questions") or []) if _CITE_WORDS.search(q)]
                 except revise.ReviseError:
                     rev = ""
-            topic = words or ctx["topic"]
-            if not ctx["passage"] and not facts and len(scholar.terms(topic)) < 2:        # nothing to go on: no subject, and no text it could be about
+            about = ""
+            if is_draft:                                  # writing from an outline: the subject is the outline's sections that were asked for and the abstract, not the request's own words
+                try:
+                    o_text, _, _ = files.outline_select(n, p, instruction or text)
+                    about = draft.subject_of(n, p, instruction or text, o_text, facts)
+                except (OSError, ValueError, KeyError, paper_index.IsolationError):
+                    about = ""
+            topic = words or (" ".join(scholar.focus_terms(about, max_terms=6)) if about else ctx["topic"])
+            if not ctx["passage"] and not facts and not about and len(scholar.terms(topic)) < 2:        # nothing to go on: no subject, and no text it could be about
                 steps.finish("words", "nothing to search for", state="failed")
                 chat.append(p, cid, "assistant", "text", "What should the references be about? Say it in a few words, for example: find references on how armed conflict affects energy infrastructure in Colombia. "
                             "Or name the place in your paper they are for, for example: suggest sources for the first paragraph of the introduction.")
                 return {"found": 0}
             cfg = config.openai_cfg() if config.openai_status()[0] == "ok" else None
-            queries, usage, how = scholar.choose_queries(topic, request=instruction or text, facts=facts, passage=ctx["passage"], question=" ".join(questions), cfg=cfg, given=words)
+            queries, usage, how = scholar.choose_queries(topic, request=instruction or text, facts=facts, passage=ctx["passage"], question=" ".join(questions), cfg=cfg, given=words, subject_text=about)
             if not queries:
                 raise scholar.ScholarError("I could not tell what to look for. Say it in a few words, for example: find references on how armed conflict affects energy infrastructure in Colombia.")
             steps.finish("words", " · ".join(queries), label="Chose the search words" + (" with ChatGPT" if how == "model" else ""))
@@ -1392,6 +1410,8 @@ def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words,
         bib = library.paper_bib(p)
         cands = []
         for c in res["candidates"]:
+            if scholar.bad_query(c["title"], f"{about} {topic} {' '.join(queries)}"):         # a guide to writing is not a reference for a paper about something else
+                continue
             have = library.cite_for({"doi": c["doi"], "title": c["title"]}, bib)
             cands.append({"id": c["doi"], "doi": c["doi"], "title": c["title"], "authors": (c.get("authors") or [])[:10], "year": c.get("year"), "venue": c.get("venue", ""), "label": c["label"],
                           "abstract": (c.get("abstract") or "")[:2500], "url": c.get("url", ""), "cited_by": c.get("cited_by") or 0, "sources": c.get("sources", []),

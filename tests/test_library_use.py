@@ -14,6 +14,7 @@ from writing_core import chat, config, library, latex_mask, revise
 SAMPLED = "We sampled 40 farms by stratified random sampling."
 WITH_CITE = "We sampled 40 farms by stratified random sampling [[LX901]]."
 ASK = "support the sampling statement with my library and cite it"
+ASK_INFORM = "support the sampling statement with my library"        # asks for the reading, not for a citation: what cannot be cited only informs
 
 
 @needs_pdf
@@ -80,16 +81,16 @@ class Use(ReviseBase):
         self.assertNotIn("<library_sources>", self.system_of(self.srv.requests[-1]["body"]))
         self.go("tighten my methods", part="methods", use_library="always")
         self.assertIn("<library_sources>", user_of(self.srv.requests[-1]["body"]))
-        self.go(ASK, part="methods", use_library="never")
+        self.go(ASK_INFORM, part="methods", use_library="never")
         self.assertNotIn("library_sources", user_of(self.srv.requests[-1]["body"]))
         config.set_paper_setting(self.proj, "use_library", "never")
-        self.go(ASK, part="methods")
+        self.go(ASK_INFORM, part="methods")
         self.assertNotIn("library_sources", user_of(self.srv.requests[-1]["body"]), "the paper's own setting decides when the call does not")
 
     def test_a_source_that_is_not_in_the_bibliography_informs_but_cannot_be_cited(self):
         self.bib.write_text("@book{doe2019, author={Doe, A.}, title = {Soil}, year = 2019}\n")
         self.srv.script = [reply(("We sampled", "We drew a sample of"))]
-        r = self.go(ASK, part="methods")
+        r = self.go(ASK_INFORM, part="methods")
         user = user_of(self.srv.requests[-1]["body"])
         self.assertIn("Not in the paper's bibliography: it can inform the wording but must not be cited.", user)
         self.assertNotIn("[[LX901]]", user)

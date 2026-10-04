@@ -465,7 +465,9 @@ refresh token; if that also fails, re-run `authorize`.
 
 The web app does the same from its chat ("find references about ..." searches the web and the OpenAlex and Crossref indexes, shows each paper with its abstract and DOI, and adds the
 ones the author ticks to the bibliography; a suggestion can then cite them from their abstracts, and documents of the author's library that the bibliography does not have yet are
-added to it when the text that cites them is saved). In Claude Code use `WebSearch`/`WebFetch` as below. Either way: show the candidate first, never add one silently, never invent a citation,
+added to it when the text that cites them is saved). When the author writes from an outline, the search words are the **subject** (the outline sections asked for, "sections 1-4", and the abstract), never the
+words about how to write: the writing book is for style rules only and is never a subject or a reference, and a guide to writing in the library is skipped. In Claude Code use `WebSearch`/`WebFetch` as below, and search for the
+paper's subject in the same way. Either way: show the candidate first, never add one silently, never invent a citation,
 and remember that an abstract is not the paper.
 
 When the user wants a paper cited that isn't already in their Mendeley

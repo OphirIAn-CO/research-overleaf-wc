@@ -51,7 +51,7 @@ class Pasted(ChatBase):
         self.assertIn("did not find the paragraph you pasted", u["notes"][0])
 
     def test_through_the_chat_only_that_paragraph_goes_to_the_model(self):
-        r = self.send(f"For this paragraph:\n\n{PARA}\n\nthere was no in-text citation added in the methodology")
+        r = self.send(f"For this paragraph:\n\n{PARA}\n\nthe sentences are too long in the methodology")
         plan = r["messages"][1]["data"]
         self.assertEqual((plan["plan"]["units"], plan["title"]), (1, "the paragraph you pasted"))
         self.wait_job(r["job"])

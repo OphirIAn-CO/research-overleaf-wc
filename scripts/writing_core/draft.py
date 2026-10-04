@@ -16,7 +16,7 @@ import re
 import time
 from pathlib import Path
 
-from . import chat, chunk_tex, config, events, files, latex_mask, library, openai_client, paper_index, preferences, retrieve, revise, store, taxonomy
+from . import chat, chunk_tex, config, events, files, latex_mask, library, openai_client, paper_index, preferences, retrieve, revise, store, subject, taxonomy
 
 MAX_DRAFT_WORDS = 900
 WARN_DRAFT_WORDS = 600
@@ -226,15 +226,27 @@ def _braced(text, command):
     return text[m.end():i - 1] if depth == 0 else ""
 
 
-def _topic(name, proj):
-    """What the paper is about, in its own words (the abstract and the paper card), to search the library with: a draft of the Results has little to say about the topic itself."""
-    out = [revise.read_card(proj)[:600]]
+def _topic_parts(name, proj):
+    """-> (the paper card, its abstract): what the paper is about, in its own words."""
+    abstract = []
     try:
         for c in paper_index.part_chunks(name, proj, ["abstract"], refresh_first=False)[:2]:
-            out.append(_plain("\n".join(chat._lines(proj, c["file"])[c["line_start"] - 1:c["line_end"]]))[:700])
+            abstract.append(_plain("\n".join(chat._lines(proj, c["file"])[c["line_start"] - 1:c["line_end"]]))[:700])
     except (OSError, ValueError, KeyError):
         pass
-    return " ".join(out)
+    return revise.read_card(proj)[:600], " ".join(abstract)
+
+
+def _topic(name, proj):
+    """What the paper is about, in its own words (the abstract and the paper card), to search the library with: a draft of the Results has little to say about the topic itself."""
+    return " ".join(_topic_parts(name, proj))
+
+
+def subject_of(name, proj, instruction, outline_text="", facts=""):
+    """What the new text is about, for searching the library and the internet: the outline sections the request asks for, the paper's abstract and card, then the request with the
+    sentences about how to write taken out. Never the writing book: it gives rules of style and is not a subject."""
+    card, abstract = _topic_parts(name, proj)
+    return subject.of(outline=outline_text, abstract=abstract, card=card, request=f"{instruction} {facts}")
 
 
 def _float_tags(proj, tex):
@@ -329,7 +341,8 @@ def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, 
         rule_ids = [c["id"] for c in rules["chunks"]]
     rules_text = revise.rules_block(rules, cfg["rule_budget_tokens"] * 4) if rules else ""
 
-    outline_text, shown_outline = files.outline_context(name, proj, instruction)
+    outline_text, shown_outline, outline_notes = files.outline_select(name, proj, instruction)
+    warnings.extend(outline_notes)
     f_mode = use_files or settings.get("use_files") or "auto"
     a_mode = use_analysis or settings.get("use_analysis") or "auto"
     has_material = bool(files.folders(proj, "material"))
@@ -346,16 +359,20 @@ def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, 
         src["images"] = [i for i in src["images"] if i["name"] in kept]
     sources_text, shown_sources = _sources_block(src if src and src["chunks"] else None)
 
-    lib, lib_text, lib_tags, shown_library, bib_adds = None, "", {}, [], []
+    lib, lib_text, lib_tags, shown_library, bib_adds, uncitable = None, "", {}, [], [], []
     l_mode = use_library or settings.get("use_library") or "auto"
     if l_mode != "never" or online:
-        lib = library.relevant(proj, instruction, before[-400:] + " " + _topic(name, proj), mode=l_mode, facts=facts, online=online or ())
+        about = subject_of(name, proj, instruction, outline_text, facts)
+        lib = library.relevant(proj, instruction, before[-400:], mode=l_mode, facts=facts, online=online or (), subject=about)
         if lib:
             lib_text, lib_tags, shown_library = _library_block(lib)
             bib_adds = [a for a in lib.get("bib_adds", []) if a["key"] in {x["cite_key"] for x in shown_library if x["tag"]}]
+            uncitable = lib.get("uncitable", [])
     require_citations = library.requires_citations(instruction)
     if require_citations and not lib_tags:
-        warnings.append("You required in-text citations, but none of the retrieved literature excerpts has a usable bibliography entry. I will not create an uncited draft. Add or select references with bibliography data, then ask again.")
+        why = "; ".join(f"{u['label']}: {u['why']}" for u in uncitable[:4])
+        warnings.append("You required in-text citations, but none of the retrieved literature excerpts has a usable bibliography entry" + (f" ({why})" if why else "") +
+                        ". I will not create an uncited draft. Add or select references with bibliography data, then ask again.")
     float_tags, float_lines = _float_tags(proj, tex)
     tags = {**lib_tags, **float_tags}
     tag_lines = "\n".join(float_lines + [f"[[{x['tag']}]] = a citation of {x['ref']}" for x in shown_library if x["tag"]])
@@ -369,7 +386,7 @@ def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, 
     est_out = int(target * 1.6) + 250
     est_cost = revise._price(cfg, {"input_tokens": est_in, "output_tokens": est_out})
     return {"cfg": cfg, "system": system, "user": user, "body": body, "images": pictures, "tags": tags, "offered": sorted(tags), "context": "\n".join([sources_text, lib_text, facts, instruction, before, after]).strip(),
-            "rule_ids": rule_ids, "book": book_id, "warnings": warnings, "outline": shown_outline, "sources": shown_sources, "library": shown_library, "bib_adds": bib_adds, "online": list(online or []),
+            "rule_ids": rule_ids, "book": book_id, "warnings": warnings, "outline": shown_outline, "sources": shown_sources, "library": shown_library, "uncitable": uncitable, "bib_adds": bib_adds, "online": list(online or []),
             "pictures": [{"name": x["name"], "kb": max(1, x["bytes"] // 1024)} for x in pictures], "payload_hash": payload_hash, "est_tokens_in": est_in, "est_cost": est_cost,
             "model": cfg["model"], "where": where, "label": label, "target_words": target, "part": part, "anchor": anchor, "instruction": instruction, "facts": facts, "scope": scope,
             "cites": sorted(lib_tags), "require_citations": require_citations, "floats": len(float_tags), "surround": before + "\n" + after}
@@ -379,7 +396,7 @@ def plan(name, proj, instruction, anchor, part="", facts="", book_id=None, onlin
     """What would be sent, without sending it. -> the numbers the chat shows and the hash that confirms exactly this request"""
     p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id, online=online)
     return {"instruction": instruction, "facts": p["facts"], "online": p["online"], "anchor": anchor, "part": part, "label": p["label"], "where": p["where"], "est_tokens_in": p["est_tokens_in"], "est_cost": p["est_cost"],
-            "model": p["model"], "tips": len(p["rule_ids"]), "book": p["book"], "payload_hash": p["payload_hash"], "warnings": p["warnings"], "require_citations": p["require_citations"], "outline": p["outline"], "sources": p["sources"], "library": p["library"],
+            "model": p["model"], "tips": len(p["rule_ids"]), "book": p["book"], "payload_hash": p["payload_hash"], "warnings": p["warnings"], "require_citations": p["require_citations"], "outline": p["outline"], "sources": p["sources"], "library": p["library"], "uncitable": p["uncitable"],
             "pictures": p["pictures"], "target_words": p["target_words"], "payload": openai_client.redact(p["body"])}
 
 
