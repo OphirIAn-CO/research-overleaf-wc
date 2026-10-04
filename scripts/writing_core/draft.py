@@ -329,7 +329,7 @@ def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, 
         rule_ids = [c["id"] for c in rules["chunks"]]
     rules_text = revise.rules_block(rules, cfg["rule_budget_tokens"] * 4) if rules else ""
 
-    outline_text, shown_outline = files.outline_context(name, proj)
+    outline_text, shown_outline = files.outline_context(name, proj, instruction)
     f_mode = use_files or settings.get("use_files") or "auto"
     a_mode = use_analysis or settings.get("use_analysis") or "auto"
     has_material = bool(files.folders(proj, "material"))

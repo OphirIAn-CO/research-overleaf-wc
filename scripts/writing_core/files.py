@@ -944,13 +944,20 @@ def block(res):
     return "\n\n".join(f"[{c['where']}]\n{c['text']}" for c in res["chunks"])
 
 
-def outline_context(name, proj, budget=5000):
-    """The author's writing outline, kept separate from evidence and sent whole enough to preserve its order."""
+def outline_context(name, proj, instruction, budget=5000):
+    """A named author outline, kept separate from evidence and sent whole enough to preserve its order.
+
+    An outline never becomes a hidden global instruction. The author must name
+    it in the request, such as "follow Promp_Intro.md".
+    """
     from . import paper_index
     outlines = [f for f in listing(name, proj) if role_of(f) == "outline" and f.get("parts")]
     if not outlines:
         return "", []
-    allowed = {f["file"] for f in outlines}
+    named = set(mentions(outlines, instruction))
+    if not named:
+        return "", []
+    allowed = named
     con = paper_index.open_index(name, proj)
     chosen, used = [], 0
     try:

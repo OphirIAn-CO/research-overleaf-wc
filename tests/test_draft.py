@@ -106,8 +106,9 @@ class Drafting(ReviseBase):
     def test_an_author_outline_is_followed_but_is_not_a_source_or_citation(self):
         files.save_upload(self.proj, "Prompt_Intro.md", b"# Required funnel\n\nMove from risk to risk perception.")
         loc = self.locate()
-        pl = draft.plan(self.name, self.proj, self.ASK, loc["anchor"], loc["part"])
-        user = openai_text(draft.prepare(self.name, self.proj, self.ASK, loc["anchor"], loc["part"])["body"])
+        request = self.ASK + " following Prompt_Intro.md"
+        pl = draft.plan(self.name, self.proj, request, loc["anchor"], loc["part"])
+        user = openai_text(draft.prepare(self.name, self.proj, request, loc["anchor"], loc["part"])["body"])
         self.assertIn("<author_outline>", user)
         self.assertIn("Move from risk to risk perception", user)
         self.assertTrue(pl["outline"])
