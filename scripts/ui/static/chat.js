@@ -755,6 +755,7 @@
       const srcLabels = {};                                  // S1 -> "metrics.csv · rows 2 to 3", L1 -> "Smith and Lee 2020 · page 2"
       (p.sources || []).forEach((x) => { if (x.ref) srcLabels[x.ref] = `${x.file.split('/').pop()} · ${(x.where || '').split(' · ').slice(1).join(' · ') || x.where}`; });
       (p.library || []).forEach((x) => { if (x.ref) srcLabels[x.ref] = `${x.label} · ${x.where}`; });
+      srcLabels.commentary = 'connecting comment, adds no new fact';
       const redraw = async () => { const fresh = await api.get(`/api/proposal?paper=${enc(paper)}&id=${enc(p.id)}`); renderSuggestion(clear(holder), fresh, m); };
 
       holder.append(h('div', { class: 'row small secondary' }, h('span', { text: `${p.model} · ${fmtTok(usage.input_tokens)} in / ${fmtTok(usage.output_tokens)} out${usage.cost != null ? ' · cost ' + usage.cost : ''}` }),

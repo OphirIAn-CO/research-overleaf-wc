@@ -201,6 +201,14 @@ Asking to *write* something (not to improve what is there) is understood as a re
    ask for them), the few pages of your writing book about that part of a paper, and the text just before and after the place. The plan lists them before anything is sent.
 3. **What the model may say.** Only what those sources state. Every number must be in them (the same check as for an edit); a figure or table of your paper can be mentioned only through a tag that the app turns into
    its `\ref{...}`; a source of your library can be cited only through its tag, and only if your bibliography has it; no LaTeX, headings or lists; no dashes. When something needed is missing, the model leaves it out and asks.
+   **How it reads.** New text is meant to read like an author explaining, not like a list of facts. The model is asked to put things in its own words (not to copy your outline, your notes or an article), to join
+   related facts, and to add a **connecting comment** where a reader needs one: a sentence that links one fact to the next, says what the facts mean for the question the section asks, or closes a paragraph with its
+   point. A comment may only relate, compare, order or sum up facts it has already stated, and when it interprets it hedges ("suggests", "is consistent with"). It never adds a fact, number, name, cause, comparison or
+   citation. It is meant to be about one comment for every two or three sentences of fact, and it counts toward the length you asked for, so it does not pad. The model marks each connecting sentence, and the card shows
+   it as "connecting comment, adds no new fact" so you can tell it from a sourced statement. Checked on your computer: text copied from a library article is sent back to be rewritten; wording that claims more
+   than your material ("for the first time", "proves", "unprecedented", "statistically significant", "significantly higher") is sent back unless something you gave says it; and you get a "Heads up" when a draft
+   stays very close to your own wording, when connecting comments are more than about a third of it, when a comment brings in words your material does not have, when it uses stock phrases ("it is important to note",
+   "plays a crucial role") or starts several sentences with "Moreover" or "Furthermore", or when it is well over the length asked for.
 4. **What you get.** A suggestion with one change per paragraph (**Now: nothing here yet**, **Suggested**: the paragraph), so you can keep some and leave the rest. Each paragraph says which file and rows or pages it rests on,
    and **What each statement rests on** lists every statement with its source. Numbers that are new to the paper are pointed out so you can check them against the source.
 5. **Questions.** If the model needed something the sources do not hold ("how many farms were held out?"), the question has a box for your reply; **Answer and revise** writes it again for the same place with your

@@ -214,6 +214,11 @@ Use this when the user wants new text grounded in their analysis, which can be a
    how it compares with the cited work, limitations, what follows. Every number comes from a file you read; say in your reply
    which file and which rows or pages each one came from (not in the paper's text). What the data cannot support, or what only
    the author can interpret, becomes a question for them, not a sentence. No em or en dashes.
+   Write it so it reads like an author explaining, not like a list of facts: put things in your own words (never copy the outline, the notes or an article), join related facts, and add a
+   connecting comment now and then, where a reader needs one (it links one fact to the next, says what the facts mean for the question the section asks, or closes the paragraph with its
+   point). A comment only relates, compares, orders or sums up facts you have already stated, and hedges when it interprets ("suggests", "is consistent with"); it never adds a fact, number, name,
+   cause, comparison or citation, never claims novelty, proof or significance the sources do not state, and does not wander to a neighbouring topic. About one comment for every two or three
+   sentences of fact, inside the length the user asked for; no stock phrases ("it is important to note", "plays a crucial role"). Say in your reply which sentences are only connecting comments.
 5. Show the draft to the user. Only after they agree, put it in the file with `Edit` (the section's place, `\label`s untouched),
    then `overleaf_sync` when they ask to send it. If the section already has text, change it in place rather than replacing it.
 
@@ -308,7 +313,7 @@ handled. The chat app also writes NEW text:
 "write the results from my analysis", "draft the discussion", "add a paragraph about the sampling to the methods". It places the text (end or
 start of a part, or before or after a figure or table), sends the analysis (Settings > Code and results: code, tables, logs and figures as
 pictures), the author's notes, the literature library and the book's advice for that part, and returns paragraphs the author keeps one
-by one, each saying which source it rests on; numbers must be in the sources and a library source is cited only if the bibliography has it.
+by one, each saying which source it rests on; numbers must be in the sources and a library source is cited only if the bibliography has it. The text is meant to read naturally: in new words, with a marked connecting comment now and then (it links, interprets with a hedge, closes a point; it never adds a fact, number, name or citation), and without padding. `voice.py` checks it (copying from a library article, claims beyond the material and sentences that bring in a new topic).
 In Claude Code, for the same job, follow "Writing a section from the author's own results" below. Suggestions the author
 hands over ("Let Claude apply it") arrive as `chatgpt_revise` proposals, as described above.
 When the user asks to "open the UI / app / dashboard", run `ui.sh up` and give them the printed
