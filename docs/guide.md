@@ -257,6 +257,28 @@ Asking to *write* something (not to improve what is there) is understood as a re
   **Add them and cite them in the text** writes the paragraphs again with the ones you ticked. The same happens when you ask for an in-text citation in a pasted paragraph or a selected text: the search is made from that text.
 - **Complete paragraphs.** A request to write a section from an outline produces the paragraphs themselves, with the section heading when the section does not exist yet, not edits.
 
+## Changing the form of the paper: tables, figures, graphs, the appendix
+
+Ask for it in your own words: *"move this table to the appendix and add the respective reference in tex"*, *"improve the visualization of Table 2"*, *"improve the graph in the following way: larger fonts and a legend"*,
+*"adjust the position of the image and the labels (a), (b) of its parts"*, *"make the figures smaller and centre them"*. This kind of request changes the **form** of the paper, never what it says.
+
+1. **It is read first.** A request about layout is always shown back to you before it goes anywhere (see *Checking that I understood you*), and you can choose *Change the layout or format* yourself under the message box.
+2. **Which table or figure.** Name it ("Table 2", "the last figure", a word of its caption, its label such as `tab:results`), tick it in the text, paste its LaTeX, or say "this table" when there is only one. With no clue it
+   lists the figures and tables of your paper and asks. Requests about the page itself (margins, spacing, font size, columns) need no figure.
+3. **What goes to OpenAI.** The LaTeX of that figure or table as it is (not hidden behind tags, since it is what changes), the lines that mention it, the outline of the document, its preamble and the end of the
+   document. The plan lists it and can show the exact text. Nothing is sent without that plan; with *Ask me before anything is sent* on, it waits for you.
+4. **What comes back** is a list of exact edits ("find this text, put that text"), each with its reason. A move is a removal plus an insertion plus the sentence that now points to the table; they are
+   **applied together or not at all**, so a table can never be lost halfway.
+5. **Checks on your computer, before you see it.** Every "find" matches exactly one place; environments and braces still balance; every `\label` still exists once and every `\ref` still has its label; citations,
+   picture files and the words and numbers of tables, figures and captions are unchanged (unless you asked to rename, add a column, round and so on); few words are added to the text; no unsafe command (running programs,
+   reading files outside the paper); new packages are named; and, when LaTeX is installed, **a copy of the paper with the change is compiled** and must compile as well as the paper did. If a check fails the model is
+   told why and asked once more; if it fails again nothing is changed and you are told which check.
+6. **You decide.** Each change is shown as *Now* and *After*. **Apply and save in my files** writes them (the text cleaner, which is for prose, is not used), **Apply, save and send to Overleaf** also sends them, **Not now** sets
+   the suggestion aside. Then look at the PDF in the LaTeX pane. A file that changed since the suggestion was made stops everything: ask again.
+7. **What it cannot do.** It changes LaTeX, not pictures: for an image file (png, jpg, pdf) it can change size, position, caption, labels and the layout of subfigures, and it asks what you want when the picture
+   itself would have to change. A graph drawn in LaTeX (pgfplots, tikz) can be changed in its code. A very long table is sent only in part, and the plan says so.
+8. **In Claude Code** the same job is done directly with the editor tools; `SKILL.md` lists the same checks to make by hand.
+
 ## Your files and writing material
 
 Everything else you want the text to draw on goes in **Settings > Your files and writing material** (or press **Add a file** next to the message box, or drop files on the chat).

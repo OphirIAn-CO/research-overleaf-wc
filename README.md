@@ -23,6 +23,8 @@ and never saves or sends anything you have not approved.
   (the outline and abstract), never by the words about style, and takes each cited paper's reference from its DOI. The writing book is used for style rules only. ([Details](docs/guide.md#writing-from-an-outline-with-your-reading-and-your-citations))
 - **It checks that it understood you.** Each request is read as a whole, in context (a pasted paragraph is material, not the request). When it is not sure it says what it understood, which text it is about and which sources it will use,
   and waits for your yes, your correction or your no; it remembers what you correct. You can also pick the kind of request yourself. ([Details](docs/guide.md#checking-that-i-understood-you))
+- **Change the form of the paper.** *"Move this table to the appendix and add the reference"*, *"improve the visualization of Table 2"*, *"adjust the position of the figure and its labels"*: exact LaTeX edits, checked on your computer
+  (labels and references still match, citations and the words of tables and figures unchanged, the paper still compiles), applied whole or not at all. ([Details](docs/guide.md#changing-the-form-of-the-paper-tables-figures-graphs-the-appendix))
 - **Peer review.** *"Peer review my paper"* scores it against a rubric and lists the problems; **Fix this** turns a comment into an ordinary suggestion. Nothing changes by itself.
 - **References.** Paste a DOI: it goes into your `.bib`, your Mendeley group and Overleaf, and you get the `\cite{...}` to use. (Also from your phone, through a Telegram bot.)
 - **See your paper.** Your LaTeX source and the compiled PDF side by side, on your computer; QuillBot and Overleaf in panes next to the chat for the tone pass.

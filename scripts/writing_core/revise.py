@@ -750,6 +750,9 @@ def _add_bib_entries(proj, proposal, files_written):
 def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source="cli", note=""):
     """Write the accepted hunks into the manuscript. `cleaner(text) -> text` is the step-6b watermark clean."""
     proposal = get_proposal(proj, pid)
+    if proposal.get("kind") == "layout":                                  # LaTeX edits to figures, tables and layout: applied whole, with their own checks (layout.py)
+        from . import layout
+        return layout.apply(name, proj, pid, source=source, note=note)
     if proposal["status"] in ("applied", "rejected", "superseded"):
         raise ReviseError(f"proposal {pid} is already {proposal['status']}" if proposal["status"] != "superseded" else f"proposal {pid} was replaced by a revised one ({proposal.get('superseded_by')})")
     if cleaner is None and not unclean_ok:

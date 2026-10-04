@@ -453,6 +453,71 @@
       return assistant(...lines, details, foot);
     }
 
+    function layoutPlanBubble(m) {
+      const d = m.data, pl = d.plan, ts = pl.targets || [];
+      const what = ts.length ? ts.map((t) => `${t.kind} ${t.n}${t.caption ? ' (' + t.caption.slice(0, 50) + (t.caption.length > 50 ? '...' : '') + ')' : ''}`).join(', ') : 'the settings of the document';
+      const lines = [h('p', null, 'I will change the form of ', h('strong', { text: what }), '. I do not change what the paper says.'),
+        h('p', { class: 'small secondary', text: `The LaTeX of ${ts.length ? 'that part' : 'the preamble'}, the lines that mention it and the outline of your document go to ${pl.model} (about ${fmtTok(pl.est_tokens_in)} tokens${pl.est_cost != null ? ', roughly ' + pl.est_cost.toFixed(4) + ' in your price units' : ''}). `
+          + 'Before anything can be saved I check, on this computer, that labels and references still match, citations and the words of tables and figures are unchanged, nothing unsafe is added, and the paper still compiles.' })];
+      (pl.notes || []).forEach((x) => lines.push(notice('warn', x)));
+      const exact = h('div');
+      const details = h('details', null, h('summary', { text: 'What goes out' }),
+        h('ul', { class: 'small' }, ts.map((t) => h('li', { text: `${t.kind} ${t.n}: ${t.file}, lines ${t.lines[0]} to ${t.lines[1]}${t.cut ? ' (only its start)' : ''}` })), h('li', { text: 'The outline of the document, its preamble and the end of the document' })),
+        h('button', { type: 'button', class: 'small', text: 'Show the exact text', onclick: (ev) => { ev.target.disabled = true; exact.append(h('pre', { class: 'payload small', text: requestText(pl.payload) })); } }), exact);
+      const foot = h('div');
+      if (d.state === 'waiting') {
+        foot.append(notice('warn', 'You asked me to check with you before anything is sent.'),
+          h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Send to OpenAI' }), async () => {
+            const r = await api.post('/api/chat/run', { paper, id: st.cid, message: m.id });
+            await reload(); await watch(r.job);
+          }), guarded(h('button', { type: 'button', text: 'Cancel' }), async () => { await api.post('/api/chat/cancel', { paper, id: st.cid, message: m.id }); await reload(); })));
+      } else {
+        foot.append(h('p', { class: 'muted small', text: { sent: 'Sent to OpenAI.', failed: 'It could not be completed.', cancelled: 'Cancelled, nothing was sent.' }[d.state] || '' }));
+      }
+      return assistant(...lines, details, foot);
+    }
+
+    function renderLayout(holder, p, m) {
+      clear(holder);
+      const locked = p.status === 'applied' || p.status === 'rejected' || p.status === 'superseded';
+      const usage = p.usage || {};
+      const notices = h('div', { class: 'stack' });
+      const redraw = async () => { const fresh = await api.get(`/api/proposal?paper=${enc(paper)}&id=${enc(p.id)}`); renderLayout(clear(holder), fresh, m); };
+      st.cards.set(p.id, { holder, m, status: p.status, sent: !!p.sent_at });
+      holder.append(h('div', { class: 'row small secondary' }, h('span', { text: `${p.model} · ${fmtTok(usage.input_tokens)} in / ${fmtTok(usage.output_tokens)} out${usage.cost != null ? ' · cost ' + usage.cost : ''}` }),
+        p.status === 'applied' ? h('span', { class: 'badge ok', text: 'saved in your files' }) : p.status === 'rejected' ? h('span', { class: 'badge', text: 'set aside' }) : null));
+      if (m.data.steps && m.data.steps.length) holder.append(h('details', null, h('summary', { text: 'What I did' }), stepList(m.data.steps)));
+      if (p.status === 'failed') {
+        holder.append(notice('bad', h('strong', { text: 'I did not use the change OpenAI proposed. ' }), p.error_plain || p.error || ''));
+        return;
+      }
+      if (p.approach) holder.append(h('div', { class: 'approach' }, h('strong', { text: 'What changes and why' }), h('p', { text: p.approach })));
+      (p.questions || []).forEach((q) => holder.append(notice('warn', h('strong', { text: 'OpenAI asks: ' }), q)));
+      if (p.status === 'no_changes') {
+        holder.append(notice('ok', 'OpenAI proposed no change.'));
+        return;
+      }
+      const bad = (p.validators || []).filter((v) => !v.ok && v.detail);
+      if (bad.length) holder.append(notice('warn', 'Heads up: ', bad.map((v) => v.detail).join('; ')));
+      else if ((p.validators || []).some((v) => v.name === 'compiles' && v.ok)) holder.append(notice('ok', 'Checked: labels, references, citations and the words of tables and figures are unchanged, and the paper still compiles with the change.'));
+      else holder.append(notice('ok', 'Checked: labels, references, citations and the words of tables and figures are unchanged.'));
+      const files = [...new Set((p.edits || []).map((e) => e.file))];
+      holder.append(h('p', { class: 'small secondary', text: `${plural((p.edits || []).length, 'change')} in ${files.join(', ')}. They are saved together or not at all: a move is a removal and an insertion, and one without the other would lose the table.` }));
+      (p.edits || []).forEach((e, i) => holder.append(h('div', { class: 'hunk layout-edit' },
+        h('div', { class: 'small' }, h('strong', { text: `${i + 1}. ` }), e.reason || 'A change', h('span', { class: 'secondary', text: `  ${e.file}${e.line_start ? ', line ' + e.line_start : ''}` })),
+        h('div', { class: 'small secondary', text: 'Now' }), h('pre', { class: 'payload small', text: e.find || '(nothing: new text is added here)' }),
+        h('div', { class: 'small secondary', text: 'After' }), h('pre', { class: 'payload small', text: e.replace || '(removed)' }))));
+      holder.append(notices);
+      if (!locked) {
+        holder.append(h('div', { class: 'row actions' },
+          guarded(h('button', { type: 'button', class: 'primary', text: 'Apply and save in my files' }), async () => { await doApprove(notices, p, { push: false }, redraw); }),
+          guarded(h('button', { type: 'button', text: 'Apply, save and send to Overleaf' }), async () => { await doApprove(notices, p, { push: true }, redraw); }),
+          guarded(h('button', { type: 'button', class: 'ghost', text: 'Not now' }), async () => { await api.post('/api/proposal/record', { paper, id: p.id, accepted: [], rejected: 'all', chat: st.cid }); await redraw(); await reload(); }),
+          h('span', { class: 'grow' })));
+        holder.append(h('p', { class: 'small muted', text: 'After saving, look at the PDF (the LaTeX pane) to see how it looks; if you do not like it, ask again in your own words, or restore the file from Overleaf\'s history.' }));
+      }
+    }
+
     function askBubble(m) {
       const d = m.data;
       const sections = h('div', { class: 'row chips' }, (d.sections || []).map((s) => h('button', { type: 'button', class: 'chip', text: s.label,
@@ -751,6 +816,7 @@
     }
 
     function renderSuggestion(holder, prop, m) {
+      if (prop.kind === 'layout') return renderLayout(holder, prop, m);
       clear(holder);
       let p = prop;
       st.cards.set(p.id, { holder, m, status: p.status, sent: !!p.sent_at });
@@ -1158,6 +1224,7 @@
         (m.data && m.data.understood) ? h('div', { class: 'read-as small secondary' }, h('span', { text: 'Read as: ' + m.data.understood.summary + ' ' }),
           h('button', { type: 'button', class: 'link', text: 'Not what I meant', onclick: () => answerUnderstanding(m, { action: 'reconsider' }) })) : null);
       if (m.kind === 'understanding') return understandingBubble(m);
+      if (m.kind === 'layout_plan') return layoutPlanBubble(m);
       if (m.kind === 'plan') return planBubble(m);
       if (m.kind === 'draft_plan') return draftPlanBubble(m);
       if (m.kind === 'ask') return askBubble(m);

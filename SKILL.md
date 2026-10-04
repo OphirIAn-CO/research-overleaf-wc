@@ -199,6 +199,22 @@ its `\cite`s say nothing about what is asked; the request is in the user's own s
 library, or a reference already cited; "improve the table" can be wording or layout), say in one or two sentences what you understood (the action, the exact text or place, the sources) and let the user confirm, correct or
 refuse before you change anything. Prefer a short question to a wrong edit. Remember how this user phrases things within the conversation, and do what they corrected you on the next time.
 
+## Changing the form of the paper (tables, figures, graphs, the appendix, layout)
+
+When the user asks for a change of form ("move this table to the appendix and add the reference in tex", "improve the visualization of the table", "improve the graph in the following way ...", "adjust the position of
+the image and its labels"), you edit LaTeX, not prose. Do it with `Read` and `Edit` on the real files (`overleaf_pull` first), and keep these guarantees, because the web app checks the same things:
+
+1. Find the figure or table the user means (number, caption, label, or the text they pasted); if several fit, ask which. Read the lines that mention it (`\ref{label}`) and the paper's preamble (which packages are loaded)
+   and follow the style of the paper's other tables and figures.
+2. Change no word, number, name or citation of the text, a table's cells or a caption, except what the request asks for (a sentence that points to a moved table, a new axis label if asked). Keep file names of pictures.
+3. Keep every `\label` once; when something moves, its label moves with it; every `\ref` still has its label. A table or figure moved to an appendix is still mentioned in the text (`Table~\ref{tab:x}`, "in Appendix~\ref{app:y}"); if the
+   paper has no `\appendix`, add one before the bibliography with a section whose title and label fit the paper.
+4. Environments and braces stay balanced. Prefer packages already loaded; name any new package to the user (templates and journals restrict them). Good practice for tables: booktabs rules, `\centering`, a smaller font or
+   `tabularx`/`\resizebox` for wide ones, caption above; for figures: `\centering`, widths relative to `\linewidth`, subfigures with their own captions and labels so the letters match the text.
+5. For an image file you can change only the LaTeX around it (size, position, caption, subfigure layout); say so and ask when the picture itself would have to change. A graph drawn in LaTeX can be changed in its code.
+6. No shell escapes, no writing or reading files outside the paper.
+7. Show the user the change (old and new text for each edit) before you write it when it moves or deletes something, compile if LaTeX is installed (`latexmk -pdf`) and report errors, then `overleaf_sync` when they ask to send it.
+
 ## Writing a section from the author's own results (a Discussion, a Results paragraph)
 
 Use this when the user wants new text grounded in their analysis, which can be anywhere on their computer

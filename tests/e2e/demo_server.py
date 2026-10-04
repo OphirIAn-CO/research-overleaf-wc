@@ -118,8 +118,17 @@ def main():
             if "incite citation" in this:
                 return {"intent": "cite", "confidence": 0.6, "summary": "You want references found on the internet for the paragraph you pasted, so they can be cited in it.", "target": "the paragraph you pasted",
                         "uses": {"library": False, "online": True, "outline": False}, "question": "", "alternatives": ["edit"]}
-            return {"intent": guess if guess in ("edit", "draft", "refsearch", "library", "review") else "edit", "confidence": 0.95, "summary": "You want me to " + guess + " as you asked.", "target": "not given",
+            return {"intent": guess if guess in ("edit", "draft", "refsearch", "library", "review", "layout") else "edit", "confidence": 0.95, "summary": "You want me to " + guess + " as you asked.", "target": "not given",
                     "uses": {"library": False, "online": False, "outline": False}, "question": "", "alternatives": []}
+        if (((body.get("text") or {}).get("format")) or {}).get("name") == "layout":       # move the table it was shown to a new appendix, and point the text there
+            blk = re.search(r'<float kind="table"[^>]*file="([^"]*)"[^>]*label="([^"]*)">\n(.*?)\n</float>', user, re.S)
+            if not blk:
+                return {"approach": "I did not see a table to move.", "edits": [], "questions": ["Which table do you mean?"]}
+            rel, label, block = blk.groups()
+            edits = [{"file": rel, "find": block + "\n\n", "replace": "", "reason": "the table leaves its place"},
+                     {"file": rel, "find": "\\end{document}", "replace": "\\appendix\n\\section{Supplementary tables}\\label{app:tables}\n" + block + "\n\n\\end{document}", "reason": "a new appendix with the table and its label"},
+                     {"file": rel, "find": "Table~\\ref{" + label + "}", "replace": "Table~\\ref{" + label + "} (Appendix~\\ref{app:tables})", "reason": "the text still points to the table"}]
+            return {"approach": "The table is now in a new appendix at the end, and the sentence that mentions it points there.", "edits": edits, "questions": []}
         if (((body.get("text") or {}).get("format")) or {}).get("name") == "queries":      # the search words for finding references
             return {"queries": ["armed conflict attacks on oil pipelines Colombia", "violence and the security of energy infrastructure"]}
         if (((body.get("text") or {}).get("format")) or {}).get("name") == "draft" and "literature review" in user:      # new text from an outline the author pasted in the request

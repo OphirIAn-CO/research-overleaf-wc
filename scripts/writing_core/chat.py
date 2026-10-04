@@ -387,8 +387,23 @@ def strip_pasted(name, proj, text):
     return rest if hits else text
 
 
+# a request about the FORM of the paper: where a table or figure sits, how it looks, the appendix, the page. Read only when no model reads the request (see intent.py); it needs an action on the form AND
+# a figure, table or page, and it stands aside when the words ask to improve the prose ("improve the flow of the text before Figure 1").
+_LAYOUT_OBJ = r"(?:tables?|figures?|visuali[sz]ations?|figs?\.?|graphs?|plots?|charts?|images?|pictures?|diagrams?|captions?|sub-?figures?|legends?|axes|axis|appendix|appendices|margins?|columns?|layout|spacing|page breaks?)"
+_LAYOUT_ACT = re.compile(r"\b(?:move|relocate|shift|reposition|resize|rescale|rotate|re-?center|centre|center|re-?align|align|widen|enlarge|shrink|swap|restyle|reformat|recolou?r|"
+                         r"(?:put|place|position|send|add)\b.{0,40}\b(?:to|into|in|at)\s+(?:the\s+)?(?:appendix|end|top|bottom|next page)|"
+                         rf"(?:improve|adjust|fix|change|update|redo|enhance|polish|tidy)\s+(?:the\s+|this\s+|that\s+|my\s+)?(?:visuali[sz]ation|look|appearance|layout|format|formatting|style|design|position|placement|size|alignment|legibility|readability|(?:\w+\s+)?{_LAYOUT_OBJ})|"
+                         rf"make\s+(?:the\s+|this\s+)?{_LAYOUT_OBJ}\s+(?:bigger|larger|smaller|wider|narrower|clearer|fit|look))\b", re.I)
+_LAYOUT_PROSE = re.compile(r"\b(?:flow|grammar|grammatical|wording|sentences?|paragraphs?|tone|spelling|typos?|wordy|concise|rephrase|reword|rewrite|paraphrase|text (?:before|after)|the text)\b", re.I)
+
+
+def is_layout_request(text):
+    t = subject.request_part(text or "")
+    return bool(_LAYOUT_ACT.search(t)) and bool(re.search(_LAYOUT_OBJ, t, re.I)) and not _LAYOUT_PROSE.search(t)
+
+
 def intent(text):
-    """-> 'refs' | 'review' | 'help' | 'library' | 'refsearch' | 'draft' | 'edit'"""
+    """-> 'refs' | 'review' | 'help' | 'library' | 'refsearch' | 'layout' | 'draft' | 'edit'"""
     if find_dois(text):
         return "refs"
     if _HELP.match(text or ""):
@@ -398,6 +413,8 @@ def intent(text):
         return "review"
     if _LIBRARY_ASK.search(asked) and not (set(taxonomy.words(asked.lower())) & (_INTENT_WORDS | _LIBRARY_EDIT)):
         return "library"
+    if is_layout_request(asked):
+        return "layout"
     if is_refs_request(asked):
         return "refsearch"
     if is_draft_request(text):

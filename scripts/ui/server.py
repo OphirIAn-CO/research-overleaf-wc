@@ -33,7 +33,7 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (activity, book_index, chat, chunk_book, config, draft, events, files, gitmerge, health, intent, latex_mask, latexbuild, library, openai_client, overleaf_auth, panes, paper_index,  # noqa: E402
+from writing_core import (activity, book_index, chat, chunk_book, config, draft, events, files, gitmerge, health, intent, latex_mask, latexbuild, layout, library, openai_client, overleaf_auth, panes, paper_index,  # noqa: E402
                           preferences, retrieve, review, revise, rule_cards, scholar, stats, taxonomy, watermark, webview)
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -1070,7 +1070,7 @@ def api_chat_cancel(r):
     n, p, cid = _chat_ctx(r)
     (mid,) = need(r.body, "message")
     m = chat.get_message(p, cid, str(mid))
-    if not m or m["kind"] not in ("plan", "review_plan", "draft_plan") or m["data"].get("state") != "waiting":
+    if not m or m["kind"] not in ("plan", "review_plan", "draft_plan", "layout_plan") or m["data"].get("state") != "waiting":
         raise ApiError(409, "that request is not waiting")
     chat.update(p, cid, m["id"], state="cancelled")
     return {"ok": True}
@@ -1121,6 +1121,36 @@ def _start_pass(app, n, p, cid, plan_mid):
     return app.jobs.submit(f"Improving {n}", work, with_steps=True, meta={"paper": n, "chat": cid})
 
 
+def _start_layout(app, n, p, cid, plan_mid):
+    """Ask for the layout change in the background; the suggestion lands in the chat when it is ready."""
+    msg = chat.get_message(p, cid, plan_mid)
+    if not msg or msg["kind"] != "layout_plan":
+        raise ApiError(404, "that request is not in this chat")
+    if msg["data"].get("state") == "sent":
+        raise ApiError(409, "that request was already sent")
+    plan = msg["data"]["plan"]
+    chat.update(p, cid, plan_mid, state="sent")
+
+    def work(progress, set_steps):
+        try:
+            res = layout.resolve(n, p, plan["instruction"], msg["data"].get("chunk_ids") or None)
+            out = layout.run(n, p, plan["instruction"], res, confirm=plan["payload_hash"], source="web", progress=set_steps)
+            if out["status"] == "preview":
+                raise ValueError("Your paper changed after I prepared this request. Please ask again.")
+        except Exception as e:  # noqa: BLE001
+            chat.update(p, cid, plan_mid, state="failed")
+            chat.append(p, cid, "assistant", "error", plain_error(e))
+            raise
+        prop = out["proposal"]
+        if prop["status"] == "failed" and prop.get("error_kind") in PLAIN_OPENAI:
+            chat.update(p, cid, plan_mid, state="failed")
+            chat.append(p, cid, "assistant", "error", PLAIN_OPENAI[prop["error_kind"]])
+            return {"proposal": prop["id"], "failed": prop["error_kind"]}
+        chat.append(p, cid, "assistant", "result", "", proposal=prop["id"], chunk_ids=[], plan=plan_mid, status=prop["status"], usage=prop["usage"], steps=prop.get("steps", []), layout=True)
+        return {"proposal": prop["id"]}
+    return app.jobs.submit(f"Changing the layout of {n}", work, with_steps=True, meta={"paper": n, "chat": cid})
+
+
 def _start_draft(app, n, p, cid, plan_mid):
     """Write new text in the background; the suggestion lands in the chat when it is ready."""
     msg = chat.get_message(p, cid, plan_mid)
@@ -1163,6 +1193,7 @@ HELP_TEXT = ("Tell me what to do with your paper, in your own words. For example
              "- write a new introduction paragraph after the selected text, using my literature library and citing sources\n"
              "- what do my articles say about irrigation?\n"
              "- find references about how armed conflict affects energy infrastructure (I search the internet, you choose which to add)\n"
+             "- move this table to the appendix and add the reference (or improve a table or a graph, adjust where a figure sits)\n"
              "- peer review my paper\n"
              "- or paste a DOI to add the reference.\n"
              "I read each request as a whole and, when I am not sure what you mean, I say what I understood and wait for your yes, your correction or your no. "
@@ -1233,7 +1264,7 @@ def api_chat_send(r):
     # selected passage rather than replacing it.
     asked = chat.strip_pasted(n, p, text) if not ticked else text      # what is asked, without the paragraphs of the paper that the message carries
     inferred = chat.intent(asked)
-    kind = "refsearch" if find_refs else "draft" if redraft else (inferred if inferred in ("draft", "refsearch") else "edit") if ticked else inferred
+    kind = "refsearch" if find_refs else "draft" if redraft else (inferred if inferred in ("draft", "refsearch", "layout") else "edit") if ticked else inferred
     req = {"text": text, "asked": asked, "ticked": ticked, "facts": facts, "online": online, "issue": issue, "redraft": redraft, "revises": revises, "find_refs": find_refs, "words": words}
     uses = None
     flag = str(r.body.get("flag") or "")
@@ -1430,6 +1461,25 @@ def _dispatch(app, n, p, cid, kind, req, out, user_mid, uses=None, explicit=Fals
         out.append(m)
         if not ask:
             job = _start_draft(app, n, p, cid, m["id"])
+            out[-1] = chat.get_message(p, cid, m["id"])
+    elif kind == "layout":
+        if config.openai_status()[0] != "ok":
+            out.append(chat.append(p, cid, "assistant", "error", "ChatGPT is not set up yet. Open Settings and add your OpenAI key and model, then ask again."))
+            return {"messages": out}
+        try:
+            res = layout.resolve(n, p, asked, ticked)
+            if res["ask"]:
+                out.append(chat.append(p, cid, "assistant", "text", res["ask"]))
+                return {"messages": out}
+            pl = layout.plan(n, p, text, res)
+        except (layout.LayoutError, revise.ReviseError, config.ConfigError, ValueError, OSError, KeyError, paper_index.IsolationError) as e:
+            out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
+            return {"messages": out}
+        ask = config.paper_settings(p)["confirm_before_send"]
+        m = chat.append(p, cid, "assistant", "layout_plan", "", plan=pl, state="waiting", confirm="setting" if ask else None, chunk_ids=ticked or [])
+        out.append(m)
+        if not ask:
+            job = _start_layout(app, n, p, cid, m["id"])
             out[-1] = chat.get_message(p, cid, m["id"])
     elif kind == "review":
         if config.openai_status()[0] != "ok":
@@ -1653,6 +1703,8 @@ def api_chat_run(r):
         return {"job": _start_review(r.app, n, p, cid, str(mid))}
     if m and m["kind"] == "draft_plan":
         return {"job": _start_draft(r.app, n, p, cid, str(mid))}
+    if m and m["kind"] == "layout_plan":
+        return {"job": _start_layout(r.app, n, p, cid, str(mid))}
     return {"job": _start_pass(r.app, n, p, cid, str(mid))}
 
 
@@ -1669,6 +1721,9 @@ def api_proposal_approve(r):
     n, p = paper_ref(r.body.get("paper", ""))
     pid = _pid(r)
     texts, accept, cid = r.body.get("texts"), r.body.get("accept", "all"), r.body.get("chat")
+    is_layout = revise.get_proposal(p, pid).get("kind") == "layout"
+    if is_layout and texts is not None:
+        raise ApiError(400, "a layout change is applied as it is; it has no text to edit")
     if texts is not None:
         if not isinstance(texts, dict):
             raise ApiError(400, "texts must be an object of passage ids to text")
@@ -1683,13 +1738,16 @@ def api_proposal_approve(r):
             raise ApiError(409, str(e)) from None
         return {"ok": True, "handoff": h}
     url = config.ui_cfg()["watermark_url"]
-    cleaner = watermark.make_cleaner(url) if url else None
+    cleaner = watermark.make_cleaner(url) if url and not is_layout else None             # the text cleaner is for prose; a layout change is LaTeX
     unclean = bool(r.body.get("unclean_ok")) and not url      # the author saves as written because no text-cleaning service is set up; with one set up it always runs
     try:
-        out = revise.apply(n, p, pid, accept=accept, cleaner=cleaner, unclean_ok=unclean, source="web",
-                           note=("edited by you" if texts is not None else "") + (" (saved without the text-cleaning step)" if unclean else ""))
+        if is_layout:
+            out = layout.apply(n, p, pid, source="web")
+        else:
+            out = revise.apply(n, p, pid, accept=accept, cleaner=cleaner, unclean_ok=unclean, source="web",
+                               note=("edited by you" if texts is not None else "") + (" (saved without the text-cleaning step)" if unclean else ""))
     except revise.ReviseError as e:
-        raise ApiError(409, str(e), handoff_available=True) from None
+        raise ApiError(409, str(e), handoff_available=not is_layout) from None
     files = sorted({w["file"] for w in out["written"]})
     res = {"ok": True, "applied": out, "files": files, "cleaned": bool(cleaner)}
     added_refs = [a["key"] for a in (out.get("bibliography") or {}).get("added", [])]
@@ -1697,7 +1755,7 @@ def api_proposal_approve(r):
         try:
             chat.append(p, cid, "assistant", "note", f"Saved in {', '.join(files)}." + (" This is your own version." if texts is not None else "")
                         + ((" Added to your bibliography: " + ", ".join(added_refs) + ".") if added_refs else "")
-                        + ("" if cleaner else " Saved exactly as written: no text-cleaning service is set up."), proposal=pid)
+                        + ("" if cleaner or is_layout else " Saved exactly as written: no text-cleaning service is set up."), proposal=pid)
         except ValueError:
             pass
     if cid:
@@ -1708,7 +1766,7 @@ def api_proposal_approve(r):
     if r.body.get("push"):
         prop = revise.get_proposal(p, pid)
         what = ", ".join(taxonomy.label(x) for x in prop.get("part") or []) or "text"
-        res["push"] = git_action(n, "sync", f"Writing assistant: improve {what}")
+        res["push"] = git_action(n, "sync", "Writing assistant: change the layout" if is_layout else f"Writing assistant: improve {what}")
         if res["push"].get("sent"):
             res["push"]["pane"] = {"reloading": refresh_overleaf(r.app, n)}
         if cid and "hint" not in res["push"] and res["push"].get("level") == "ok":      # only when Overleaf really took it
