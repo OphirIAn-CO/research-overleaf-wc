@@ -152,8 +152,21 @@
   function renderThreads() {
     const box = clear(document.getElementById('chat-list'));
     for (const t of S.threads.slice(0, 12)) {
-      box.append(h('button', { type: 'button', class: 'side-item', 'aria-current': t.id === S.chatId && S.page === 'chat' ? 'true' : null, onclick: () => { S.chatId = t.id; if (S.page === 'chat') route(); else location.hash = '#/chat'; } },
-        h('span', { class: 'grow ellipsis', text: t.title })));
+      const open = () => { S.chatId = t.id; if (S.page === 'chat') route(); else location.hash = '#/chat'; };
+      const remove = async () => {
+        if (!window.confirm(`Delete the chat “${t.title}”? Suggestions already saved stay in your files.`)) return;
+        try {
+          await api.post('/api/chat/delete', { paper: S.paper, id: t.id });
+          if (S.chatId === t.id) S.chatId = null;
+          await loadThreads();
+          if (S.page === 'chat') route();
+          toast('Chat deleted.');
+        } catch (e) { toast(e.message); }
+      };
+      box.append(h('div', { class: 'chat-side-row' },
+        h('button', { type: 'button', class: 'side-item', 'aria-current': t.id === S.chatId && S.page === 'chat' ? 'true' : null, onclick: open },
+          h('span', { class: 'grow ellipsis', text: t.title })),
+        h('button', { type: 'button', class: 'ghost small chat-delete', text: 'Delete', title: `Delete “${t.title}”`, 'aria-label': `Delete chat: ${t.title}`, onclick: remove })));
     }
   }
 

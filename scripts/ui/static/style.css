@@ -56,6 +56,10 @@ pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .side-list { display: flex; flex-direction: column; gap: 1px; }
 .side-item { display: flex; gap: 8px; align-items: center; width: 100%; text-align: left; border: 0; background: transparent; padding: 6px 8px; border-radius: 8px; min-height: 32px; color: var(--ink-2); }
 .side-item:hover { background: var(--hover); } .side-item[aria-current="true"] { background: var(--hover); color: var(--ink); font-weight: 600; }
+.chat-side-row { display: flex; align-items: center; gap: 2px; }
+.chat-side-row .side-item { min-width: 0; }
+.chat-delete { flex: 0 0 auto; padding: 4px 6px; color: var(--ink-3); }
+.chat-side-row:hover .chat-delete, .chat-delete:focus-visible { color: var(--critical-text); }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; } .dot.ok { background: var(--good); } .dot.bad { background: var(--critical); }
 .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-nav { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
