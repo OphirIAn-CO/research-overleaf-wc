@@ -1,7 +1,7 @@
 /* Paper index + card, and References. Same rules as app.js: text only, never innerHTML. */
 (function () {
   'use strict';
-  const { h, clear, api, notice, busy, guarded, registerPage, toast, fmtTok, ago, tile, S } = window.OLS;
+  const { h, clear, api, notice, busy, guarded, registerPage, toast, fmtTok, ago, tile, S, drafts } = window.OLS;
   const hhmm = (ts) => { const d = new Date(ts * 1000); return `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
   const enc = encodeURIComponent;
 
@@ -258,7 +258,7 @@
     const proj = window.OLS.paperObj(name);
     box.append(h('div', { class: 'page-head' }, h('h1', { text: 'References: ' + name }),
       h('span', { class: 'muted small', text: 'Paste a DOI and it goes into your bibliography, your Mendeley group and Overleaf. You get the \\cite{...} to paste into your text.' })));
-    const ta = h('textarea', { 'aria-label': 'DOIs', placeholder: 'Paste one or more DOIs or doi.org links', rows: '3' });
+    const ta = drafts.bind(h('textarea', { 'aria-label': 'DOIs', placeholder: 'Paste one or more DOIs or doi.org links', rows: '3' }), `dois:${name}`);        // kept while you look at another page
     const results = h('div', { class: 'stack' });
     const waiting = h('div');
     const recent = h('div');
@@ -300,7 +300,7 @@
       try {
         const r = await api.post('/api/refs/add', { paper: name, dois });
         clear(results).append(...[...r.results.map((x) => refCard(x, r.push)), r.push && r.push.friendly ? notice('warn', r.push.friendly, ' ', h('a', { href: '#/settings', text: 'Open Settings' })) : null].filter(Boolean));
-        ta.value = '';
+        ta.value = ''; drafts.clear(`dois:${name}`);
         await Promise.all([refresh(), showWaiting(), window.OLS.loadState()]);
       } catch (e) { clear(results).append(notice('bad', e.message)); throw e; }
     });

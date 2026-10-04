@@ -46,6 +46,17 @@ class Static(unittest.TestCase):
         self.assertNotIn("clear(threadEl)", js, "the thread is reconciled, not cleared and redrawn")
         self.assertNotRegex(js, r"(?m)^\s*(?:el|holder|box|into|out|threadEl)\.append\([^\n]*: null\);", "Element.append(null) writes the word null on the page: spread an array instead")
 
+    def test_what_the_author_has_typed_is_kept_when_the_page_changes(self):
+        app = (STATIC / "app.js").read_text()
+        chat = (STATIC / "chat.js").read_text()
+        self.assertIn("sessionStorage", app)
+        self.assertIn("drafts", app)
+        for needed in ("drafts.bind(ta, `composer:", "drafts.bind(box, `answer:", "drafts.bind(req, `req:", "drafts.bind(more, `more:", "drafts.bind(mine, `final:"):
+            self.assertIn(needed, chat, needed)
+        self.assertRegex(chat, r"drafts\.clear\(`composer:", "a sent message empties its draft")
+        # a text box a program fills in must tell the saver, and no secret field may ever be bound
+        self.assertNotRegex(chat + (STATIC / "settings.js").read_text(), r"drafts\.bind\([^\n]*type: 'password'")
+
     def test_saving_without_a_text_cleaning_service_is_the_authors_explicit_choice_in_the_request(self):
         js = (STATIC / "chat.js").read_text()
         self.assertIn("unclean_ok", js)

@@ -2,7 +2,7 @@
    Every piece of manuscript or model text goes in as text (textContent / text nodes), never as HTML. */
 (function () {
   'use strict';
-  const { h, clear, api, notice, busy, guarded, registerPage, toast, fmtTok, ago, S, waitJob } = window.OLS;
+  const { h, clear, api, notice, busy, guarded, registerPage, toast, fmtTok, ago, S, waitJob, drafts } = window.OLS;
   const enc = encodeURIComponent;
   const words = (n) => Math.round(n);
 
@@ -213,8 +213,9 @@
 
     // ---- composer
     const ta = h('textarea', { id: 'composer', rows: '2', 'aria-label': 'Ask for a change', placeholder: 'What should I do? For example: improve the flow of the text before Figure 1 in the methods' });
+    drafts.bind(ta, `composer:${paper}:${st.cid}`);                  // what was typed and not sent is still there after a visit to Settings or another page
     const sendBtn = h('button', { type: 'button', class: 'primary', text: 'Send' });
-    const chips = h('div', { class: 'row chips' }, data.chips.map((c) => h('button', { type: 'button', class: 'chip', text: c.label, onclick: () => { ta.value = (ta.value.trim() ? ta.value.trim() + ' ' : '') + c.text; ta.focus(); } })));
+    const chips = h('div', { class: 'row chips' }, data.chips.map((c) => h('button', { type: 'button', class: 'chip', text: c.label, onclick: () => { ta.value = (ta.value.trim() ? ta.value.trim() + ' ' : '') + c.text; ta.dispatchEvent(new Event('input')); ta.focus(); } })));
     const fileInput = h('input', { type: 'file', multiple: true, hidden: true, 'aria-hidden': 'true', tabindex: '-1', accept: '.pdf,.docx,.txt,.md,.markdown,.csv,.tsv,.json,.ipynb,.py,.r,.rmd,.m,.jl,.sql,.sh,.yaml,.yml,.toml,.tex,.bib,.rst,.png,.jpg,.jpeg,.gif,.svg,.webp' });
     const attachBtn = h('button', { type: 'button', class: 'attach', text: 'Add a file', title: 'Add an article (PDF or Word), a table (CSV), notes, a notebook or code to this paper. It is saved in the references folder, sent to Overleaf, and split into parts a request can read.' });
     const adding = h('div', { class: 'row chips adding', role: 'status', 'aria-live': 'polite', hidden: true });
@@ -240,18 +241,21 @@
       }
     }
 
-    async function send(text, extra) {
-      if (st.busy) return;
+    async function send(text, extra) {                          // -> true when the request went, false when it did not (the caller can then give the text back)
+      if (st.busy) return false;
       st.stuck = true;
       setBusy(true);
+      let went = false;
       try {
         const r = await api.post('/api/chat/send', Object.assign({ paper, id: st.cid, text }, extra || {}));
+        went = true;
         await reload();
         await window.OLS.loadThreads();
         if (r.job) await watch(r.job);
         else if (window.OLS.panes && window.OLS.panes.setTargetFromThread) window.OLS.panes.setTargetFromThread(st.messages);
       } catch (e) { toast(e.message); }
       finally { setBusy(false); }
+      return went;
     }
     // ---- adding files: from the button or by dropping them on the chat. Each one is saved, read into parts and (unless switched off) sent to Overleaf on its own.
     async function addFiles(list) {
@@ -276,7 +280,13 @@
     }
     attachBtn.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
-    const submit = () => { const t = ta.value.trim(); if (!t) return; ta.value = ''; send(t); };
+    const submit = async () => {
+      const t = ta.value.trim();
+      if (!t) return;
+      if (st.busy) { toast('A request is still running. Your text is kept: send it when the answer is in.'); return; }
+      ta.value = ''; drafts.clear(`composer:${paper}:${st.cid}`);
+      if (!(await send(t)) && !ta.value.trim()) { ta.value = t; ta.dispatchEvent(new Event('input')); }          // it did not go (the connection, a refusal): the text is not lost
+    };
     sendBtn.addEventListener('click', submit);
     composer.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
     ta.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } });
@@ -703,7 +713,7 @@
         kids.push(h('p', { class: 'small muted', text: 'I only know what the search and the paper\'s own page say about each one: title, authors, abstract. I do not have the paper itself, so read it before you rely on what it says. Nothing is added to your bibliography until you tick it.' }));
         if (!useIt) kids.push(h('p', { class: 'small muted', text: 'To cite them in your text afterwards, ask for it, for example: "support the first paragraph of the introduction with these references".' }));
       }
-      const words = h('input', { type: 'text', value: (d.queries || [])[0] || '', 'aria-label': 'Words to search for', class: 'grow' });
+      const words = drafts.bind(h('input', { type: 'text', value: (d.queries || [])[0] || '', 'aria-label': 'Words to search for', class: 'grow' }), `words:${paper}:${m.id}`);
       kids.push(h('div', { class: 'row' }, h('span', { class: 'small secondary', text: 'Other words:' }), words, guarded(h('button', { type: 'button', class: 'small', text: 'Search again' }), async () => {
         const w = words.value.trim();
         if (!w) throw new Error('Write what to look for.');
@@ -727,6 +737,8 @@
       let p = prop;
       st.cards.set(p.id, { holder, m, status: p.status, sent: !!p.sent_at });
       const locked = p.status === 'applied' || p.status === 'rejected' || p.status === 'superseded';
+      const forgetDrafts = () => ['answer', 'req', 'more', 'final'].forEach((k) => drafts.clearPrefix(`${k}:${paper}:${p.id}`));       // a suggestion that is closed has nothing left to answer
+      if (locked) forgetDrafts();
       const sel = new Set(p.units.flatMap((u) => u.hunks.map((x) => x.uid)));
       const nHunks = sel.size;
       const usage = p.usage || {};
@@ -789,10 +801,11 @@
         if (u.approach) why.append(h('p', { class: 'approach', text: u.approach }));
         const back = (u.restored || []).filter((x) => !x.own_line);
         if (back.length) why.append(notice('warn', `OpenAI left out ${plural(back.length, 'citation or formula', 'citations or formulas')} (${back.map((x) => x.latex).join(', ')}). I put ${back.length === 1 ? 'it' : 'them'} back where ${back.length === 1 ? 'it' : 'they'} stood; check ${back.length === 1 ? 'it still sits' : 'they still sit'} next to the claim ${back.length === 1 ? 'it supports' : 'they support'}.`));
-        (u.questions || []).forEach((q) => {
+        (u.questions || []).forEach((q, qi) => {
           const nq = notice('warn', h('strong', { text: 'A question for you: ' }), q);
           if (!locked) {
             const box = h('textarea', { rows: '2', class: 'answer', 'aria-label': 'Your answer to: ' + q, placeholder: 'Your answer (leave it empty to skip this question). Then press "Answer and revise" below.' });
+            drafts.bind(box, `answer:${paper}:${p.id}:${u.unit_id}:${qi}`);
             answers.push({ q, box });
             nq.append(box);
             if (CITE_Q.test(q)) nq.append(h('div', { class: 'row' }, findRefs('Find references for this', q)));
@@ -870,7 +883,9 @@
         if (discuss.hidden || discuss.childNodes.length) return;
         const req = h('textarea', { rows: '3', 'aria-label': isComment ? 'The reviewer\'s comment' : 'What I was asked to do' });
         req.value = p.instruction || '';
+        drafts.bind(req, `req:${paper}:${p.id}`);
         const more = h('textarea', { rows: '3', 'aria-label': 'Anything to add or change', placeholder: 'For example: the criteria were wells with at least six months of production; keep it to two sentences; do not mention the vendor.' });
+        drafts.bind(more, `more:${paper}:${p.id}`);
         moreBox = more;
         const compose = composeFacts;
         const go = guarded(h('button', { type: 'button', class: 'primary', text: 'Make a new suggestion' }), async () => {
@@ -891,7 +906,10 @@
         title: 'Answer the questions, change what was asked, or say what to add. You get a new suggestion for the same place that replaces this one.', onclick: openDiscuss });
       const refsBtn = findRefs('Find references', '');
       if (!nHunks) {
-        if (p.status === 'proposed' || p.status === 'no_changes') holder.append(h('div', { class: 'row actions' }, discussBtn, refsBtn), discuss);
+        if (p.status === 'proposed' || p.status === 'no_changes') {
+          holder.append(h('div', { class: 'row actions' }, discussBtn, refsBtn), discuss);
+          if (drafts.has(`req:${paper}:${p.id}`) || drafts.has(`more:${paper}:${p.id}`)) openDiscuss();          // what was being written there is still there: show it
+        }
         return;
       }
       const unclean = !st.data.can_apply;             // no text-cleaning service: the text is saved exactly as written, and the card says so
@@ -912,6 +930,8 @@
         guarded(h('button', { type: 'button', class: 'ghost', text: 'Not now' }), async () => { await api.post('/api/proposal/record', { paper, id: p.id, accepted: [], rejected: 'all', chat: st.cid }); await redraw(); await reload(); }),
         h('span', { class: 'grow' }), count);
       holder.append(copies, actions, discuss);
+      if (drafts.has(`req:${paper}:${p.id}`) || drafts.has(`more:${paper}:${p.id}`)) openDiscuss();
+      if (drafts.has(`final:${paper}:${p.id}`)) openBanner(p, 3);                                                 // the author's own version was being written: bring the panel back
       holder.append(h('p', { class: 'small muted' }, unclean ? 'Saved exactly as written: no text-cleaning service is set up. ' : '', 'Saving puts the ticked changes into your files here; "send" then puts them in Overleaf. ', handoff));
     }
 
@@ -935,6 +955,7 @@
       try {
         const r = await api.post('/api/proposal/approve', Object.assign({ paper, id: p.id, chat: st.cid }, body));
         if (r.ok === false) return r;
+        ['answer', 'req', 'more', 'final'].forEach((k) => drafts.clearPrefix(`${k}:${paper}:${p.id}`));
         const addedRefs = ((r.applied || {}).bibliography || {}).added || [];
         toast('Saved in ' + r.files.join(', ') + (addedRefs.length ? '; added to your bibliography: ' + addedRefs.map((a) => a.key).join(', ') : ''));
         (((r.applied || {}).bibliography || {}).warnings || []).forEach((w) => into.append(notice('warn', w)));
@@ -957,7 +978,7 @@
         toast(what === 'clipboard' ? 'QuillBot has not copied anything yet. Press QuillBot\'s own Copy button, or select the text there and use "Take the text I selected".' : 'Nothing is selected in QuillBot. Select the result text there first.');
         return;
       }
-      mine.value = t; if (st.banner) st.banner.setStep(Math.max(st.banner.step, 3)); check(); toast('Took ' + t.trim().split(/\s+/).length + ' words from QuillBot. Check them below.');
+      mine.value = t; mine.dispatchEvent(new Event('input')); if (st.banner) st.banner.setStep(Math.max(st.banner.step, 3)); toast('Took ' + t.trim().split(/\s+/).length + ' words from QuillBot. Check them below.');
     });
 
     /* The panel above the message box for taking a suggestion through QuillBot (or editing it by hand): the text goes out, the result comes back into a box here, the
@@ -1036,6 +1057,7 @@
         const v = u.views;
         const mine = h('textarea', { rows: '5', 'aria-label': 'Your final version', class: 'mono' });
         mine.value = v.suggested_masked;
+        drafts.bind(mine, `final:${paper}:${p.id}:${u.unit_id}`);
         mine.addEventListener('input', check);
         boxes.set(u.unit_id, mine);
         const which = h('select', { 'aria-label': 'Compare with' }, h('option', { value: 'original', text: 'Show my changes against my original text' }), h('option', { value: 'model', text: 'Show my changes against OpenAI\'s suggestion' }));
@@ -1059,8 +1081,8 @@
                 take(mine, check, 'clipboard', 'Take QuillBot\'s result', 'The text QuillBot put on its clipboard with its own Copy button'),
                 take(mine, check, 'selection', 'Take the text I selected', 'The text you selected in the QuillBot pane')] : null,
               h('button', { type: 'button', class: inQuillBot ? 'small' : 'small primary', text: 'Paste what I copied', onclick: async () => {
-                try { mine.value = await navigator.clipboard.readText(); check(); } catch (e) { toast('Your browser did not allow reading the clipboard. Paste with Cmd+V or Ctrl+V into the box instead.'); }
-              } }), h('button', { type: 'button', class: 'small ghost', text: 'Start over', onclick: () => { mine.value = v.suggested_masked; check(); } }),
+                try { mine.value = await navigator.clipboard.readText(); mine.dispatchEvent(new Event('input')); } catch (e) { toast('Your browser did not allow reading the clipboard. Paste with Cmd+V or Ctrl+V into the box instead.'); }
+              } }), h('button', { type: 'button', class: 'small ghost', text: 'Start over', onclick: () => { mine.value = v.suggested_masked; mine.dispatchEvent(new Event('input')); } }),
               guarded(h('button', { type: 'button', class: 'small ghost', text: 'Copy my version as LaTeX', title: 'Your version with the citations and formulas put back, ready to paste anywhere' }), async () => {
                 await window.OLS.panes.copyAsync(api.post('/api/proposal/check', { paper, id: p.id, texts: { [u.unit_id]: mine.value } }).then((r) => r.checks[u.unit_id].latex), 'Your version');
               })))),

@@ -32,6 +32,36 @@
     set(k, v) { try { window.localStorage.setItem(k, v); } catch (e) { /* private window: fine */ } },
   };
 
+  /* What the author has typed and not sent is kept while they look at another page: the chat page is built again every time it is opened. It lives in memory and in the tab's
+     sessionStorage (so a reload keeps it too, and closing the tab forgets it). Nothing secret goes through here: never bind a password or token field. */
+  const drafts = (() => {
+    const mem = new Map();
+    const K = (k) => 'ols-draft:' + k;
+    const MAX = 200000;
+    const get = (k) => {
+      if (mem.has(k)) return mem.get(k);
+      try { const v = window.sessionStorage.getItem(K(k)); if (v != null) { mem.set(k, v); return v; } } catch (e) { /* storage blocked: memory only */ }
+      return '';
+    };
+    const set = (k, v) => {
+      v = String(v || '').slice(0, MAX);
+      if (v) mem.set(k, v); else mem.delete(k);
+      try { if (v) window.sessionStorage.setItem(K(k), v); else window.sessionStorage.removeItem(K(k)); } catch (e) { /* full or blocked: memory only */ }
+    };
+    const keys = (prefix) => {
+      const out = new Set(Array.from(mem.keys()).filter((k) => k.startsWith(prefix)));
+      try { for (let i = 0; i < window.sessionStorage.length; i++) { const sk = window.sessionStorage.key(i); if (sk && sk.startsWith(K(prefix))) out.add(sk.slice(K('').length)); } } catch (e) { /* none */ }
+      return Array.from(out);
+    };
+    return {
+      get, set, clear: (k) => set(k, ''),
+      has: (prefix) => keys(prefix).some((k) => get(k)),
+      clearPrefix: (prefix) => keys(prefix).forEach((k) => set(k, '')),
+      // give a text box its saved text back, and save what is typed from now on (a program that sets .value must send an "input" event afterwards)
+      bind(el, k) { const v = get(k); if (v) el.value = v; el.addEventListener('input', () => set(k, el.value)); return el; },
+    };
+  })();
+
   async function api(method, path, body, opts) {
     const headers = { 'X-Requested-With': 'ols' };
     if (method === 'POST') headers['Content-Type'] = 'application/json';
@@ -312,7 +342,7 @@
     route();
   }
 
-  window.OLS = { h, clear, api, waitJob, toast, notice, busy, guarded, tile, fmtTok, ago, registerPage, S, route, loadState, loadThreads, renderThreads, paperObj, setPaper, store };
+  window.OLS = { h, clear, api, waitJob, toast, notice, busy, guarded, tile, fmtTok, ago, registerPage, S, route, loadState, loadThreads, renderThreads, paperObj, setPaper, store, drafts };
   /* The frame of the chat page (the page itself, the main area, the side area) is never meant to scroll; only the conversation, the source and the PDF do. Something
      that scrolls it anyway (a focus, a link to an anchor, a browser quirk) would slide the buttons at the top out of sight, so it is put back at once. */
   document.addEventListener('scroll', (e) => {
