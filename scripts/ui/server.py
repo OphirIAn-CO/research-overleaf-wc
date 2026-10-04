@@ -1261,10 +1261,17 @@ def api_chat_send(r):
                 tail = (" Sections I can see: " + ", ".join(loc["sections"]) + ".") if loc.get("sections") else ""
                 out.append(chat.append(p, cid, "assistant", "text", loc["why"] + tail))
                 return {"messages": out}
-            pl = draft.plan(n, p, text, loc["anchor"], loc["part"], facts=facts if redraft else "", online=online if redraft else None)
+            pl = draft.plan(n, p, text, loc["anchor"], loc["part"], facts=facts if redraft else "", online=online or None)
         except (draft.DraftError, revise.ReviseError, config.ConfigError, openai_client.OpenAIError, ValueError, FileNotFoundError, KeyError, paper_index.IsolationError) as e:
             out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
             return {"messages": out}
+        if pl.get("require_citations") and not any(x.get("tag") for x in pl.get("library", [])):
+            if config.paper_settings(p).get("use_online") == "never":
+                out.append(chat.append(p, cid, "assistant", "error", "Your request requires in-text citations, but the local library has no citable bibliography records and online reference search is switched off in Settings."))
+                return {"messages": out}
+            out.append(chat.append(p, cid, "assistant", "text", "I found relevant passages in your literature library, but no citable bibliography record for them. I am looking for verified online reference records so you can choose which ones to add and cite."))
+            job = _start_refsearch(r.app, n, p, cid, text, ticked, facts, "", issue, "", chat.last_target({"messages": chat.get_thread(p, cid)["messages"]}), force_draft=True)
+            return {"messages": out, "job": job}
         ask = config.paper_settings(p)["confirm_before_send"] or pl.get("require_citations", False)
         m = chat.append(p, cid, "assistant", "draft_plan", "", plan=pl, where=loc["where"], notes=loc["notes"], state="waiting", confirm="citations" if pl.get("require_citations") else "setting" if ask else None,
                         **({"revises": redraft} if redraft else {}))
@@ -1349,7 +1356,7 @@ CITE_REQUEST = "Support the claims of this text with citations from the sources 
 _CITE_WORDS = re.compile(r"\b(?:citation|citations|cite|reference|references|source|sources|literature|evidence|studies|study|publication|publications|peer-reviewed)\b", re.I)
 
 
-def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words, last_ids):
+def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words, last_ids, force_draft=False):
     """Look for references on the internet in the background; the candidates land in the chat as a card. The search words are chosen from what the author wrote, the passage it is
     about and the author's answers; nothing but those few words leaves this computer, and nothing is added to the bibliography until the author ticks it."""
     def work(progress, set_steps):
@@ -1357,7 +1364,7 @@ def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words,
         try:
             steps.start("words", "Working out what to look for")
             ctx = chat.refs_context(n, p, text, chunk_ids=ticked, last_ids=last_ids)
-            instruction, questions, is_draft, rev = "", [], False, revises or ""
+            instruction, questions, is_draft, rev = (text if force_draft else ""), [], bool(force_draft), revises or ""
             if PID_RE.match(rev):
                 try:
                     prop = revise.get_proposal(p, rev)

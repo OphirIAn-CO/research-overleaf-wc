@@ -685,7 +685,7 @@
     }
     async function useRefs(ctx, dois) {                                   // the same request as before, now with the abstracts of these references to cite
       const extra = { online: dois, facts: ctx.facts || undefined, issue: ctx.issue || undefined };
-      Object.assign(extra, ctx.draft ? { redraft: ctx.revises } : { chunk_ids: ctx.chunk_ids, revises: ctx.revises || undefined });
+      Object.assign(extra, ctx.draft && ctx.revises ? { redraft: ctx.revises } : ctx.draft ? {} : { chunk_ids: ctx.chunk_ids, revises: ctx.revises || undefined });
       await send(ctx.request || 'Support the claims of this text with citations from the sources provided.', extra);
     }
     function refsearchBubble(m) {
