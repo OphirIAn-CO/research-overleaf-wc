@@ -879,6 +879,7 @@ def add_entry_from_record(doc_id, bib_path):
 
 WANTS_LIBRARY = re.compile(
     r"\b(?:my|our|the)\s+(?:library|literature|readings?|articles|books|sources|references|bibliography|pdfs|reading list)\b"
+    r"|\buse\s+(?:(?:my|our|the)\s+)?(?:literature\s+)?(?:library|literature|readings?|articles|books|sources|references|bibliography|pdfs|reading list)\b"
     r"|\b(?:according to|based on|supported by|backed up by|support (?:this|it|that|these) with|back (?:this|it|that|these) up with|ground (?:this|it|that) in|"
     r"cite|citations?|add (?:a |some )?(?:source|reference|citation)s?|find (?:a |some )?(?:source|reference|evidence|literature)s?|evidence (?:for|from)|literature (?:says|shows|on|about))\b"
     r"|\bwhat does (?:the )?literature say\b", re.I)

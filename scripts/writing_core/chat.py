@@ -257,7 +257,7 @@ def library_topic(text):
     return re.sub(r"\s+", " ", re.sub(r"[?!.:;,]+", " ", t)).strip()
 
 
-_DRAFT = re.compile(r"\b(?:write|draft|compose|generate|prepare|produce|come up with)\b|\badd\s+(?:a|an|one|two|three|some|new)\s+(?:new\s+)?(?:paragraphs?|sections?|sentences?|passages?)\b", re.I)
+_DRAFT = re.compile(r"\b(?:write|draft|compose|generate|prepare|produce|create|develop|come up with)\b|\badd\s+(?:a|an|one|two|three|some|new)\s+(?:new\s+)?(?:paragraphs?|sections?|sentences?|passages?)\b", re.I)
 _DRAFT_VIA = re.compile(r"\b(?:explain|interpret|discuss|describe|summari[sz]e|report|present)\b.*\b(?:in|into|for|to)\s+(?:the\s+|my\s+|our\s+)?(?:\w+\s+){0,2}?"
                         r"(?:results?|discussion|introduction|methods?|conclusions?|abstract|limitations?)\b", re.I)
 _DRAFT_NOT = {"rewrite", "rephrase", "paraphrase", "improve", "fix", "polish", "tighten", "shorten", "simplify", "proofread", "revise", "edit", "smooth", "reorder", "reorganize"}
@@ -266,7 +266,7 @@ _PREP_PART = re.compile(r"\b(?:in|into|for|to|inside|within|under|on)\s+(?:the\s
 
 
 ASK_WORDS = 45
-_DRAFT_VERB = re.compile(r"\b(?:write|draft|compose|generate|prepare|produce|add)\b", re.I)
+_DRAFT_VERB = re.compile(r"\b(?:write|draft|compose|generate|prepare|produce|create|develop|add)\b", re.I)
 
 
 def ask_of(text, n=ASK_WORDS):
@@ -302,7 +302,7 @@ def _part_in(text):
                     break
     if not first:
         return None
-    start = next((i for i, w in enumerate(ws) if w in ("write", "draft", "compose", "generate", "prepare", "produce", "add")), 0)
+    start = next((i for i, w in enumerate(ws) if w in ("write", "draft", "compose", "generate", "prepare", "produce", "create", "develop", "add")), 0)
     for part in sorted(first, key=first.get):                       # a part named after a preposition is the place ("... in the discussion")
         pos = first[part]
         if pos > 0 and ws[max(0, pos - 3):pos] and any(w in ("in", "into", "for", "to", "inside", "within", "under") for w in ws[max(0, pos - 3):pos]):
@@ -331,7 +331,7 @@ def draft_part(text):
 
 
 def is_draft_request(text):
-    """"Write the results from my analysis", "draft the discussion", "add a paragraph about the sampling to the methods": new text, not an edit of existing text."""
+    """An explicit writing request is new text, while a request to improve existing text stays a correction."""
     windows = ask_of(text)
     t = " ... ".join(windows)
     if not (_DRAFT.search(t) or _DRAFT_VIA.search(t)):

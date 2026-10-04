@@ -1160,6 +1160,7 @@ HELP_TEXT = ("Tell me what to do with your paper, in your own words. For example
              "- fix the grammar in the introduction\n"
              "- make the abstract shorter\n"
              "- write the results from my analysis (or the discussion, or a paragraph on the sampling from my notes)\n"
+             "- write a new introduction paragraph after the selected text, using my literature library and citing sources\n"
              "- what do my articles say about irrigation?\n"
              "- find references about how armed conflict affects energy infrastructure (I search the internet, you choose which to add)\n"
              "- peer review my paper\n"
@@ -1225,7 +1226,11 @@ def api_chat_send(r):
     if cut:                                                  # never silently: a long outline pasted into the message is read up to a limit
         out.append(chat.append(p, cid, "assistant", "text", f"Your message is longer than {chat.MAX_TEXT:,} characters, so I read only the first {chat.MAX_TEXT:,}. "
                                                               "For a longer text, put it in a file (Add a file) or in your literature library, and I can draw on all of it."))
-    kind = "refsearch" if find_refs else "draft" if redraft else ("refsearch" if chat.is_refs_request(text) else "edit") if ticked else chat.intent(text)
+    # A selection normally means "revise these lines", but it cannot erase an
+    # explicit request to write new prose.  Drafting then inserts after the
+    # selected passage rather than replacing it.
+    inferred = chat.intent(text)
+    kind = "refsearch" if find_refs else "draft" if redraft else (inferred if inferred in ("draft", "refsearch") else "edit") if ticked else inferred
     job = None
     if kind == "help":
         out.append(chat.append(p, cid, "assistant", "text", HELP_TEXT))
@@ -1251,7 +1256,7 @@ def api_chat_send(r):
                 where = old_prop.get("draft") or {}
                 loc = {"status": "ready", "anchor": where["anchor"], "part": where.get("part", ""), "where": "the same place as before", "notes": [], "label": taxonomy.label(where.get("part", "")).capitalize()}
             else:
-                loc = draft.locate(n, p, text)
+                loc = draft.locate(n, p, text, chunk_ids=ticked)
             if loc["status"] != "ready":
                 tail = (" Sections I can see: " + ", ".join(loc["sections"]) + ".") if loc.get("sections") else ""
                 out.append(chat.append(p, cid, "assistant", "text", loc["why"] + tail))

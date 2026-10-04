@@ -113,6 +113,10 @@ class Intent(unittest.TestCase):
             self.assertEqual(chat.intent(text), kind, text)
         self.assertEqual(chat.find_dois("see 10.1016/j.x.2020.1, and 10.1038/abc."), ["10.1016/j.x.2020.1,"[:-1], "10.1038/abc"])
 
+    def test_explicit_creation_verbs_are_new_text_requests(self):
+        for text in ("create a new introduction paragraph", "develop the discussion from my analysis"):
+            self.assertEqual(chat.intent(text), "draft", text)
+
 
 class Understand(Base):
     def test_before_figure_1_in_the_methods_is_cut_at_the_figure(self):

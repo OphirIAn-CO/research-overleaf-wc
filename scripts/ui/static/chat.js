@@ -374,7 +374,7 @@
       if (lib.length) {
         const cites = lib.filter((x) => x.tag).length;
         lines.push(h('p', { class: 'small secondary', text: `${plural(lib.length, 'part')} of your library go with it (${[...new Set(lib.map((x) => x.label))].slice(0, 3).join(', ')}${new Set(lib.map((x) => x.label)).size > 3 ? '...' : ''}). ` +
-          (cites ? `${plural(cites, 'source')} can be cited, because ${cites === 1 ? 'it is' : 'they are'} in your bibliography.` : 'None of them is in your bibliography yet, so none will be cited.') }));
+          (cites ? `${plural(cites, 'source')} can be cited when an excerpt directly supports the claim, because ${cites === 1 ? 'it is' : 'they are'} in your bibliography.` : 'None of them is in your bibliography yet, so none will be cited.') }));
       }
       (pl.warnings || []).forEach((x) => lines.push(notice('warn', x)));
       const exact = h('div');
@@ -416,6 +416,10 @@
       lines.push(h('p', { class: 'small secondary', text: (bits.length ? 'It rests on ' + bits.join(', ') + '. ' : 'You have not linked any code, results or notes, so there is nothing for it to rest on yet. ') +
         `Every statement says which source it comes from, and a number that is in none of them is refused. About ${fmtTok(pl.est_tokens_in)} tokens go to ${pl.model}${pl.est_cost != null ? ', roughly ' + pl.est_cost.toFixed(4) + ' in your price units' : ''}.` }));
       if (!src.length && !lib.length) lines.push(notice('warn', 'Link the folder with your code and results (or your notes) in ', h('a', { href: '#/settings', text: 'Settings' }), ' so the text can rest on them. Without sources, it can only reorganise what you tell me.'));
+      if (lib.length) {
+        const cites = lib.filter((x) => x.tag).length;
+        lines.push(h('p', { class: 'small secondary', text: cites ? `${plural(cites, 'library source')} can be cited where its retrieved excerpt supports the statement.` : 'The retrieved library excerpts can inform the wording, but none can be cited until it is available in this paper’s bibliography.' }));
+      }
       (pl.warnings || []).forEach((x) => lines.push(notice('warn', x)));
       const exact = h('div');
       const details = h('details', null, h('summary', { text: 'What goes out' }),
@@ -903,8 +907,9 @@
           h('div', { class: 'row' }, go, h('button', { type: 'button', class: 'ghost', text: 'Cancel', onclick: () => { discuss.hidden = true; } }),
             h('span', { class: 'small muted', text: 'This asks OpenAI again for this place and costs about as much as the first time.' })));
       };
-      const discussBtn = h('button', { type: 'button', class: answers.length ? 'primary' : '', text: answers.length ? 'Answer and revise' : 'Discuss and revise',
-        title: 'Answer the questions, change what was asked, or say what to add. You get a new suggestion for the same place that replaces this one.', onclick: openDiscuss });
+      const isDraft = p.kind === 'draft';
+      const discussBtn = h('button', { type: 'button', class: answers.length ? 'primary' : '', text: answers.length ? (isDraft ? 'Answer and draft again' : 'Answer and revise') : (isDraft ? 'Discuss and draft again' : 'Discuss and revise'),
+        title: isDraft ? 'Answer the questions or refine what to add. You get a new insertion suggestion for the same place, and this one is replaced.' : 'Answer the questions, change what was asked, or say what to add. You get a new suggestion for the same place that replaces this one.', onclick: openDiscuss });
       const refsBtn = findRefs('Find references', '');
       if (!nHunks) {
         if (p.status === 'proposed' || p.status === 'no_changes') {
@@ -924,8 +929,8 @@
       });
       handoff.title = 'For when you work in Claude Code: it saves the ticked changes itself, after your text-cleaning step. You do not need this to save from here.';
       const actions = h('div', { class: 'row actions' },
-        guarded(h('button', { type: 'button', class: 'primary', text: 'Save in my files' }), approve(false)),
-        guarded(h('button', { type: 'button', text: 'Save and send to Overleaf' }), approve(true)),
+        guarded(h('button', { type: 'button', class: 'primary', text: isDraft ? 'Insert in my files' : 'Save in my files' }), approve(false)),
+        guarded(h('button', { type: 'button', text: isDraft ? 'Insert and send to Overleaf' : 'Save and send to Overleaf' }), approve(true)),
         h('button', { type: 'button', text: 'Polish in QuillBot or by hand', title: 'Opens a panel above the message box: take the text to QuillBot, bring the result back, check it and save', onclick: () => openBanner(p, 1) }),
         discussBtn, refsBtn,
         guarded(h('button', { type: 'button', class: 'ghost', text: 'Not now' }), async () => { await api.post('/api/proposal/record', { paper, id: p.id, accepted: [], rejected: 'all', chat: st.cid }); await redraw(); await reload(); }),
@@ -933,7 +938,7 @@
       holder.append(copies, actions, discuss);
       if (drafts.has(`req:${paper}:${p.id}`) || drafts.has(`more:${paper}:${p.id}`)) openDiscuss();
       if (drafts.has(`final:${paper}:${p.id}`)) openBanner(p, 3);                                                 // the author's own version was being written: bring the panel back
-      holder.append(h('p', { class: 'small muted' }, unclean ? 'Saved exactly as written: no text-cleaning service is set up. ' : '', 'Saving puts the ticked changes into your files here; "send" then puts them in Overleaf. ', handoff));
+      holder.append(h('p', { class: 'small muted' }, unclean ? 'Saved exactly as written: no text-cleaning service is set up. ' : '', isDraft ? 'Inserting puts the ticked new paragraphs at the chosen place in your files; "send" then puts them in Overleaf. ' : 'Saving puts the ticked changes into your files here; "send" then puts them in Overleaf. ', handoff));
     }
 
     function hunkCard(hk, sel, onChange, locked, labels, sources) {

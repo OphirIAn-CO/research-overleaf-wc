@@ -66,6 +66,13 @@ class Drafting(ReviseBase):
         self.assertEqual((new["status"], new["anchor"]["heading"]), ("ready", "\\section{Limitations}"))
         self.assertTrue(new["anchor"]["mode"].startswith("as a new limitations section after the "), new["anchor"]["mode"])
 
+    def test_a_selected_passage_becomes_the_insertion_point_for_new_text(self):
+        selected = [c["id"] for c in paper_index.part_chunks(self.name, self.proj, ["results"], refresh_first=False)]
+        loc = draft.locate(self.name, self.proj, "write a new results paragraph using my literature library", chunk_ids=selected)
+        self.assertEqual(loc["status"], "ready", loc)
+        self.assertEqual((loc["part"], loc["anchor"]["mode"]), ("results", "after your selected text"))
+        self.assertIn("selected passage", loc["notes"][0])
+
     def test_a_section_that_already_has_text_is_added_to_not_replaced(self):
         long = "\n".join(["Yield rose with moisture in every region of the study area and in every season we measured it. " * 3] * 2)
         text = self.main.read_text().replace("Yield rose with moisture.", long)
@@ -279,6 +286,12 @@ class ThroughTheChat(ChatBase):
         after = self.main.read_text()
         self.assertIn("The best model reached an RMSE of 0.412", after)
         self.assertEqual(after.count("\n\n\n"), before.count("\n\n\n"), "the new text is set off by single blank lines")
+
+    def test_an_explicit_draft_request_with_a_selection_inserts_after_it(self):
+        selected = [c["id"] for c in paper_index.part_chunks(self.name, self.proj, ["results"], refresh_first=False)]
+        r = self.send("write a new results paragraph using my literature library", chunk_ids=selected)
+        self.assertEqual([m["kind"] for m in r["messages"]], ["text", "draft_plan"])
+        self.assertIn("after your selected text", r["messages"][1]["data"]["where"])
 
     def test_with_confirmation_on_it_waits_and_can_be_sent_or_cancelled(self):
         config.set_paper_setting(self.proj, "confirm_before_send", True)

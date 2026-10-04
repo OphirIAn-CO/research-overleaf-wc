@@ -138,7 +138,7 @@ def _around(name, proj, anchor, part, max_tokens=700):
     return before.strip(), _plain("\n".join(lines[a:a + 20])).strip()[:600]
 
 
-def locate(name, proj, text, max_context_tokens=700):
+def locate(name, proj, text, chunk_ids=None, max_context_tokens=700):
     """Where new text should go, from what the author said. -> {"status": "ready", anchor, part, label, where, existing_words, notes}
        | {"status": "ask" | "missing" | "empty", why, sections}"""
     text = (text or "").strip()
@@ -152,7 +152,23 @@ def locate(name, proj, text, max_context_tokens=700):
     freq = chat._float_request(asked)
     notes = []
     anchor = None
-    if freq:
+    selected = []
+    if chunk_ids:
+        by_id = {c["id"]: c for c in tex}
+        for raw in chunk_ids:
+            cid, lo, hi = revise.split_range_id(raw)
+            c = by_id.get(cid)
+            if c:
+                selected.append({**c, "line_start": lo or c["line_start"], "line_end": hi or c["line_end"]})
+    if selected:
+        # Selecting a passage while explicitly asking to write is an insertion
+        # instruction, not permission to overwrite that passage.
+        last = max(selected, key=lambda c: c["ord"])
+        part = part or last.get("part") or ""
+        anchor = {"file": last["file"], "after_line": last["line_end"], "mode": "after your selected text"}
+        cands = paper_index.part_chunks(name, proj, [part], refresh_first=False) if part else selected
+        notes.append("I will add new text after the selected passage; the selected text itself is not rewritten.")
+    elif freq:
         direction, kind, n = freq
         fl = next((f for f in chat._floats(proj, tex) if f["kind"] == kind and f["n"] == n), None)
         if not fl:
