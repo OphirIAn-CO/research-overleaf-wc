@@ -142,7 +142,7 @@
       if (!r.files.filter((f) => f.role !== 'analysis').length) { list.append(h('p', { class: 'muted small', text: `No files yet. Add an article, a table or your notes, or drop them on the chat. They are saved in the ${r.folder} folder of your project.` })); return; }
       const rows = [];
       r.files.filter((f) => f.role !== 'analysis').forEach((f) => {
-        const where = f.upload ? `Added here · ${r.folder}/` : f.file.startsWith('/') ? 'Other folder · ' + f.file : 'In your project · ' + f.file;
+        const where = f.role === 'outline' ? 'Author outline · local only · never cited or sent to Overleaf' : f.upload ? `Added here · ${r.folder}/` : f.file.startsWith('/') ? 'Other folder · ' + f.file : 'In your project · ' + f.file;
         const open = h('tr', { class: 'parts-row', hidden: true }, h('td', { colspan: '5' }));
         const see = f.parts ? h('button', { type: 'button', class: 'small', text: 'See the parts', onclick: async (ev) => {
           const btn = ev.currentTarget;

@@ -103,7 +103,7 @@ def _looks_ok(ext, data):
     return b"\0" not in data[:4096]
 
 
-def save_upload(proj, filename, data):
+def save_upload(proj, filename, data, purpose=None):
     """Writes the file to <paper>/references/ (never over another file: a second file with the same name gets (2)). -> {rel, name, size, duplicate}"""
     if not isinstance(data, (bytes, bytearray)) or not data:
         raise FileProblem("The file is empty.")
@@ -112,8 +112,10 @@ def save_upload(proj, filename, data):
     name = clean_name(filename)
     if not _looks_ok(ext_of(name), data):
         raise FileProblem(f"That does not look like a real .{ext_of(name)} file.")
+    if purpose not in (None, "evidence", "outline"):
+        raise FileProblem("Choose whether this file is evidence or a writing outline.")
     root = Path(proj["path"])
-    if is_outline_name(name):
+    if purpose == "outline" or (purpose is None and is_outline_name(name)):
         folder = config.ensure_paper_dir(proj) / INSTRUCTION_DIR
         folder.mkdir(exist_ok=True)
         rel = f".overleaf-skill/{INSTRUCTION_DIR}/{{}}"

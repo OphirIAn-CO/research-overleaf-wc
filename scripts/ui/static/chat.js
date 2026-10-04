@@ -217,9 +217,10 @@
     const sendBtn = h('button', { type: 'button', class: 'primary', text: 'Send' });
     const chips = h('div', { class: 'row chips' }, data.chips.map((c) => h('button', { type: 'button', class: 'chip', text: c.label, onclick: () => { ta.value = (ta.value.trim() ? ta.value.trim() + ' ' : '') + c.text; ta.dispatchEvent(new Event('input')); ta.focus(); } })));
     const fileInput = h('input', { type: 'file', multiple: true, hidden: true, 'aria-hidden': 'true', tabindex: '-1', accept: '.pdf,.docx,.txt,.md,.markdown,.csv,.tsv,.json,.ipynb,.py,.r,.rmd,.m,.jl,.sql,.sh,.yaml,.yml,.toml,.tex,.bib,.rst,.png,.jpg,.jpeg,.gif,.svg,.webp' });
-    const attachBtn = h('button', { type: 'button', class: 'attach', text: 'Add a file', title: 'Add evidence, data, notes, or code. Files named prompt, outline, brief, or instructions are kept locally as author directions: drafts follow them, but they are never cited or sent to Overleaf.' });
+    const attachBtn = h('button', { type: 'button', class: 'attach', text: 'Add evidence', title: 'Add an article, data, notes, or code as evidence. It may be used to support a draft and is saved with the project.' });
+    const outlineBtn = h('button', { type: 'button', class: 'attach', text: 'Add outline', title: 'Add a writing brief or outline. It stays local, appears in Your files as an author outline, is followed only when named in a request, and is never cited or sent to Overleaf.' });
     const adding = h('div', { class: 'row chips adding', role: 'status', 'aria-live': 'polite', hidden: true });
-    const composer = h('form', { class: 'composer' }, chips, adding, h('div', { class: 'row top' }, attachBtn, ta, sendBtn), fileInput);
+    const composer = h('form', { class: 'composer' }, chips, adding, h('div', { class: 'row top' }, attachBtn, outlineBtn, ta, sendBtn), fileInput);
     const setBusy = (b) => { st.busy = b; sendBtn.disabled = b; sendBtn.textContent = b ? 'Working...' : 'Send'; renderDock(); };
 
     async function reload() {
@@ -258,15 +259,16 @@
       return went;
     }
     // ---- adding files: from the button or by dropping them on the chat. Each one is saved, read into parts and (unless switched off) sent to Overleaf on its own.
-    async function addFiles(list) {
+    let uploadPurpose = 'evidence';
+    async function addFiles(list, purpose) {
       const picked = Array.from(list || []);
       if (!picked.length) return;
       for (const f of picked) {
         const chip = h('span', { class: 'chip static', text: `Adding ${f.name}...` });
         adding.hidden = false; adding.append(chip);
         try {
-          const r = await window.OLS.files.upload(paper, f, { chat: st.cid });
-          chip.textContent = `${f.name}: ${r.file && r.file.parts ? plural(r.file.parts, 'part') : 'saved'}`;
+          const r = await window.OLS.files.upload(paper, f, { chat: st.cid, purpose });
+          chip.textContent = `${f.name}: ${r.saved.outline ? 'author outline' : (r.file && r.file.parts ? plural(r.file.parts, 'part') : 'saved')}`;
           if (r.push && !r.push.sent) st.local.push({ node: gitNotice(r.push) });          // a refusal by Overleaf comes with its own button
           if (r.saved.warning) toast(r.saved.warning);
         } catch (e) {
@@ -278,8 +280,9 @@
         loadOverview();
       }
     }
-    attachBtn.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+    attachBtn.addEventListener('click', () => { uploadPurpose = 'evidence'; fileInput.click(); });
+    outlineBtn.addEventListener('click', () => { uploadPurpose = 'outline'; fileInput.click(); });
+    fileInput.addEventListener('change', () => { addFiles(fileInput.files, uploadPurpose); fileInput.value = ''; });
     const submit = async () => {
       const t = ta.value.trim();
       if (!t) return;

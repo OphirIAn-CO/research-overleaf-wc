@@ -1636,7 +1636,7 @@ def api_files_parts(r):
 def api_files_upload(r):
     """Save evidence in references, but keep an author prompt/outline local as writing instructions."""
     n, p = paper_ref(r.body.get("paper", ""))
-    name, b64 = r.body.get("name"), r.body.get("data")
+    name, b64, purpose = r.body.get("name"), r.body.get("data"), r.body.get("purpose")
     if not isinstance(name, str) or not isinstance(b64, str):
         raise ApiError(400, "send the file's name and its content")
     try:
@@ -1644,7 +1644,7 @@ def api_files_upload(r):
     except (ValueError, binascii.Error):
         raise ApiError(400, "the file did not arrive intact; try again") from None
     try:
-        saved = files.save_upload(p, name, data)
+        saved = files.save_upload(p, name, data, purpose=purpose)
     except files.FileProblem as e:
         raise ApiError(400, str(e)) from None
     paper_index.refresh(n, p, trigger="upload", source="web")

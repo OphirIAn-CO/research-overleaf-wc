@@ -108,6 +108,11 @@ class Saving(FilesBase):
         self.assertEqual(shown[0]["file"], r["rel"])
         self.assertEqual(files.outline_context(self.name, self.proj, "write the introduction"), ("", []))
 
+    def test_any_name_can_be_uploaded_explicitly_as_an_outline(self):
+        r = files.save_upload(self.proj, "chapter-one.md", b"# Required funnel", purpose="outline")
+        self.assertTrue(r["outline"])
+        self.assertTrue(r["rel"].startswith(".overleaf-skill/instructions/"))
+
     def test_a_legacy_outline_in_references_is_not_evidence(self):
         legacy = self.root / "references" / "outlined_intro.md"
         legacy.parent.mkdir()
