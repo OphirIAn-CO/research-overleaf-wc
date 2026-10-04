@@ -109,12 +109,12 @@ class Saving(FilesBase):
         self.assertEqual(files.outline_context(self.name, self.proj, "write the introduction"), ("", []))
 
     def test_a_legacy_outline_in_references_is_not_evidence(self):
-        legacy = self.root / "references" / "Promp_Intro.md"
+        legacy = self.root / "references" / "outlined_intro.md"
         legacy.parent.mkdir()
         legacy.write_text("# Introduction outline\n\nUse a funnel structure.")
         found = self.by_name()
-        self.assertEqual(found["references/Promp_Intro.md"]["role"], "outline")
-        text, _ = files.outline_context(self.name, self.proj, "follow Promp_Intro.md while writing")
+        self.assertEqual(found["references/outlined_intro.md"]["role"], "outline")
+        text, _ = files.outline_context(self.name, self.proj, "follow outlined_intro.md while writing")
         self.assertIn("Use a funnel structure", text)
 
 

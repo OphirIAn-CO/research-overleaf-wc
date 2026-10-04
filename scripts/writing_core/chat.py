@@ -336,8 +336,13 @@ def is_draft_request(text):
     t = " ... ".join(windows)
     if not (_DRAFT.search(t) or _DRAFT_VIA.search(t)):
         return False
-    ws = set(taxonomy.words(t.lower())) | {w for w in re.findall(r"[a-z]+", t.lower())}
-    if ws & _DRAFT_NOT:
+    tokens = taxonomy.words(t.lower())
+    ws = set(tokens) | {w for w in re.findall(r"[a-z]+", t.lower())}
+    # “write ... not edits” is still a drafting request. Only an editing word
+    # that is not explicitly negated should override an otherwise clear write
+    # or generate instruction.
+    negated = {tokens[i + 1] for i, word in enumerate(tokens[:-1]) if word in ("not", "no", "without")}
+    if (ws & _DRAFT_NOT) - negated:
         return False
     return bool(draft_part(text)) or bool(re.search(r"\b(?:paragraphs?|section|sentences?|passage)\b", t, re.I))
 

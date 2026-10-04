@@ -51,7 +51,7 @@ SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv", "env", "site-packag
 SKIP_NAMES = {"manifest.txt", "changelog.txt", "license", "license.txt", "license.md", "requirements.txt"}
 SECRET_WORDS = ("secret", "password", "passwd", "credential", "token", "apikey", "api_key", "id_rsa", "private_key")
 SECRET_EXT = {"pem", "key", "p12", "pfx", "env"}
-OUTLINE_NAME = re.compile(r"(?:^|[-_ .])(?:promp(?:t)?|outline|brief|writing[-_ ]?plan|instructions?)(?:[-_ .]|$)", re.I)
+OUTLINE_NAME = re.compile(r"(?:^|[-_ .])(?:promp(?:t)?|outline(?:d)?|brief|writing[-_ ]?plan|instructions?)(?:[-_ .]|$)", re.I)
 
 
 class FileProblem(Exception):

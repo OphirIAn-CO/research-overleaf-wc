@@ -117,6 +117,10 @@ class Intent(unittest.TestCase):
         for text in ("create a new introduction paragraph", "develop the discussion from my analysis"):
             self.assertEqual(chat.intent(text), "draft", text)
 
+    def test_a_negated_edit_word_does_not_override_an_explicit_draft_request(self):
+        text = "Write the introduction following outlined_intro.md, with complete paragraphs, not edits, because there is nothing yet."
+        self.assertEqual(chat.intent(text), "draft")
+
 
 class Understand(Base):
     def test_before_figure_1_in_the_methods_is_cut_at_the_figure(self):
