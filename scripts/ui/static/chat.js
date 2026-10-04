@@ -784,6 +784,17 @@
       if (p.status === 'no_changes') holder.append(notice('ok', 'OpenAI found nothing it would change in this text.'));
 
       // each passage: the explanation, then the changes
+      const isDraft = p.kind === 'draft';
+      if (isDraft) {
+        const complete = p.units.filter((u) => u.status !== 'failed')
+          .flatMap((u) => u.hunks.map((hk) => hk.new).filter(Boolean)).join('\n\n').trim();
+        if (complete) {
+          holder.append(h('details', { class: 'draft-full', open: true },
+            h('summary', { text: 'Complete draft (with in-text citations where supported)' }),
+            h('pre', { class: 'payload draft-text', text: complete }),
+            h('p', { class: 'small secondary', text: 'Source support is shown separately below each paragraph; it is not part of the manuscript text.' })));
+        }
+      }
       const answers = [];                                   // [{q, box}]: what the author replies to the model's questions
       let moreBox = null;                                   // the "anything to add or change" box of the discuss panel, once it has been opened
       const composeFacts = () => {
@@ -912,7 +923,6 @@
           h('div', { class: 'row' }, go, h('button', { type: 'button', class: 'ghost', text: 'Cancel', onclick: () => { discuss.hidden = true; } }),
             h('span', { class: 'small muted', text: 'This asks OpenAI again for this place and costs about as much as the first time.' })));
       };
-      const isDraft = p.kind === 'draft';
       const discussBtn = h('button', { type: 'button', class: answers.length ? 'primary' : '', text: answers.length ? (isDraft ? 'Answer and draft again' : 'Answer and revise') : (isDraft ? 'Discuss and draft again' : 'Discuss and revise'),
         title: isDraft ? 'Answer the questions or refine what to add. You get a new insertion suggestion for the same place, and this one is replaced.' : 'Answer the questions, change what was asked, or say what to add. You get a new suggestion for the same place that replaces this one.', onclick: openDiscuss });
       const refsBtn = findRefs('Find references', '');

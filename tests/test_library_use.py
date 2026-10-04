@@ -159,7 +159,7 @@ class FromTheTerminal(ReviseBase):
 
 class Words(unittest.TestCase):
     def test_what_asks_for_the_library(self):
-        for yes in ("support this with my library", "add citations to the introduction", "cite the sources I have", "according to my articles, tighten it", "what does the literature say about soil"):
+        for yes in ("support this with my library", "add citations to the introduction", "cite the sources I have", "according to my articles, tighten it", "what does the literature say about soil", "use the folder with all literature review to draft the introduction"):
             self.assertTrue(library.wants(yes), yes)
         for no in ("tighten the methods", "fix grammar", "make the abstract shorter", "improve the flow of the discussion"):
             self.assertFalse(library.wants(no), no)

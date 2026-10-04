@@ -231,6 +231,9 @@ main:focus { outline: none; }
 .step .mark { width: 16px; text-align: center; color: var(--good-text); } .step.failed .mark { color: var(--critical-text); } .step.skipped { color: var(--ink-3); }
 .approach { font-size: var(--chat-fs, 15px); line-height: 1.55; border-left: 3px solid var(--series-1); padding-left: 10px; max-width: 120ch; }
 .unit { border-top: 1px solid var(--grid); padding-top: 10px; } .unit h3, .unit h4 { margin-bottom: 6px; }
+.draft-full { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--grid); border-radius: 8px; }
+.draft-full summary { cursor: pointer; font-weight: 650; }
+.draft-text { margin: 10px 0 4px; white-space: pre-wrap; }
 /* the explanation, questions and warnings sit on top and use the whole width (notices side by side when there is room); the comparison below gets the full width of the card */
 .unit-why { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); gap: 8px 12px; align-items: start; margin-bottom: 12px; }
 .unit-why > h3, .unit-why > .approach { grid-column: 1 / -1; margin: 0; }
