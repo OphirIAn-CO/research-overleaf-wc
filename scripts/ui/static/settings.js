@@ -231,6 +231,9 @@
     const p = paper && window.OLS.paperObj(paper);
     const confirmBox = h('input', { type: 'checkbox', checked: !!(p && p.settings.confirm_before_send) });
     confirmBox.addEventListener('change', async () => { try { await api.post('/api/settings', { paper, confirm_before_send: confirmBox.checked }); await window.OLS.loadState(); toast(confirmBox.checked ? 'I will ask before sending' : 'I will send as soon as you ask'); } catch (e) { toast(e.message); confirmBox.checked = !confirmBox.checked; } });
+    const understandSel = h('select', { 'aria-label': 'When to check what I understood' },
+      [['unsure', 'Only when I am not sure (recommended)'], ['always', 'Every time, before I act'], ['never', 'Never: just do it from the words']].map(([v, l]) => h('option', { value: v, text: l, selected: v === ((p && p.settings.understand) || 'unsure') })));
+    understandSel.addEventListener('change', async () => { try { await api.post('/api/settings', { paper, understand: understandSel.value }); await window.OLS.loadState(); toast('Saved'); } catch (e) { toast(e.message); } });
     const guard = h('input', { type: 'number', min: '1', max: '100', value: String(c.limits.guard_passages), 'aria-label': 'Ask first above this many passages' });
     const maxp = h('input', { type: 'number', min: '1', max: '100', value: String(c.limits.max_passages), 'aria-label': 'Most passages in one request' });
     const idle = h('input', { type: 'number', min: '5', max: '1440', value: String(c.limits.idle_minutes), 'aria-label': 'Minutes until the app closes' });
@@ -238,6 +241,9 @@
     texture.addEventListener('change', () => { document.documentElement.dataset.texture = texture.checked ? 'on' : 'off'; window.OLS.store.set('ols-texture', texture.checked ? 'on' : 'off'); });
     box.append(h('h2', { class: 'section-h', text: 'Preferences' }), h('section', { class: 'card', 'aria-label': 'Preferences' }, h('div', { class: 'stack' },
       paper ? h('label', { class: 'check' }, confirmBox, `Ask me before anything is sent to OpenAI (${paper})`) : null,
+      paper ? h('div', { class: 'stack tight' }, h('label', { class: 'row tight' }, `Check that I understood your request (${paper}):`, understandSel),
+        h('p', { class: 'small secondary', text: 'I read each request as a whole, say what I understood (which text, what to do, which sources) and, when I am not sure, wait for your yes, a correction or a no. A small model call reads it (about a thousand tokens). What you confirm or correct is kept in this paper\'s folder and helps me read your next requests. You can also choose the kind of request yourself under the message box.' }),
+        guarded(h('button', { type: 'button', class: 'small', text: 'Forget what I learned from my corrections' }), async () => { await api.post('/api/settings', { paper, forget_understanding: true }); toast('Forgotten'); })) : null,
       h('div', { class: 'row' }, h('label', { class: 'row tight' }, 'Ask me first when a request has more than', guard, 'passages'), h('label', { class: 'row tight' }, 'and never more than', maxp, 'in one request')),
       h('label', { class: 'row tight' }, 'Close this app after', idle, 'idle minutes'),
       h('label', { class: 'check' }, texture, 'Pattern fills on charts (for colour-blind readers and printing)'),

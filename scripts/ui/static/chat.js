@@ -220,7 +220,11 @@
     const attachBtn = h('button', { type: 'button', class: 'attach', text: 'Add evidence', title: 'Add an article, data, notes, or code as evidence. It may be used to support a draft and is saved with the project.' });
     const outlineBtn = h('button', { type: 'button', class: 'attach', text: 'Add outline', title: 'Add a writing brief or outline. It stays local, appears in Your files as an author outline, is followed only when named in a request, and is never cited or sent to Overleaf.' });
     const adding = h('div', { class: 'row chips adding', role: 'status', 'aria-live': 'polite', hidden: true });
-    const composer = h('form', { class: 'composer' }, chips, adding, h('div', { class: 'row top' }, attachBtn, outlineBtn, ta, sendBtn), fileInput);
+    const REQUEST_KINDS = [['edit', 'Improve or correct text that is already written'], ['draft', 'Write new text'], ['cite', 'Add in-text citations to text that is already written'],
+      ['refsearch', 'Find references on the internet'], ['layout', 'Change the layout or format (tables, figures, graphs, position, appendix)'], ['library', 'Answer from my reading (my literature library)'], ['review', 'Peer review']];
+    const kindSel = h('select', { id: 'request-kind', class: 'kind-flag', 'aria-label': 'What kind of request is this?', title: 'Leave on Automatic and I read your message and tell you what I understood. Choose a kind to tell me yourself.' },
+      h('option', { value: '', text: 'Automatic: you read it' }), REQUEST_KINDS.map(([v, l]) => h('option', { value: v, text: l })));
+    const composer = h('form', { class: 'composer' }, chips, adding, h('div', { class: 'row top' }, attachBtn, outlineBtn, ta, sendBtn), h('div', { class: 'row small kind-row' }, h('label', { for: 'request-kind', class: 'secondary', text: 'This is a request to:' }), kindSel), fileInput);
     const setBusy = (b) => { st.busy = b; sendBtn.disabled = b; sendBtn.textContent = b ? 'Working...' : 'Send'; renderDock(); };
 
     async function reload() {
@@ -288,7 +292,12 @@
       if (!t) return;
       if (st.busy) { toast('A request is still running. Your text is kept: send it when the answer is in.'); return; }
       ta.value = ''; drafts.clear(`composer:${paper}:${st.cid}`);
-      if (!(await send(t)) && !ta.value.trim()) { ta.value = t; ta.dispatchEvent(new Event('input')); }          // it did not go (the connection, a refusal): the text is not lost
+      const flag = kindSel.value;
+      kindSel.value = '';                                         // the kind chosen is for this request only
+      if (!(await send(t, flag ? { flag } : undefined))) {
+        kindSel.value = flag;
+        if (!ta.value.trim()) { ta.value = t; ta.dispatchEvent(new Event('input')); }          // it did not go (the connection, a refusal): the text is not lost
+      }
     };
     sendBtn.addEventListener('click', submit);
     composer.addEventListener('submit', (e) => { e.preventDefault(); submit(); });
@@ -1145,7 +1154,10 @@
     // being edited, and never throws the reading position away.
     function buildMessage(m) {
       if (m.role === 'user') return h('div', { class: 'msg user' }, h('div', { class: 'bubble' }, h('div', { text: m.text }),
-        (m.data && m.data.facts) ? h('details', { class: 'facts' }, h('summary', { text: 'My answers that went with it' }), h('div', { class: 'small', text: m.data.facts })) : null));
+        (m.data && m.data.facts) ? h('details', { class: 'facts' }, h('summary', { text: 'My answers that went with it' }), h('div', { class: 'small', text: m.data.facts })) : null),
+        (m.data && m.data.understood) ? h('div', { class: 'read-as small secondary' }, h('span', { text: 'Read as: ' + m.data.understood.summary + ' ' }),
+          h('button', { type: 'button', class: 'link', text: 'Not what I meant', onclick: () => answerUnderstanding(m, { action: 'reconsider' }) })) : null);
+      if (m.kind === 'understanding') return understandingBubble(m);
       if (m.kind === 'plan') return planBubble(m);
       if (m.kind === 'draft_plan') return draftPlanBubble(m);
       if (m.kind === 'ask') return askBubble(m);
@@ -1158,6 +1170,47 @@
       if (m.kind === 'review_done') return reviewDoneBubble(m);
       if (m.kind === 'error') return assistant(notice('bad', m.text));
       return assistant(textBlock(m.text));
+    }
+    async function answerUnderstanding(m, body) {
+      if (st.busy) { toast('A request is still running. Try again when the answer is in.'); return; }
+      st.stuck = true;
+      setBusy(true);
+      try {
+        const r = await api.post('/api/chat/understood', Object.assign({ paper, id: st.cid, message: m.id }, body));
+        if (body.action !== 'change') drafts.clearPrefix(`understood:${paper}:${m.id}`);
+        await reload();
+        await window.OLS.loadThreads();
+        if (r.job) await watch(r.job);
+      } catch (e) { toast(e.message); }
+      finally { setBusy(false); }
+    }
+    function understandingBubble(m) {
+      const d = m.data, rd = d.reading || {}, waiting = d.state === 'waiting';
+      const label = (v) => (REQUEST_KINDS.find((k) => k[0] === v) || [v, v])[1];
+      const kids = [h('p', null, h('strong', { text: waiting ? 'Is this what you want? ' : d.state === 'cancelled' ? 'Set aside: ' : 'Understood: ' }), m.text || rd.summary)];
+      if (rd.target && rd.target !== 'not given') kids.push(h('p', { class: 'small secondary', text: 'About: ' + rd.target }));
+      if (rd.question && waiting) kids.push(notice('warn', rd.question));
+      if (!waiting) {
+        if (d.state === 'confirmed') kids.push(h('p', { class: 'small secondary', text: `Done as: ${label(d.chosen || rd.intent)}.` + (d.note ? ` Your note: ${d.note}` : '') }));
+        if (d.correction) kids.push(h('p', { class: 'small secondary', text: 'You corrected it: ' + d.correction }));
+        return assistant(...kids);
+      }
+      const sel = h('select', { 'aria-label': 'Kind of request' }, REQUEST_KINDS.map(([v, l]) => h('option', { value: v, text: l, selected: v === rd.intent })));
+      const uses = rd.uses || {};
+      const boxes = {};
+      const tick = (key, text) => { boxes[key] = h('input', { type: 'checkbox', checked: !!uses[key], id: `use-${key}-${m.id}` }); return h('label', { class: 'use-box', for: `use-${key}-${m.id}` }, boxes[key], ' ' + text); };
+      const note = drafts.bind(h('textarea', { rows: '2', class: 'grow', 'aria-label': 'Anything to correct or add', placeholder: 'Anything to correct or add? For example: only references from the internet, not from my library' }), `understood:${paper}:${m.id}`);
+      const body = (action) => ({ action, intent: sel.value, uses: { library: boxes.library.checked, online: boxes.online.checked, outline: boxes.outline.checked }, note: note.value.trim() });
+      kids.push(h('div', { class: 'row' }, h('span', { class: 'small secondary', text: 'Kind of request:' }), sel));
+      kids.push(h('div', { class: 'row small' }, h('span', { class: 'secondary', text: 'Use:' }), tick('library', 'my reading'), tick('online', 'the internet'), tick('outline', 'my outline')));
+      (rd.alternatives || []).forEach((a) => kids.push(h('button', { type: 'button', class: 'small', text: 'Or: ' + label(a), onclick: () => { sel.value = a; } })));
+      kids.push(h('div', { class: 'row' }, note));
+      kids.push(h('div', { class: 'row actions' },
+        h('button', { type: 'button', class: 'primary', text: 'Yes, go ahead', onclick: () => answerUnderstanding(m, body('go')) }),
+        h('button', { type: 'button', text: 'Read it again with my correction', onclick: () => { if (!note.value.trim()) { toast('Write what to correct first.'); note.focus(); return; } answerUnderstanding(m, body('change')); } }),
+        h('button', { type: 'button', class: 'ghost', text: 'Not what I meant', onclick: () => answerUnderstanding(m, body('cancel')) })));
+      kids.push(h('p', { class: 'small muted', text: 'Nothing has been changed or sent yet. I remember what you correct, in this paper\'s folder, to read your next requests better.' }));
+      return assistant(...kids);
     }
     function syncChildren(parent, nodes) {
       const want = new Set(nodes);

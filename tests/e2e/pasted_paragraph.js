@@ -28,6 +28,7 @@ const PARA = 'The second paragraph describes soils, slopes and the access roads 
   ok(!/Statistical analysis|Failure count|10 passages/.test(thread), 'and the rest of the methodology is not in it');
   await page.screenshot({ path: `${out}/pasted-paragraph.png` });
 
+  await page.waitForFunction(() => document.querySelector('.composer button.primary') && document.querySelector('.composer button.primary').textContent === 'Send', null, { timeout: 40000 });
   // ---- the same paragraph, with an in-text citation asked for: nothing in the library can be cited, so the search for references starts, for that paragraph
   await page.fill('#composer', `For this paragraph:\n\n${PARA}\n\nthere was no in-text citation added in the methodology`);
   await page.press('#composer', 'Enter');

@@ -11,7 +11,7 @@ from tests.test_revise import reply
 from tests.test_ui_server import UiBase
 from tests.test_v2_chat import MAIN
 from tests.test_v2_review import REPORT, ReviewEnv
-from writing_core import chat, openai_client, revise
+from writing_core import chat, config, openai_client, revise
 
 STUDY = reply(("Each region has a distinct climate and soil.", "Each region has its own climate and soil."), approach="Shorter.")
 RESULTS = reply(("Yield rose with moisture in all three regions", "Yield rose with moisture in each of the three regions"), approach="Clearer.")
@@ -24,6 +24,7 @@ class Tracker(UiBase, ReviewEnv):
         self.env_up()
         self.name, self.proj = paper(self, main=MAIN)
         self.main = Path(self.proj["path"]) / "main.tex"
+        config.set_paper_setting(self.proj, "understand", "never")
         self.c.login()
 
     def tearDown(self):

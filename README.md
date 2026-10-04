@@ -21,6 +21,8 @@ and never saves or sends anything you have not approved.
   the ones you tick to your bibliography; a suggestion can then be written again with them, citing them from their abstracts. ([Details](docs/guide.md#finding-references-on-the-internet-and-citing-them))
 - **Write from an outline, citing your reading.** *"Write the introduction from `outlined_intro.md` sections 1-4 and my library, and cite in-text"* uses only those sections, looks up your library and the internet by the **subject**
   (the outline and abstract), never by the words about style, and takes each cited paper's reference from its DOI. The writing book is used for style rules only. ([Details](docs/guide.md#writing-from-an-outline-with-your-reading-and-your-citations))
+- **It checks that it understood you.** Each request is read as a whole, in context (a pasted paragraph is material, not the request). When it is not sure it says what it understood, which text it is about and which sources it will use,
+  and waits for your yes, your correction or your no; it remembers what you correct. You can also pick the kind of request yourself. ([Details](docs/guide.md#checking-that-i-understood-you))
 - **Peer review.** *"Peer review my paper"* scores it against a rubric and lists the problems; **Fix this** turns a comment into an ordinary suggestion. Nothing changes by itself.
 - **References.** Paste a DOI: it goes into your `.bib`, your Mendeley group and Overleaf, and you get the `\cite{...}` to use. (Also from your phone, through a Telegram bot.)
 - **See your paper.** Your LaTeX source and the compiled PDF side by side, on your computer; QuillBot and Overleaf in panes next to the chat for the tone pass.

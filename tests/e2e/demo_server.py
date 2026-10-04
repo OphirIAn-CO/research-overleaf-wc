@@ -112,6 +112,14 @@ def main():
             return REPORT          # a review asks for free text, not the JSON of an edit
         from writing_core import openai_client
         user = openai_client.user_text(body)
+        if (((body.get("text") or {}).get("format")) or {}).get("name") == "understanding":      # the reader of a request: agrees with the word-based guess, except for one phrase that it is unsure about
+            guess = (re.search(r"<word_based_guess>(\w+)", user) or [None, "edit"])[1]
+            this = (re.search(r"<message>(.*?)</message>", user, re.S) or [None, ""])[1]          # only the message itself, not the conversation around it
+            if "incite citation" in this:
+                return {"intent": "cite", "confidence": 0.6, "summary": "You want references found on the internet for the paragraph you pasted, so they can be cited in it.", "target": "the paragraph you pasted",
+                        "uses": {"library": False, "online": True, "outline": False}, "question": "", "alternatives": ["edit"]}
+            return {"intent": guess if guess in ("edit", "draft", "refsearch", "library", "review") else "edit", "confidence": 0.95, "summary": "You want me to " + guess + " as you asked.", "target": "not given",
+                    "uses": {"library": False, "online": False, "outline": False}, "question": "", "alternatives": []}
         if (((body.get("text") or {}).get("format")) or {}).get("name") == "queries":      # the search words for finding references
             return {"queries": ["armed conflict attacks on oil pipelines Colombia", "violence and the security of energy infrastructure"]}
         if (((body.get("text") or {}).get("format")) or {}).get("name") == "draft" and "literature review" in user:      # new text from an outline the author pasted in the request

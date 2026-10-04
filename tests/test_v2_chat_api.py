@@ -27,6 +27,7 @@ class ChatBase(UiBase):
         book_index.ingest(FIXTURE, "mini")
         self.name, self.proj = paper(self, main=MAIN)
         self.main = Path(self.proj["path"]) / "main.tex"
+        config.set_paper_setting(self.proj, "understand", "never")        # these tests are about what happens after a request is understood; the reading has its own tests
         self.c.login()
         self.oa.script = [reply(("Each region has a distinct climate and soil.", "Each region has its own climate and soil."),
                                 approach="The two sentences repeated the same idea; now they flow.")] * 5

@@ -33,7 +33,7 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (activity, book_index, chat, chunk_book, config, draft, events, files, gitmerge, health, latex_mask, latexbuild, library, openai_client, overleaf_auth, panes, paper_index,  # noqa: E402
+from writing_core import (activity, book_index, chat, chunk_book, config, draft, events, files, gitmerge, health, intent, latex_mask, latexbuild, library, openai_client, overleaf_auth, panes, paper_index,  # noqa: E402
                           preferences, retrieve, review, revise, rule_cards, scholar, stats, taxonomy, watermark, webview)
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -1165,6 +1165,8 @@ HELP_TEXT = ("Tell me what to do with your paper, in your own words. For example
              "- find references about how armed conflict affects energy infrastructure (I search the internet, you choose which to add)\n"
              "- peer review my paper\n"
              "- or paste a DOI to add the reference.\n"
+             "I read each request as a whole and, when I am not sure what you mean, I say what I understood and wait for your yes, your correction or your no. "
+             "You can also choose the kind of request under the message box.\n"
              "I read the right part of your paper, add the advice from your writing book, and ask OpenAI for a better version with an explanation. "
              "You decide what to keep; nothing is saved until you approve it.")
 
@@ -1232,21 +1234,168 @@ def api_chat_send(r):
     asked = chat.strip_pasted(n, p, text) if not ticked else text      # what is asked, without the paragraphs of the paper that the message carries
     inferred = chat.intent(asked)
     kind = "refsearch" if find_refs else "draft" if redraft else (inferred if inferred in ("draft", "refsearch") else "edit") if ticked else inferred
+    req = {"text": text, "asked": asked, "ticked": ticked, "facts": facts, "online": online, "issue": issue, "redraft": redraft, "revises": revises, "find_refs": find_refs, "words": words}
+    uses = None
+    flag = str(r.body.get("flag") or "")
+    if flag in intent.ALL:                                                # the author said what kind of request this is: no reading needed
+        kind = flag
+    elif not (find_refs or redraft or revises or online or words) and kind not in ("refs", "help"):
+        card, reading, usage = _understand_gate(n, p, cid, req, kind, out[0])
+        if card:                                                          # not clearly right: say what was understood and wait for the author's yes, correction or no
+            out.append(card)
+            return {"messages": out, "job": None}
+        if reading:
+            kind, uses = reading["intent"], reading["uses"]
+            chat.update(p, cid, out[0]["id"], understood={"intent": reading["intent"], "summary": reading["summary"], "target": reading["target"], "confidence": reading["confidence"]})
+            out[0] = chat.get_message(p, cid, out[0]["id"])
+    return _dispatch(r.app, n, p, cid, kind, req, out, out[0]["id"], uses)
+
+
+UNDERSTAND_MODES = ("always", "unsure", "never")
+
+
+def _capabilities(n, p):
+    """What the reader may be told is available, a line each (it decides which sources a request can use)."""
+    caps = {}
+    try:
+        st = library.status()
+        caps["the author's literature library"] = f"{st['docs']} documents" if st.get("docs") else "empty or not chosen"
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        outlines = [f["file"].rsplit("/", 1)[-1] for f in files.listing(n, p) if files.role_of(f) == "outline"]
+        caps["outlines the author wrote"] = ", ".join(outlines[:6]) or "none"
+    except Exception:  # noqa: BLE001
+        pass
+    caps["searching the internet for references"] = "switched off" if config.paper_settings(p).get("use_online") == "never" else "allowed"
+    return caps
+
+
+def _understand_gate(n, p, cid, req, rules_kind, user_msg):
+    """Read the request as a whole and decide whether to show the reading first. -> (card message or None, reading or None, usage). With no model, or with reading switched off,
+    (None, None, None): the word-based guess is used, as before."""
+    mode = config.paper_settings(p).get("understand", "unsure")
+    if mode not in UNDERSTAND_MODES or mode == "never" or config.openai_status()[0] != "ok":
+        return None, None, None
+    reading, usage = _read_request(n, p, cid, req, rules_kind, user_msg["id"])
+    if not reading:
+        return None, None, None
+    if intent.needs_card(mode, reading, rules_kind):
+        card = chat.append(p, cid, "assistant", "understanding", reading["summary"], reading=reading, rules_kind=rules_kind, source=user_msg["id"], state="waiting", usage=usage or {})
+        return card, reading, usage
+    return None, reading, usage
+
+
+def _read_request(n, p, cid, req, rules_kind, user_mid, correction=""):
+    try:
+        tex = [c for c in paper_index.list_chunks(n, p)["chunks"] if c["kind"] == "tex"]
+        sections = [s["label"] for s in chat._sections(tex)]
+    except Exception:  # noqa: BLE001
+        sections = []
+    text = req["text"] + (f"\n\n[The author's correction of an earlier reading: {correction}]" if correction else "")
+    material = intent.build(text, asked=req.get("asked"), selected=req.get("ticked"), sections=sections, capabilities=_capabilities(n, p),
+                            thread=chat.get_thread(p, cid)["messages"], current_id=user_mid, guess=rules_kind, examples=intent.examples(p, req["text"]))
+    return intent.interpret(config.openai_cfg(), material)
+
+
+def _request_of(n, p, cid, user_mid):
+    """The parameters of a request already in the chat, rebuilt from its message."""
+    m = chat.get_message(p, cid, user_mid)
+    if not m or m["role"] != "user":
+        raise ApiError(404, "that request is not in this chat")
+    d = m.get("data") or {}
+    ticked = d.get("chunk_ids") or None
+    return {"text": m["text"], "asked": chat.strip_pasted(n, p, m["text"]) if not ticked else m["text"], "ticked": ticked, "facts": d.get("facts", ""), "online": [], "issue": d.get("issue"),
+            "redraft": "", "revises": "", "find_refs": False, "words": ""}
+
+
+def api_chat_understood(r):
+    """The author's answer to "is this what you meant?": go ahead (perhaps as another kind of request, with other sources, or with a note), read it again with a correction, or set it aside."""
+    n, p, cid = _chat_ctx(r)
+    mid = str(r.body.get("message") or "")
+    action = str(r.body.get("action") or "")
+    card = chat.get_message(p, cid, mid)
+    if action == "reconsider":                                               # after the fact: "that is not what I meant" under a request that went ahead
+        req = _request_of(n, p, cid, mid)
+        user = chat.get_message(p, cid, mid)
+        old = (user.get("data") or {}).get("understood") or {}
+        reading = {"intent": old.get("intent") if old.get("intent") in intent.INTENTS else "edit", "confidence": 0.5, "summary": old.get("summary") or "", "target": old.get("target") or "",
+                   "uses": {"library": False, "online": False, "outline": False}, "question": "Tell me what you meant, or pick the kind of request.", "alternatives": []}
+        card = chat.append(p, cid, "assistant", "understanding", reading["summary"], reading=reading, rules_kind=reading["intent"], source=mid, state="waiting", usage={})
+        return {"messages": [card], "job": None}
+    if not card or card["kind"] != "understanding":
+        raise ApiError(404, "that question is not in this chat")
+    data = card["data"]
+    if data.get("state") != "waiting":
+        raise ApiError(409, "that was already answered")
+    req = _request_of(n, p, cid, data["source"])
+    reading, guess = data["reading"], data["reading"]["intent"]
+    note = str(r.body.get("note") or "").strip()[:600]
+    if action == "cancel":
+        chat.update(p, cid, mid, state="cancelled", note=note)
+        intent.remember(p, req["text"], guess, guess, "rejected", note)
+        msg = chat.append(p, cid, "assistant", "text", "Okay, I did nothing. Tell me again what you meant, in your own words, or pick the kind of request next to the message box.")
+        return {"messages": [chat.get_message(p, cid, mid), msg], "job": None}
+    if action == "change":                                                   # read it again with the author's correction
+        if not note:
+            raise ApiError(400, "write what to correct")
+        new, usage = _read_request(n, p, cid, req, data.get("rules_kind", ""), data["source"], correction=note)
+        if not new:
+            raise ApiError(409, "I could not read it again just now. Pick the kind of request yourself and press Go ahead.")
+        intent.remember(p, req["text"], guess, new["intent"], "corrected" if new["intent"] != guess else "confirmed", note)
+        chat.update(p, cid, mid, reading=new, usage=usage or {}, correction=note)
+        return {"messages": [chat.get_message(p, cid, mid)], "job": None}
+    if action != "go":
+        raise ApiError(400, "action must be go, change or cancel")
+    chosen = str(r.body.get("intent") or guess)
+    if chosen not in intent.INTENTS:
+        raise ApiError(400, "that kind of request is not one I know")
+    uses = r.body.get("uses") if isinstance(r.body.get("uses"), dict) else reading["uses"]
+    uses = {k: bool(uses.get(k)) for k in ("library", "online", "outline")}
+    if note:
+        req = dict(req, facts=(req["facts"] + "\nThe author adds: " + note).strip()[:3000])
+    intent.remember(p, req["text"], guess, chosen, "corrected" if chosen != guess else "confirmed", note)
+    chat.update(p, cid, mid, state="confirmed", chosen=chosen, uses=uses, note=note)
+    out = [chat.get_message(p, cid, mid)]
+    return _dispatch(r.app, n, p, cid, chosen, req, out, data["source"], uses, explicit=True)
+
+
+def _dispatch(app, n, p, cid, kind, req, out, user_mid, uses=None, explicit=False):
+    """Carry out a request of a known kind: help, DOIs, library, references, writing, citing, review, editing. `uses` (from a reading the author confirmed) names the sources to add."""
+    text, asked, ticked, facts, online = req["text"], req["asked"], req["ticked"], req["facts"], req["online"]
+    issue, redraft, revises, find_refs, words = req["issue"], req["redraft"], req["revises"], req["find_refs"], req["words"]
+    uses = uses or {}
+    online_off = config.paper_settings(p).get("use_online") == "never" or (explicit and kind != "refsearch" and uses.get("online") is False)         # unticked on the card: no search of the internet for this request
+    cite_nudge = False
+    if kind == "cite":
+        if uses.get("online") and not uses.get("library"):
+            kind = "refsearch"                                            # references found on the internet for this text, then the ones the author ticks are cited
+        else:
+            kind, cite_nudge = "edit", True
+    nudges = []
+    if uses.get("outline") and not files.GENERIC_OUTLINE.search(text) and kind in ("edit", "draft"):
+        nudges.append("Follow the outline.")
+    if uses.get("library") and not library.wants(text) and kind in ("edit", "draft"):
+        nudges.append("Use my literature library.")
+    if cite_nudge and not library.requires_citations(text):
+        nudges.append("Add in-text citations (\\cite) from the sources provided where they support the statements.")
+    if nudges:
+        text, asked = text + "\n\n" + " ".join(nudges), asked + "\n\n" + " ".join(nudges)
     job = None
     if kind == "help":
         out.append(chat.append(p, cid, "assistant", "text", HELP_TEXT))
     elif kind == "refs":
-        job = _start_refs(r.app, n, p, cid, chat.find_dois(text)[:20])
+        job = _start_refs(app, n, p, cid, chat.find_dois(text)[:20])
     elif kind == "library":
         out.append(_library_answer(n, p, cid, text))
     elif kind == "refsearch":
-        if config.paper_settings(p).get("use_online") == "never":
+        if online_off:
             out.append(chat.append(p, cid, "assistant", "text", "Searching the internet for references is switched off for this paper. Turn it on in Settings (Literature library), then ask again."))
         elif not words and not find_refs and not ticked and not chat.refs_topic(text) and not chat.refs_place(text, ""):
             out.append(chat.append(p, cid, "assistant", "text", "What should I look for? For example: find references on how armed conflict affects energy infrastructure in Colombia."))
         else:
-            prior = [m for m in chat.get_thread(p, cid)["messages"] if m["id"] != out[0]["id"]]
-            job = _start_refsearch(r.app, n, p, cid, text, ticked, facts, revises or redraft, issue, words, chat.last_target({"messages": prior}))
+            prior = [m for m in chat.get_thread(p, cid)["messages"] if m["id"] != user_mid]
+            job = _start_refsearch(app, n, p, cid, text, ticked, facts, revises or redraft, issue, words, chat.last_target({"messages": prior}))
     elif kind == "draft":
         if config.openai_status()[0] != "ok":
             out.append(chat.append(p, cid, "assistant", "error", "ChatGPT is not set up yet. Open Settings and add your OpenAI key and model, then ask again."))
@@ -1262,25 +1411,25 @@ def api_chat_send(r):
                 tail = (" Sections I can see: " + ", ".join(loc["sections"]) + ".") if loc.get("sections") else ""
                 out.append(chat.append(p, cid, "assistant", "text", loc["why"] + tail))
                 return {"messages": out}
-            pl = draft.plan(n, p, text, loc["anchor"], loc["part"], facts=facts if redraft else "", online=online or None)
+            pl = draft.plan(n, p, text, loc["anchor"], loc["part"], facts=facts, online=online or None)
         except (draft.DraftError, revise.ReviseError, config.ConfigError, openai_client.OpenAIError, ValueError, FileNotFoundError, KeyError, paper_index.IsolationError) as e:
             out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
             return {"messages": out}
         if pl.get("require_citations") and not any(x.get("tag") for x in pl.get("library", [])):
-            if config.paper_settings(p).get("use_online") == "never":
+            if online_off:
                 out.append(chat.append(p, cid, "assistant", "error", "Your request requires in-text citations, but the local library has no citable bibliography records and online reference search is switched off in Settings."))
                 return {"messages": out}
             why = "; ".join(f"{u['label']}: {u['why']}" for u in (pl.get("uncitable") or [])[:4])
             out.append(chat.append(p, cid, "assistant", "text", ("I could not cite anything from your literature library" + (f" ({why})" if why else " (nothing in it matches this subject)") +
                                                               ". I am looking for verified online reference records on the subject of your outline, so you can choose which ones to add and cite.")))
-            job = _start_refsearch(r.app, n, p, cid, text, ticked, facts, "", issue, "", chat.last_target({"messages": chat.get_thread(p, cid)["messages"]}), force_draft=True)
+            job = _start_refsearch(app, n, p, cid, text, ticked, facts, "", issue, "", chat.last_target({"messages": chat.get_thread(p, cid)["messages"]}), force_draft=True)
             return {"messages": out, "job": job}
         ask = config.paper_settings(p)["confirm_before_send"] or pl.get("require_citations", False)
         m = chat.append(p, cid, "assistant", "draft_plan", "", plan=pl, where=loc["where"], notes=loc["notes"], state="waiting", confirm="citations" if pl.get("require_citations") else "setting" if ask else None,
                         **({"revises": redraft} if redraft else {}))
         out.append(m)
         if not ask:
-            job = _start_draft(r.app, n, p, cid, m["id"])
+            job = _start_draft(app, n, p, cid, m["id"])
             out[-1] = chat.get_message(p, cid, m["id"])
     elif kind == "review":
         if config.openai_status()[0] != "ok":
@@ -1297,7 +1446,7 @@ def api_chat_send(r):
             out.append(chat.append(p, cid, "assistant", "error", "ChatGPT is not set up yet. Open Settings and add your OpenAI key and model, then ask again."))
             return {"messages": out}
         thread = chat.get_thread(p, cid)
-        prior = [m for m in thread["messages"] if m["id"] != out[0]["id"]]
+        prior = [m for m in thread["messages"] if m["id"] != user_mid]
         try:
             u = chat.understand(n, p, text, chunk_ids=ticked, last_ids=chat.last_target({"messages": prior}))
         except (ValueError, FileNotFoundError, paper_index.IsolationError) as e:
@@ -1315,13 +1464,13 @@ def api_chat_send(r):
                 out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
                 return {"messages": out}
             if pl.get("require_citations") and not any(x.get("tag") for x in pl.get("library", [])):       # asked to cite, and nothing in the library can be cited
-                if config.paper_settings(p).get("use_online") == "never":
+                if online_off:
                     out.append(chat.append(p, cid, "assistant", "error", "Your request requires in-text citations, but nothing in your literature library can be cited and searching the internet for references is switched off in Settings."))
                     return {"messages": out}
                 why = "; ".join(f"{x['label']}: {x['why']}" for x in (pl.get("uncitable") or [])[:4])
                 out.append(chat.append(p, cid, "assistant", "text", ("You asked for in-text citations, but I could not cite anything from your literature library" + (f" ({why})" if why else "") +
                                                                   ". I am looking for verified references on the subject of this text, so you can choose which ones to add and cite.")))
-                job = _start_refsearch(r.app, n, p, cid, text, u["chunk_ids"], facts, "", issue, "", [], auto_cite=True)
+                job = _start_refsearch(app, n, p, cid, text, u["chunk_ids"], facts, "", issue, "", [], auto_cite=True)
                 return {"messages": out, "job": job}
             guard = config.ui_cfg()["guard_passages"]
             ask = config.paper_settings(p)["confirm_before_send"] or pl["units"] > guard
@@ -1330,9 +1479,11 @@ def api_chat_send(r):
                             **({"issue": issue} if issue else {}), **({"revises": revises} if revises else {}))
             out.append(m)
             if not ask:
-                job = _start_pass(r.app, n, p, cid, m["id"])
+                job = _start_pass(app, n, p, cid, m["id"])
                 out[-1] = chat.get_message(p, cid, m["id"])
     return {"messages": out, "job": job}
+
+
 
 
 def _library_answer(n, p, cid, text):
@@ -2021,6 +2172,12 @@ def api_settings(r):
             if body["use_library"] not in ("auto", "always", "never"):
                 raise ApiError(400, "use_library must be auto, always or never")
             config.set_paper_setting(p, "use_library", body["use_library"])
+        if "understand" in body:
+            if body["understand"] not in UNDERSTAND_MODES:
+                raise ApiError(400, "understand must be always, unsure or never")
+            config.set_paper_setting(p, "understand", body["understand"])
+        if "forget_understanding" in body and body["forget_understanding"]:
+            intent.forget(p)
         if "use_online" in body:
             if body["use_online"] not in ("auto", "never"):
                 raise ApiError(400, "use_online must be auto or never")
@@ -2416,7 +2573,7 @@ ROUTES = [
     ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/papers/clean-address$", api_clean_address), ("POST", r"^/api/papers/clone$", api_clone_overleaf), ("POST", r"^/api/test/cleaner$", api_test_cleaner),
     ("GET", r"^/api/papers/discover$", api_discover), ("POST", r"^/api/papers/add$", api_add_paper),
     ("GET", r"^/api/chat/threads$", api_chat_threads), ("POST", r"^/api/chat/new$", api_chat_new), ("POST", r"^/api/chat/rename$", api_chat_rename),
-    ("POST", r"^/api/chat/delete$", api_chat_delete), ("POST", r"^/api/chat/clear$", api_chat_clear), ("POST", r"^/api/chat/issue$", api_chat_issue), ("GET", r"^/api/chat$", api_chat_get), ("POST", r"^/api/chat/send$", api_chat_send),
+    ("POST", r"^/api/chat/delete$", api_chat_delete), ("POST", r"^/api/chat/clear$", api_chat_clear), ("POST", r"^/api/chat/issue$", api_chat_issue), ("GET", r"^/api/chat$", api_chat_get), ("POST", r"^/api/chat/send$", api_chat_send), ("POST", r"^/api/chat/understood$", api_chat_understood),
     ("POST", r"^/api/chat/run$", api_chat_run), ("POST", r"^/api/chat/refs/pick$", api_chat_refs_pick), ("POST", r"^/api/chat/count$", api_chat_count), ("POST", r"^/api/chat/cancel$", api_chat_cancel),
     ("POST", r"^/api/proposal/check$", api_proposal_check), ("POST", r"^/api/proposal/approve$", api_proposal_approve),
     ("POST", r"^/api/proposal/text$", api_proposal_text), ("POST", r"^/api/papers/catchup$", api_catchup),

@@ -189,21 +189,37 @@ LATEX_MARK = re.compile(r"\\(?:cite[a-z]*|ref|eqref|autoref|cref|label|textit|te
 PASTED_MIN_WORDS = 20
 
 
+def _blocks(text):
+    t = text or ""
+    blocks = [b for b in re.split(r"\n\s*\n", t) if b.strip()]
+    if len(blocks) >= 2:
+        return blocks, "\n\n"
+    return [b for b in t.splitlines() if b.strip()], "\n"           # no blank line between the request and the paragraph
+
+
+def _is_pasted(block):
+    return len(block.split()) >= PASTED_MIN_WORDS and bool(LATEX_MARK.search(block))
+
+
+def pasted_blocks(text):
+    """The pieces of the message that are pasted manuscript text (see request_part), when the message also has something else in it."""
+    blocks, _ = _blocks(text)
+    if len(blocks) < 2:
+        return []
+    pasted = [b for b in blocks if _is_pasted(b)]
+    return pasted if len(pasted) < len(blocks) else []
+
+
 def request_part(text):
     """The request in a message that may carry a pasted piece of the manuscript. A paragraph of 20 words or more with LaTeX in it (a \\citep, a \\ref, a formula) is the author's pasted
     text, not the request: the verbs in it ("we extracted", "to create routing alternatives") must not be read as "write new text", nor its \\cite as a demand for citations. When the
     message is nothing but such text, all of it is returned."""
     t = text or ""
-    blocks = [b for b in re.split(r"\n\s*\n", t) if b.strip()]
-    if len(blocks) < 2:
-        blocks = [b for b in t.splitlines() if b.strip()]               # no blank line between the request and the paragraph
-        glue = "\n"
-    else:
-        glue = "\n\n"
-    if len(blocks) < 2:
+    blocks, glue = _blocks(t)
+    pasted = pasted_blocks(t)
+    if not pasted:
         return t
-    keep = [b for b in blocks if not (len(b.split()) >= PASTED_MIN_WORDS and LATEX_MARK.search(b))]
-    return glue.join(keep) if keep and len(keep) < len(blocks) else t
+    return glue.join(b for b in blocks if b not in pasted)
 
 
 # ------------------------------------------------------------------------------------------------ the subject

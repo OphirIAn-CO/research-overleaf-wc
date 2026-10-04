@@ -86,6 +86,26 @@ If you haven't touched that paper for a while, the bot asks which paper first.
 
 ## Everyday use
 
+### Checking that I understood you
+
+Words alone do not say what you want ("create" inside a paragraph you pasted is the paper's verb, not a request to write; "add the citation" can mean searching the internet, using your reading, or pointing to an
+article already cited). So every request is **read as a whole, in its context** by a small model call (about a thousand tokens), which sees your message with any pasted paragraph marked as material, the
+recent conversation (so "it", "again" and "the second one" mean something), what you have set up (library, outlines, internet search), and your earlier corrections.
+
+- **When I am not sure, I say what I understood and wait.** A card says, for example, *"You want references found on the internet for the paragraph you pasted, so they can be cited in it"*, with the text it is about,
+  the kind of request, and which sources to use (my reading, the internet, my outline). You can press **Yes, go ahead**; change the kind of request or the sources and go ahead; write a correction or an addition and press
+  **Read it again with my correction** (the card is replaced by the new reading); or **Not what I meant**, which does nothing. A note you write with your yes goes along with the request as your own words.
+  Nothing is changed or sent before you answer.
+- **When it is clearly right, I go ahead and show how I read it:** a line *"Read as: ..."* under your message, with **Not what I meant** next to it if I got it wrong (it opens the same card).
+- **The kinds of request I distinguish:** improve or correct text that is already written; write new text; add in-text citations to text that is already written (from your reading, from references found online, or
+  both); find references on the internet; change the layout or format (tables, figures, graphs, position, appendix); answer from your reading; peer review.
+- **You can say the kind yourself.** Under the message box, *This is a request to:* lets you choose the kind for the next message; then nothing is read and no tokens are used for it.
+- **How often I ask** is a setting per paper (**Settings > Preferences > Check that I understood your request**): *only when I am not sure* (the default: I am not sure when I am not confident, when my reading differs from
+  a quick read of the words, when I have a question, or when the request changes the layout), *every time*, or *never* (the words alone decide, as before; no model call is made to read it).
+- **I learn from what you confirm, correct or refuse.** It is kept in `understanding.json` in the paper's own hidden folder (your words only, not your manuscript, and never shared with another paper), and the most
+  similar earlier requests, with your corrections, are shown to the next reading as examples. **Settings > Forget what I learned from my corrections** removes it.
+- If no model is set up, or the reading fails, the words decide as before.
+
 ### Saying which text you mean
 
 You can say the place in words ("the text before Figure 1 in the methods", "the first paragraph of the introduction"), tick the passages yourself, or **paste the paragraph into the message**:

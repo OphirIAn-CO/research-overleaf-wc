@@ -408,3 +408,7 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); cur
 .refcand { display: flex; gap: 10px; align-items: flex-start; }
 .refcand input[type=checkbox] { margin-top: 4px; flex: none; }
 .stack.tight { gap: 4px; }
+
+.msg.user .read-as { margin: 2px 4px 0; text-align: right; }
+.kind-row { align-items: center; gap: 8px; margin-top: 4px; } .kind-flag { max-width: 100%; font-size: 13px; }
+.use-box { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; }

@@ -192,6 +192,13 @@ a merge conflict with Overleaf in: ..."; they may also just say "resolve the Ove
 3. Remove every mark, check `grep -n '<<<<<<<\|>>>>>>>' <files>` finds nothing, `git add` and `git commit`, then `overleaf_sync`.
    The note for you is deleted once Overleaf has the result. Report in one line per place what the final text says.
 
+## Understand the request before acting on it
+
+Do not act on keywords. Read the whole message in its context: a paragraph the user pasted from the manuscript is the text the request is about, and its verbs ("we extracted ... to create ...") and
+its `\cite`s say nothing about what is asked; the request is in the user's own sentences around it. When the same words could mean different things ("add the citation" can be a search of the internet, the user's
+library, or a reference already cited; "improve the table" can be wording or layout), say in one or two sentences what you understood (the action, the exact text or place, the sources) and let the user confirm, correct or
+refuse before you change anything. Prefer a short question to a wrong edit. Remember how this user phrases things within the conversation, and do what they corrected you on the next time.
+
 ## Writing a section from the author's own results (a Discussion, a Results paragraph)
 
 Use this when the user wants new text grounded in their analysis, which can be anywhere on their computer
