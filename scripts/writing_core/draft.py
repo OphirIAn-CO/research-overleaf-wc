@@ -40,7 +40,7 @@ DRAFT_SCHEMA = {
 SYSTEM_PROMPT = """You write NEW text for ONE place in a LaTeX manuscript, in the author's voice, following the supplied writing rules for that part of a paper.
 
 Hard constraints (a violation makes your answer unusable):
-1. Everything you state (every fact, number, name, result, method, claim) must come from <source_material>, <library_sources>, <author_answers> or <surrounding_text>. Never invent a result, a value, a method or a citation. When something needed is missing, leave it out and ask for it in "questions". Copy numbers exactly as the sources give them; do not round, convert or compute new ones.
+1. Everything you state (every fact, number, name, result, method, claim) must come from <source_material>, <library_sources>, <author_answers>, <surrounding_text> or the author's own words in <instruction> (an outline, notes or a literature review the author pasted there: follow its structure and use it as a source named "request"). Never invent a result, a value, a method or a citation. When something needed is missing, leave it out and ask for it in "questions". Copy numbers exactly as the sources give them; do not round, convert or compute new ones.
 2. Placeholders such as [[LX910]] are tags for protected LaTeX. <usable_tags> lists the only ones you may write, and what each stands for: a number of a figure or table of the paper (write it as "Figure~[[LX910]]" or "Table~[[LX911]]", with the tilde) or a citation of a source. Write a tag exactly as given. Never write any other tag, and never write LaTeX yourself.
 3. Never use em dashes or en dashes (no the characters for them, no --- and no --). Use commas, semicolons or periods.
 4. Write plain prose in paragraphs separated by a blank line. No headings, no lists, no tables, no LaTeX commands, no special characters such as % & # _ ^ (write "percent" as "per cent" only if the surrounding text does; otherwise write out the word).
@@ -49,7 +49,7 @@ Hard constraints (a violation makes your answer unusable):
 7. Sources are labelled [S1], [S2] (the author's files) and [L1], [L2] (the author's library). A library source is cited only with its tag; one marked as not in the bibliography may inform the wording and is never cited.
 8. Pictures attached to the request are figures of the author's analysis. Describe what they show (a trend, an order, groups, outliers); never read an exact value off a picture and never state a number that is not in the text of a source.
 
-Answer with JSON only: "approach" (two to four plain sentences for the author: what the new text covers and which sources it rests on; no LaTeX, no tags), "draft_text" (the new text), "basis" (for each statement or paragraph of the draft: "statement" = its first words, "source" = the label of the source it rests on, for example S2 or L1; use "surrounding text" or "author answers" when it rests on those), "questions" (what you needed and the sources did not hold)."""
+Answer with JSON only: "approach" (two to four plain sentences for the author: what the new text covers and which sources it rests on; no LaTeX, no tags), "draft_text" (the new text), "basis" (for each statement or paragraph of the draft: "statement" = its first words, "source" = the label of the source it rests on, for example S2 or L1; use "surrounding text", "author answers" or "request" when it rests on those), "questions" (what you needed and the sources did not hold)."""
 
 
 class DraftError(Exception):
@@ -70,6 +70,46 @@ def _after_heading(lines, a):
     while j < len(lines) and (not chunk_tex.strip_comment(lines[j]).strip() or lines[j].lstrip().startswith("\\label")):
         j += 1
     return j if j > a else a
+
+
+ORDER = ["abstract", "introduction", "background", "theory", "methods", "results", "discussion", "limitations", "conclusion"]      # the usual order of a paper
+
+
+def _new_section_anchor(proj, tex, part):
+    """Where a section the paper does not have yet belongs: before the first section that normally comes after it; else after the last one that normally comes before it; else after the
+    abstract or the title. -> ({file, after_line}, "after the abstract") or None"""
+    if part not in ORDER or part == "abstract":
+        return None
+    present = {}
+    for c in tex:
+        if c.get("part") in ORDER:
+            present.setdefault(c["part"], []).append(c)
+    i = ORDER.index(part)
+    later = [x for x in ORDER[i + 1:] if x in present]
+    if later:
+        first = min(present[later[0]], key=lambda c: c["ord"])
+        lines = chat._lines(proj, first["file"])
+        a = first["line_start"] - 1
+        while a >= 1 and (_HEADING.match(chunk_tex.strip_comment(lines[a - 1])) or lines[a - 1].lstrip().startswith("\\label")):          # the heading of that section is not ours to separate
+            a -= 1
+        return {"file": first["file"], "after_line": a}, f"before the {later[0]}"
+    earlier = [x for x in ORDER[:i] if x in present]
+    if earlier:
+        last = max(present[earlier[-1]], key=lambda c: c["ord"])
+        lines = chat._lines(proj, last["file"])
+        a = last["line_end"]
+        for j in range(a, min(len(lines), a + 3)):                                               # an abstract's chunk may stop just before \end{abstract}
+            if "\\end{abstract}" in lines[j]:
+                a = j + 1
+                break
+        return {"file": last["file"], "after_line": a}, f"after the {earlier[-1]}"
+    lines = chat._lines(proj, tex[0]["file"])
+    for marker, phrase in (("\\end{abstract}", "after the abstract"), ("\\maketitle", "after the title"), ("\\begin{document}", "at the start of the document")):
+        hit = next((j + 1 for j, ln in enumerate(lines) if marker in chunk_tex.strip_comment(ln)), None)
+        if hit:
+            return {"file": tex[0]["file"], "after_line": hit}, phrase
+    end = next((j for j in range(len(lines) - 1, -1, -1) if "\\end{document}" in lines[j]), len(lines))
+    return {"file": tex[0]["file"], "after_line": end}, "at the end of the document"
 
 
 def _plain(text):
@@ -107,8 +147,9 @@ def locate(name, proj, text, max_context_tokens=700):
     if not tex:
         return {"status": "empty", "why": "I cannot find any manuscript text in this paper yet. Press \"Get latest from Overleaf\" first, then ask again.", "sections": []}
     titles = list(dict.fromkeys(c["section_path"].split(" > ")[0] for c in tex if c.get("section_path")))[:12]
+    asked = " ... ".join(chat.ask_of(text))            # a long message carries pasted material: where to put the text is said at its start or its end
     part = chat.draft_part(text)
-    freq = chat._float_request(text)
+    freq = chat._float_request(asked)
     notes = []
     anchor = None
     if freq:
@@ -127,16 +168,23 @@ def locate(name, proj, text, max_context_tokens=700):
         if not part:
             return {"status": "ask", "why": "Which part of the paper should the new text go in? Say it, for example \"write the results from my analysis\" or \"add a paragraph on the sampling to the methods\".", "sections": titles}
         cands = paper_index.part_chunks(name, proj, [part], refresh_first=False)
-        if not cands:
-            return {"status": "missing", "why": f"Your paper has no {taxonomy.label(part).lower()} section yet. Add its heading in Overleaf (for example \\section{{{taxonomy.label(part).capitalize()}}}), get the latest here, and ask again.", "sections": titles}
-        cands = sorted(cands, key=lambda c: c["ord"])
-        if _START.search(text):
-            first = cands[0]
-            lines = chat._lines(proj, first["file"])
-            anchor = {"file": first["file"], "after_line": _after_heading(lines, first["line_start"]), "mode": "at the start"}
+        if not cands:                                                 # the paper does not have this section yet: it is made, with its heading, where it belongs
+            made = _new_section_anchor(proj, tex, part)
+            if not made:
+                return {"status": "missing", "why": f"Your paper has no {taxonomy.label(part).lower()} section yet. Add its heading in Overleaf (for example \\section{{{taxonomy.label(part).capitalize()}}}), get the latest here, and ask again.", "sections": titles}
+            anchor, phrase = made
+            heading = "\\section{%s}" % taxonomy.label(part).capitalize()
+            anchor.update(heading=heading, mode=f"as a new {taxonomy.label(part)} section {phrase}")
+            notes.append(f"Your paper has no {taxonomy.label(part)} section yet, so the new text comes with its own heading, {heading}, placed {phrase}. You see it before anything is saved.")
         else:
-            last = cands[-1]
-            anchor = {"file": last["file"], "after_line": last["line_end"], "mode": "at the end"}
+            cands = sorted(cands, key=lambda c: c["ord"])
+            if _START.search(asked):
+                first = cands[0]
+                lines = chat._lines(proj, first["file"])
+                anchor = {"file": first["file"], "after_line": _after_heading(lines, first["line_start"]), "mode": "at the start"}
+            else:
+                last = cands[-1]
+                anchor = {"file": last["file"], "after_line": last["line_end"], "mode": "at the end"}
     lines = chat._lines(proj, anchor["file"])
     a = max(0, min(anchor["after_line"], len(lines)))
     anchor.update(after_line=a, before=bool(lines[a - 1].strip()) if a >= 1 else False, after=bool(lines[a].strip()) if a < len(lines) else False,
@@ -228,7 +276,7 @@ def _user(instruction, part_label, where, card, prefs, rules_text, sources, lib_
 
 
 def _target_words(part, text):
-    m = re.search(r"\b(\d{2,4})\s*words?\b", text or "")
+    m = re.search(r"\b(\d{2,4})\s*words?\b", " ... ".join(chat.ask_of(text)))
     if m:
         return max(40, min(int(m.group(1)), MAX_DRAFT_WORDS))
     return {"abstract": 200, "results": 450, "discussion": 450, "methods": 350, "introduction": 400, "background": 450, "conclusion": 250, "limitations": 200}.get(part, 250)
@@ -299,7 +347,7 @@ def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, 
     est_in = store.approx_tokens(system + user) + 850 * len(pictures)
     est_out = int(target * 1.6) + 250
     est_cost = revise._price(cfg, {"input_tokens": est_in, "output_tokens": est_out})
-    return {"cfg": cfg, "system": system, "user": user, "body": body, "images": pictures, "tags": tags, "offered": sorted(tags), "context": "\n".join([sources_text, lib_text, facts, before, after]).strip(),
+    return {"cfg": cfg, "system": system, "user": user, "body": body, "images": pictures, "tags": tags, "offered": sorted(tags), "context": "\n".join([sources_text, lib_text, facts, instruction, before, after]).strip(),
             "rule_ids": rule_ids, "book": book_id, "warnings": warnings, "sources": shown_sources, "library": shown_library, "bib_adds": bib_adds, "online": list(online or []),
             "pictures": [{"name": x["name"], "kb": max(1, x["bytes"] // 1024)} for x in pictures], "payload_hash": payload_hash, "est_tokens_in": est_in, "est_cost": est_cost,
             "model": cfg["model"], "where": where, "label": label, "target_words": target, "part": part, "anchor": anchor, "instruction": instruction, "facts": facts, "scope": scope,
@@ -365,7 +413,7 @@ def run(name, proj, instruction, anchor, part="", facts="", confirm=None, source
     totals = {"latency_ms": 0, "retries": 0, "tokens_in": 0, "tokens_out": 0}
     unit_id = "u1"
     a = anchor["after_line"]
-    unit = {"unit_id": unit_id, "file": anchor["file"], "line_start": a + 1, "line_end": a, "insert": True, "anchor": anchor, "section_path": f"{p['label']} (new text)",
+    unit = {"unit_id": unit_id, "file": anchor["file"], "line_start": a + 1, "line_end": a, "insert": True, "anchor": anchor, "section_path": f"{p['label']} (new text)", "heading": anchor.get("heading", ""),
             "original_hash": store.sha256_text(""), "original_text": "", "masked_original": "", "mapping": {}, "status": "ok", "hunks": [], "segments": [], "questions": [],
             "validators": [], "retries": 0, "approach": "", "basis": [], "new_tags": [], "added_cites": []}
     steps.start("ask", f"Asking {cfg['model']} to write it")
@@ -423,7 +471,7 @@ def run(name, proj, instruction, anchor, part="", facts="", confirm=None, source
         unit["added_cites"] = [p["tags"][t] for t in used if t in p["cites"]]
         basis = [b for b in (obj.get("basis") or []) if isinstance(b, dict)]
         unit["basis"] = [{"statement": str(b.get("statement", ""))[:120], "source": str(b.get("source", ""))[:40]} for b in basis][:40]
-        valid = {s["ref"] for s in p["sources"]} | {s["ref"] for s in p["library"]} | {"surrounding text", "author answers"}
+        valid = {s["ref"] for s in p["sources"]} | {s["ref"] for s in p["library"]} | {"surrounding text", "author answers", "request"}
         unknown = sorted({b["source"] for b in unit["basis"] if b["source"] and b["source"] not in valid})
         if unknown:
             unit["validators"].append({"name": "basis_known", "ok": False, "severity": "warn", "detail": "it cites sources I did not give it: " + ", ".join(unknown)})

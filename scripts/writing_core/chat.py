@@ -19,7 +19,7 @@ from . import chunk_tex, config, paper_index, retrieve, revise, store, taxonomy
 
 DIRNAME = "chats"
 MAX_MESSAGES = 300
-MAX_TEXT = 4000
+MAX_TEXT = 30000                # a message can carry an outline or notes to write from; longer than this is cut, and the chat says so
 CID = re.compile(r"^c[0-9a-f]{10}$")
 _LOCK = threading.Lock()
 
@@ -265,9 +265,32 @@ DRAFTABLE = ("abstract", "introduction", "background", "theory", "methods", "res
 _PREP_PART = re.compile(r"\b(?:in|into|for|to|inside|within|under|on)\s+(?:the\s+|my\s+|our\s+|a\s+|an\s+)?(?:\w+\s+){0,2}?(%s)\b")
 
 
-def draft_part(text):
-    """The part of the paper a request to WRITE something is about ("write the discussion of these results" -> discussion; "explain the results in the discussion" ->
-    discussion; "write the results from my code" -> results). None when it names none."""
+ASK_WORDS = 45
+_DRAFT_VERB = re.compile(r"\b(?:write|draft|compose|generate|prepare|produce|add)\b", re.I)
+
+
+def ask_of(text, n=ASK_WORDS):
+    """What is being asked, inside a long message. A message that carries pasted material (an outline, notes, a literature review) says what to do in its first lines or in its last ones,
+    never in the middle: only those are read to tell what kind of request it is and which part of the paper it is about. -> [the whole text] when it is short, else [start, end]"""
+    t = text or ""
+    if len(t.split()) <= 2 * n:
+        return [t]
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+
+    def edge(seq):
+        picked, count = [], 0
+        for ln in seq:
+            picked.append(ln)
+            count += len(ln.split())
+            if count >= 12:                                        # a greeting line alone is not yet the request
+                break
+        return picked
+    start = " ".join(" ".join(edge(lines)).split()[:n])
+    end = " ".join(" ".join(reversed(edge(list(reversed(lines))))).split()[-n:])
+    return [start, end]
+
+
+def _part_in(text):
     ws = taxonomy.words((text or "").lower())
     first = {}
     for part in DRAFTABLE:
@@ -288,15 +311,35 @@ def draft_part(text):
     return (after or sorted(first, key=first.get))[0]
 
 
+def draft_part(text):
+    """The part of the paper a request to WRITE something is about ("write the discussion of these results" -> discussion; "explain the results in the discussion" ->
+    discussion; "write the results from my code" -> results). None when it names none. In a long message only its start and its end are read: an outline pasted in the
+    middle that says "now move from theory to methods" is material, not the request."""
+    windows = ask_of(text)
+    asking = [w for w in windows if _DRAFT.search(w) or _DRAFT_VIA.search(w)]            # the end of a long message may be the request, and the start only the material
+    ordered = asking + [w for w in windows if w not in asking]
+    for window in ordered:
+        for m in _DRAFT_VERB.finditer(window):                                          # "... write the introduction of my paper": the part named right after the verb
+            part = _part_in(" ".join(window[m.start():].split()[:16]))
+            if part:
+                return part
+    for window in ordered:
+        part = _part_in(window)
+        if part:
+            return part
+    return None
+
+
 def is_draft_request(text):
     """"Write the results from my analysis", "draft the discussion", "add a paragraph about the sampling to the methods": new text, not an edit of existing text."""
-    t = text or ""
+    windows = ask_of(text)
+    t = " ... ".join(windows)
     if not (_DRAFT.search(t) or _DRAFT_VIA.search(t)):
         return False
     ws = set(taxonomy.words(t.lower())) | {w for w in re.findall(r"[a-z]+", t.lower())}
     if ws & _DRAFT_NOT:
         return False
-    return bool(draft_part(t)) or bool(re.search(r"\b(?:paragraphs?|section|sentences?|passage)\b", t, re.I))
+    return bool(draft_part(text)) or bool(re.search(r"\b(?:paragraphs?|section|sentences?|passage)\b", t, re.I))
 
 
 # "find references about X": look for new literature on the internet (as opposed to "what do my articles say", which searches the author's own library)
@@ -326,11 +369,12 @@ def intent(text):
         return "refs"
     if _HELP.match(text or ""):
         return "help"
-    if _REVIEW.search(text or ""):
+    asked = " ... ".join(ask_of(text))                     # in a long message with pasted material, what is asked is at its start or its end
+    if _REVIEW.search(asked):
         return "review"
-    if _LIBRARY_ASK.search(text or "") and not (set(taxonomy.words((text or "").lower())) & (_INTENT_WORDS | _LIBRARY_EDIT)):
+    if _LIBRARY_ASK.search(asked) and not (set(taxonomy.words(asked.lower())) & (_INTENT_WORDS | _LIBRARY_EDIT)):
         return "library"
-    if is_refs_request(text):
+    if is_refs_request(asked):
         return "refsearch"
     if is_draft_request(text):
         return "draft"

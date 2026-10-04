@@ -184,8 +184,12 @@ Asking to *write* something (not to improve what is there) is understood as a re
 *"write the results from my analysis"*, *"draft the discussion of these results"*, *"explain the results in the discussion"*, *"add a paragraph about the sampling to the methods"*.
 
 1. **Where it goes.** At the end of the part you named (or the start, if you say "at the beginning of the results"), or before or after a figure or table ("after Table 1"). The plan says exactly where
-   ("at the end of the results, after line 34 of main.tex"). If the paper has no such section yet, the app says so and asks you to add the heading in Overleaf first. Text that is already there is never changed.
-2. **What it rests on.** The code output, tables, logs and figures of your analysis, the notes and reports in the folders you chose for the paper, the parts of your library that match the paper's topic (when you
+   ("at the end of the results, after line 34 of main.tex"). If the paper has no such section yet (a new paper with only a title and an abstract, say), the section is made: the new text comes with its own
+   heading, `\section{Introduction}`, placed where that section usually goes (after the abstract, or before the first section that normally follows it). The card says so, and nothing is saved until you approve.
+   Only the abstract is not made this way. Text that is already there is never changed.
+2. **What it rests on.** Whatever you wrote or pasted in the request: an outline, notes or a literature review you want the section built from count as your own material (they appear as the source *request*), so
+   long messages are fine (up to 30,000 characters; the chat tells you if one is cut). The request itself is read from the first or the last lines of a long message: a phrase like "now move on to methods" in the
+   middle of pasted material does not change which section is written. The code output, tables, logs and figures of your analysis, the notes and reports in the folders you chose for the paper, the parts of your library that match the paper's topic (when you
    ask for them), the few pages of your writing book about that part of a paper, and the text just before and after the place. The plan lists them before anything is sent.
 3. **What the model may say.** Only what those sources state. Every number must be in them (the same check as for an edit); a figure or table of your paper can be mentioned only through a tag that the app turns into
    its `\ref{...}`; a source of your library can be cited only through its tag, and only if your bibliography has it; no LaTeX, headings or lists; no dashes. When something needed is missing, the model leaves it out and asks.

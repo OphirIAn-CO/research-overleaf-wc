@@ -62,10 +62,9 @@ class Drafting(ReviseBase):
         self.assertEqual(before["anchor"]["after_line"], next(i for i, ln in enumerate(lines, 1) if ln.startswith("\\begin{table}")) - 1)
         self.assertEqual(self.locate("draft a new paragraph")["status"], "ask")
         self.assertEqual(self.locate("add a paragraph on the results after Figure 7")["status"], "ask")
-        miss = self.locate("write the limitations")
-        self.assertEqual(miss["status"], "missing")
-        self.assertIn("no limitations section", miss["why"])
-        self.assertIn("Results", miss["sections"])
+        new = self.locate("write the limitations")                  # the paper has no limitations section: it is made, with its heading, where it belongs
+        self.assertEqual((new["status"], new["anchor"]["heading"]), ("ready", "\\section{Limitations}"))
+        self.assertTrue(new["anchor"]["mode"].startswith("as a new limitations section after the "), new["anchor"]["mode"])
 
     def test_a_section_that_already_has_text_is_added_to_not_replaced(self):
         long = "\n".join(["Yield rose with moisture in every region of the study area and in every season we measured it. " * 3] * 2)
@@ -295,11 +294,13 @@ class ThroughTheChat(ChatBase):
         self.assertEqual(self.wait_job(run["job"])["status"], "done")
         self.assertEqual(self.last("result")["data"]["status"], "proposed")
 
-    def test_a_missing_section_or_place_is_explained_and_nothing_is_sent(self):
+    def test_a_missing_section_is_made_and_a_missing_place_is_asked_about_and_nothing_is_sent(self):
         r = self.send("write the limitations")
-        self.assertEqual([m["kind"] for m in r["messages"]], ["text", "text"])
-        self.assertIn("no limitations section", r["messages"][1]["text"])
-        self.assertIsNone(r.get("job"))
+        self.assertEqual([m["kind"] for m in r["messages"]], ["text", "draft_plan"])
+        self.assertIn("as a new limitations section after the ", r["messages"][1]["data"]["where"])
+        self.assertIn("\\section{Limitations}", r["messages"][1]["data"]["notes"][0])
+        self.wait_job(r["job"])
+        del self.oa.requests[:]
         r = self.send("draft a new paragraph")
         self.assertIn("Which part of the paper", r["messages"][1]["text"])
         self.assertEqual(self.oa.requests, [])

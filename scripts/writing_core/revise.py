@@ -585,7 +585,7 @@ def selected_views(proj, pid, accept="all"):
         ids = {h["id"] for h in u["hunks"] if h["uid"] in chosen}
         masked = latex_mask.assemble(u["segments"], ids)
         out.append({"unit_id": u["unit_id"], "section": u["section_path"], "lines": [u["line_start"], u["line_end"]], "masked": masked,
-                    "latex": latex_mask.unmask(masked, u["mapping"])})
+                    "latex": (u["heading"] + "\n\n" if u.get("heading") else "") + latex_mask.unmask(masked, u["mapping"])})
     return out
 
 
@@ -786,6 +786,8 @@ def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source=
         lines, crlf = _read_lines(path)
         for u, new_text, ids in sorted(items, key=lambda x: -x[0]["line_start"]):
             new_lines = new_text.split("\n")
+            if u.get("heading"):                                                 # a section the paper did not have: its heading goes in with the text
+                new_lines = [u["heading"], ""] + new_lines
             if u.get("insert"):                                                  # new text gets a blank line between it and what it sits next to
                 new_lines = ([""] if u["anchor"].get("before") else []) + new_lines + ([""] if u["anchor"].get("after") else [])
             lines[u["line_start"] - 1:u["line_end"]] = new_lines

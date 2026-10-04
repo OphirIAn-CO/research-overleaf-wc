@@ -799,6 +799,7 @@
         const changes = h('div', { class: 'unit-changes' });
         const box = h('section', { class: 'unit' }, why, changes);
         if (u.approach) why.append(h('p', { class: 'approach', text: u.approach }));
+        if (u.heading) why.append(notice('ok', h('strong', { text: 'A new section is added: ' }), h('code', { text: u.heading }), ' goes above this text, ' + ((u.anchor && u.anchor.mode) || '').replace(/^as a new \w+ section /, '') + '. Your paper has no such section yet.'));
         const back = (u.restored || []).filter((x) => !x.own_line);
         if (back.length) why.append(notice('warn', `OpenAI left out ${plural(back.length, 'citation or formula', 'citations or formulas')} (${back.map((x) => x.latex).join(', ')}). I put ${back.length === 1 ? 'it' : 'them'} back where ${back.length === 1 ? 'it' : 'they'} stood; check ${back.length === 1 ? 'it still sits' : 'they still sit'} next to the claim ${back.length === 1 ? 'it supports' : 'they support'}.`));
         (u.questions || []).forEach((q, qi) => {

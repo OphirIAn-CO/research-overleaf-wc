@@ -1201,7 +1201,8 @@ def api_chat_issue(r):
 
 def api_chat_send(r):
     n, p, cid = _chat_ctx(r)
-    text = str(r.body.get("text", "")).strip()[:4000]
+    raw = str(r.body.get("text", "")).strip()
+    text, cut = raw[:chat.MAX_TEXT], len(raw) > chat.MAX_TEXT
     ticked = [str(i) for i in (r.body.get("chunk_ids") or [])][:200] or None
     if not text and not ticked:
         raise ApiError(400, "say what you want")
@@ -1219,6 +1220,9 @@ def api_chat_send(r):
     if not ((facts or online or find_refs) and PID_RE.match(redraft)):
         redraft = ""
     out = [chat.append(p, cid, "user", "text", text, **({"chunk_ids": ticked} if ticked else {}), **({"issue": issue} if issue else {}), **({"facts": facts} if facts else {}))]
+    if cut:                                                  # never silently: a long outline pasted into the message is read up to a limit
+        out.append(chat.append(p, cid, "assistant", "text", f"Your message is longer than {chat.MAX_TEXT:,} characters, so I read only the first {chat.MAX_TEXT:,}. "
+                                                              "For a longer text, put it in a file (Add a file) or in your literature library, and I can draw on all of it."))
     kind = "refsearch" if find_refs else "draft" if redraft else ("refsearch" if chat.is_refs_request(text) else "edit") if ticked else chat.intent(text)
     job = None
     if kind == "help":

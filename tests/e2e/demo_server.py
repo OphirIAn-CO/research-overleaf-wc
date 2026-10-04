@@ -114,6 +114,10 @@ def main():
         user = openai_client.user_text(body)
         if (((body.get("text") or {}).get("format")) or {}).get("name") == "queries":      # the search words for finding references
             return {"queries": ["armed conflict attacks on oil pipelines Colombia", "violence and the security of energy infrastructure"]}
+        if (((body.get("text") or {}).get("format")) or {}).get("name") == "draft" and "literature review" in user:      # new text from an outline the author pasted in the request
+            return {"approach": "The introduction follows your outline: why risk perception is not the same for everyone, and why models that average over people can miss it.",
+                    "draft_text": "Risk perception is not homogeneous across people, hazards or countries.\n\nModels based only on aggregate relationships may obscure this heterogeneity.",
+                    "basis": [{"statement": "Risk perception is not homogeneous", "source": "request"}, {"statement": "Models based only on aggregate", "source": "request"}], "questions": []}
         if (((body.get("text") or {}).get("format")) or {}).get("name") == "draft":     # new text from the author's analysis, resting on the sources it was given
             m = re.search(r"\[\[(LX\d+)\]\] = the number of Table 1", user)
             return {"approach": "The first paragraph compares the models by their error; the second says how training went. Both rest on your results files.",
