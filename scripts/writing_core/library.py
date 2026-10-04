@@ -931,8 +931,8 @@ REQUIRES_CITATIONS = re.compile(r"\\cite\b|\b(?:in[ -]?text\s+)?cit(?:e|ation|at
 
 
 def requires_citations(instruction):
-    """True only when the author explicitly requires citation commands in the manuscript."""
-    return bool(REQUIRES_CITATIONS.search(instruction or ""))
+    """True only when the author explicitly requires citation commands in the manuscript. A \\cite inside a paragraph pasted into the message is part of that paragraph, not a demand."""
+    return bool(REQUIRES_CITATIONS.search(subj_mod.request_part(instruction)))
 
 
 _CITE_USED = re.compile(r"\\(cite[a-z]*|parencite|textcite|autocite)\*?(?:\s*\[[^\]]*\]){0,2}\s*\{")

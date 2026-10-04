@@ -182,6 +182,30 @@ def trim_to(text, budget):
     return "\n\n".join(x for x in out if x)
 
 
+# ------------------------------------------------------------------------------------------------ the request inside a message that carries pasted text
+
+# LaTeX that only manuscript text has: a citation, a reference, a label, a formula, an emphasis
+LATEX_MARK = re.compile(r"\\(?:cite[a-z]*|ref|eqref|autoref|cref|label|textit|textbf|emph|footnote|begin|end|section|subsection|includegraphics|caption)\b|(?<!\\)\$[^$\n]+\$|~\\")
+PASTED_MIN_WORDS = 20
+
+
+def request_part(text):
+    """The request in a message that may carry a pasted piece of the manuscript. A paragraph of 20 words or more with LaTeX in it (a \\citep, a \\ref, a formula) is the author's pasted
+    text, not the request: the verbs in it ("we extracted", "to create routing alternatives") must not be read as "write new text", nor its \\cite as a demand for citations. When the
+    message is nothing but such text, all of it is returned."""
+    t = text or ""
+    blocks = [b for b in re.split(r"\n\s*\n", t) if b.strip()]
+    if len(blocks) < 2:
+        blocks = [b for b in t.splitlines() if b.strip()]               # no blank line between the request and the paragraph
+        glue = "\n"
+    else:
+        glue = "\n\n"
+    if len(blocks) < 2:
+        return t
+    keep = [b for b in blocks if not (len(b.split()) >= PASTED_MIN_WORDS and LATEX_MARK.search(b))]
+    return glue.join(keep) if keep and len(keep) < len(blocks) else t
+
+
 # ------------------------------------------------------------------------------------------------ the subject
 
 def _flatten(text):

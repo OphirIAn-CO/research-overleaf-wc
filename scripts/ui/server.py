@@ -1229,7 +1229,8 @@ def api_chat_send(r):
     # A selection normally means "revise these lines", but it cannot erase an
     # explicit request to write new prose.  Drafting then inserts after the
     # selected passage rather than replacing it.
-    inferred = chat.intent(text)
+    asked = chat.strip_pasted(n, p, text) if not ticked else text      # what is asked, without the paragraphs of the paper that the message carries
+    inferred = chat.intent(asked)
     kind = "refsearch" if find_refs else "draft" if redraft else (inferred if inferred in ("draft", "refsearch") else "edit") if ticked else inferred
     job = None
     if kind == "help":
@@ -1256,7 +1257,7 @@ def api_chat_send(r):
                 where = old_prop.get("draft") or {}
                 loc = {"status": "ready", "anchor": where["anchor"], "part": where.get("part", ""), "where": "the same place as before", "notes": [], "label": taxonomy.label(where.get("part", "")).capitalize()}
             else:
-                loc = draft.locate(n, p, text, chunk_ids=ticked)
+                loc = draft.locate(n, p, asked, chunk_ids=ticked)
             if loc["status"] != "ready":
                 tail = (" Sections I can see: " + ", ".join(loc["sections"]) + ".") if loc.get("sections") else ""
                 out.append(chat.append(p, cid, "assistant", "text", loc["why"] + tail))

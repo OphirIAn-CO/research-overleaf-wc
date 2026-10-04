@@ -15,7 +15,7 @@ import threading
 import time
 from pathlib import Path
 
-from . import chunk_tex, config, paper_index, retrieve, revise, store, taxonomy
+from . import chunk_tex, config, paper_index, retrieve, revise, store, subject, taxonomy
 
 DIRNAME = "chats"
 MAX_MESSAGES = 300
@@ -272,7 +272,7 @@ _DRAFT_VERB = re.compile(r"\b(?:write|draft|compose|generate|prepare|produce|cre
 def ask_of(text, n=ASK_WORDS):
     """What is being asked, inside a long message. A message that carries pasted material (an outline, notes, a literature review) says what to do in its first lines or in its last ones,
     never in the middle: only those are read to tell what kind of request it is and which part of the paper it is about. -> [the whole text] when it is short, else [start, end]"""
-    t = text or ""
+    t = subject.request_part(text)                             # a pasted paragraph of the manuscript is material, not the request
     if len(t.split()) <= 2 * n:
         return [t]
     lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
@@ -357,15 +357,34 @@ _REFS_NOISE = re.compile(rf"\b(?:please|can you|could you|would you|i|we|need|wa
                          rf"retrieve|propose|list|give|show|bring|add|cite|{_REF_NOUN})\b", re.I)
 
 
+# "add the citation finding online ...", "cite it with sources from the internet": a request for citations that names the internet as where to look
+_REFS_ONLINE = re.compile(r"\b(?:cit(?:e|es|ing|ation|ations)|references?|sources?)\b.{0,60}\b(?:online|on the (?:web|internet)|from the (?:web|internet)|on google|google scholar)\b|"
+                          r"\b(?:online|on the (?:web|internet)|from the (?:web|internet))\b.{0,40}\b(?:cit(?:e|es|ing|ation|ations)|references?|sources?)\b", re.I | re.S)
+
+
 def is_refs_request(text):
-    t = text or ""
-    return bool(_REFS_ASK.search(t)) and not (set(re.findall(r"[a-z]+", t.lower())) & _REFS_EDIT) and not is_draft_request(t)
+    t = subject.request_part(text)                       # the words of a pasted paragraph are not a request
+    return bool(_REFS_ASK.search(t) or _REFS_ONLINE.search(t)) and not (set(re.findall(r"[a-z]+", t.lower())) & _REFS_EDIT) and not is_draft_request(t)
 
 
 def refs_topic(text):
     """'find me some references about how violence affects pipelines in Colombia' -> 'how violence affects pipelines in Colombia'"""
-    t = _REFS_NOISE.sub(" ", text or "")
+    t = _REFS_NOISE.sub(" ", subject.request_part(text))
     return re.sub(r"^(?:on|in|of)\s+", "", re.sub(r"\s+", " ", re.sub(r"[?!.:;,]+", " ", t)).strip())
+
+
+def strip_pasted(name, proj, text):
+    """The message with every paragraph of the manuscript in it replaced by "[this paragraph]", so that what is asked can be told from the paper's own sentences ("to create routing
+    alternatives" is a verb of the paper, not a request to write). The message itself when it has no such paragraph or the paper cannot be read."""
+    if len(text.split()) < 40 or "\n" not in text:
+        return text
+    try:
+        paper_index.refresh(name, proj, trigger="pass_start", source="web")
+        tex = [c for c in paper_index.list_chunks(name, proj)["chunks"] if c["kind"] == "tex"]
+        hits, rest = pasted_paragraphs(proj, tex, text)
+    except (ValueError, OSError, KeyError, FileNotFoundError):
+        return text
+    return rest if hits else text
 
 
 def intent(text):
@@ -806,13 +825,14 @@ def refs_context(name, proj, text, chunk_ids=None, last_ids=None):
     The subject the author wrote, and, when the request points at a place in the paper (or the author ticked some text), that text and where it is, so the references can later be
     used there."""
     topic = refs_topic(text)
-    if not chunk_ids and not refs_place(text, topic):
+    pasted = len(text.split()) > 40 and "\n" in text                        # a paragraph of the manuscript may be in the message: the references are for it
+    if not chunk_ids and not pasted and not refs_place(text, topic):
         return {"topic": topic, "passage": "", "chunk_ids": [], "where": ""}
     try:
         u = understand(name, proj, text, chunk_ids=chunk_ids, last_ids=last_ids)
     except (ValueError, FileNotFoundError):
         u = {"status": "empty"}
-    if u["status"] != "ready":
+    if u["status"] != "ready" or (pasted and not chunk_ids and not refs_place(text, topic) and u.get("title") != "the paragraph you pasted"):      # a long message is not a place unless the paragraph in it is in the paper
         return {"topic": topic, "passage": "", "chunk_ids": [], "where": ""}
     return {"topic": topic, "passage": passage_text(name, proj, u["chunk_ids"]), "chunk_ids": u["chunk_ids"], "where": u["title"]}
 
