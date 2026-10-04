@@ -116,12 +116,18 @@ mention. If the text is not found (you changed it, or it came from somewhere els
 
 ### Answering the model's questions and changing a suggestion
 
- When OpenAI asks a question ("What specific criteria were used?"), the question has a box under it for your reply, and
-the suggestion has an **Answer and revise** button (**Discuss and revise** when there was no question). It opens a small panel with the request as it was understood (for a
-reviewer's comment: the comment itself, which you can reword) and a box for anything to add or change ("keep it to two sentences"). **Make a new suggestion** asks OpenAI again for
-the same place with your replies, which it uses as given: it adds nothing beyond them, and the numbers and names in them are not treated as invented (everything else is checked as
-before). The new suggestion replaces the old one, which can then no longer be saved by mistake, and the reviewer's comment it belongs to follows the new one in the panel.
-It costs about as much as the first request. If the new try fails or finds nothing to change, the first suggestion stays open.
+ When OpenAI asks questions ("What specific criteria were used?", "Which sources support this?"), **answer all of them first**: each question has a box for your reply (leave it empty to skip it). Nothing is sent
+while you answer; one button, **Send my responses and re-edit** (under the questions and in the row of buttons), sends everything together and asks OpenAI again for the same place. It uses your replies as
+given: it adds nothing beyond them, and the numbers and names in them are not treated as invented (everything else is checked as before). A line next to the button counts the questions you have answered.
+
+- **If you do not have the references a question asks for,** tick **I do not have the references: look for some on the internet for this question**. It is a tick, not a button: nothing is searched when you tick it.
+  When you press **Send my responses and re-edit**, the references are looked for first (the words come from the ticked questions, your answers and the text), you choose which to add, and **Add them and write the
+  suggestion again with them** then makes the new suggestion with every answer and the references you chose.
+- **To change what was asked, or to add something not covered by a question,** press **Add instructions or change the request** (**Discuss and revise** when there was no question). It opens a small panel with the request
+  as it was understood (for a reviewer's comment: the comment itself, which you can reword), a box for anything to add or change ("keep it to two sentences") and a tick to look for references first. **Send and make a new
+  suggestion** sends everything together, as above.
+- The new suggestion replaces the old one only when it is ready, and the old one can then no longer be saved by mistake; the reviewer's comment it belongs to follows the new one in the panel. It costs about as much as the first
+  request. If the new try fails or finds nothing to change, the first suggestion stays open.
 
 ### Going through a peer review
 
@@ -173,9 +179,10 @@ indexes, OpenAlex and Crossref, as a second source. Only a few search words leav
 bibliography, its `\cite`.
 
 - **Nothing is added by itself.** Tick the papers you want and press **Add the ticked to my bibliography**: they go into your `.bib`, your Mendeley group and Overleaf like a pasted DOI, and the card gives the `\cite` to paste.
-- **From a question in a suggestion.** When the model asks which citations would justify a statement (or the reviewer comment you are answering asks for support), the question has a **Find references for this**
-  button, and the suggestion has a general **Find references** button. The search words are chosen from the comment, the question, your answer to it and the text itself. Tick the papers and press
-  **Add them and write the suggestion again with them**: the suggestion is written again with their abstracts, and cites them where its sentences are supported. The first suggestion is marked as replaced.
+- **From a question in a suggestion.** When the model asks which citations would justify a statement (or the reviewer comment you are answering asks for support), that question has a tick, **I do not have the
+  references: look for some on the internet for this question**. Answer the other questions, then press **Send my responses and re-edit**: the search runs first, with the ticked questions, all your answers and the text
+  as its subject. Tick the papers and press **Add them and write the suggestion again with them**: the suggestion is written again with your answers and their abstracts, and cites them where its sentences are
+  supported. The first suggestion is marked as replaced.
 - **What the model knows about a paper found online is its abstract.** The app never has the paper itself. The suggestion says so next to the citation ("cited from its abstract only: read the paper"), the model is told to say
   no more than the abstract says, and a citation is only ever one of those you added; an invented one is refused like any other.
 - **Later requests can cite them too.** Once added, a request that asks for sources or citations ("support the sampling statement with a source about armed groups attacking pipelines, and cite it") is offered the
@@ -231,8 +238,8 @@ Asking to *write* something (not to improve what is there) is understood as a re
    "plays a crucial role") or starts several sentences with "Moreover" or "Furthermore", or when it is well over the length asked for.
 4. **What you get.** A suggestion with one change per paragraph (**Now: nothing here yet**, **Suggested**: the paragraph), so you can keep some and leave the rest. Each paragraph says which file and rows or pages it rests on,
    and **What each statement rests on** lists every statement with its source. Numbers that are new to the paper are pointed out so you can check them against the source.
-5. **Questions.** If the model needed something the sources do not hold ("how many farms were held out?"), the question has a box for your reply; **Answer and revise** writes it again for the same place with your
-   answer, which it may use as given. The new suggestion replaces the old.
+5. **Questions.** If the model needed something the sources do not hold ("how many farms were held out?"), the question has a box for your reply; **Send my responses and re-edit** writes it again for the same place with your
+   answers, which it may use as given. The new suggestion replaces the old.
 6. **Saving** puts the text between the two lines it was written for, with a blank line each side, exactly like any other suggestion (**Save in my files**, **Save and send to Overleaf**, or polish it in QuillBot first).
    If either of those two lines changed since the draft was written (for example after you got the latest from Overleaf), nothing is written and you are asked to write it again.
 

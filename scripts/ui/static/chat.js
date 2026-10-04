@@ -881,13 +881,31 @@
         return parts.join('\n\n');
       };
       const CITE_Q = /\b(citations?|cite|references?|sources?|literature|evidence|stud(?:y|ies)|publications?)\b/i;
-      // look for references on the internet for this place, using the question, what the author answered and the text itself
-      const findRefs = (label, q) => guarded(h('button', { type: 'button', class: 'small', text: label,
-        title: 'Searches the internet for papers about this, from this computer. You choose which ones to add to your bibliography; nothing is added by itself.' }), async () => {
+      // Everything the author wants to tell the model goes in one go: the answers to ALL its questions, what to add, and (ticked) which questions are to be answered by looking for references on the
+      // internet. Nothing is asked of OpenAI or of the internet until the author presses "Send my responses and re-edit".
+      let wholeFind = null;                                 // "look for references online for the whole suggestion", in the panel
+      const statusEls = [];
+      const asking = () => answers.filter((a) => a.find && a.find.checked).map((a) => a.q);
+      const updateStatus = () => {
+        const done = answers.filter((a) => a.box.value.trim()).length, look = asking().length + (wholeFind && wholeFind.checked ? 1 : 0);
+        const txt = `${done} of ${answers.length} answered` + (look ? ` · references will be looked for on the internet first (${look})` : '') + (done < answers.length - asking().length ? ' · an empty answer is skipped' : '');
+        statusEls.forEach((e) => { e.textContent = txt; });
+      };
+      const submitAll = async (request) => {
         if (st.busy) throw new Error('A request is still running. Wait for it to finish, then press the button again.');
-        await send(q ? 'Find references for this question: ' + q : 'Find references for: ' + (p.instruction || '').slice(0, 160),
-          Object.assign({ find_refs: true, chunk_ids: m.data.chunk_ids || [], facts: composeFacts(), issue: m.data.issue }, p.kind === 'draft' ? { redraft: p.id } : { revises: p.id }));
-      });
+        const facts = composeFacts(), qs = asking(), whole = !!(wholeFind && wholeFind.checked);
+        if (qs.length || whole) {                           // references first (the author chooses which to add), with every answer along; the re-edit follows from that card
+          await send(qs.length ? 'Find references for these questions: ' + qs.join(' ') : 'Find references for: ' + (p.instruction || '').slice(0, 160),
+            Object.assign({ find_refs: true, chunk_ids: m.data.chunk_ids || [], facts, issue: m.data.issue, ask: qs.length ? qs : undefined }, p.kind === 'draft' ? { redraft: p.id } : { revises: p.id }));
+          return;
+        }
+        const req = (request || p.instruction || '').trim();
+        if (!req) throw new Error('Say what the suggestion should do.');
+        if (!facts && req === (p.instruction || '').trim()) throw new Error('Answer a question, or write what to add or change, first.');
+        await send(req, p.kind === 'draft' ? { redraft: p.id, facts } : { chunk_ids: m.data.chunk_ids, facts, revises: p.id, issue: m.data.issue });
+      };
+      const sendAllButton = (cls) => guarded(h('button', { type: 'button', class: cls || 'primary', text: isDraft ? 'Send my responses and draft again' : 'Send my responses and re-edit',
+        title: 'Sends all your answers together, and asks OpenAI again for this place. If you ticked "look for references", the references are searched first and you choose which to add; this suggestion is replaced only when the new one is ready.' }), () => submitAll());
       p.units.forEach((u) => {
         if (u.status === 'failed') { holder.append(notice('bad', `${u.section_path}: ${u.error_plain || u.error || 'failed'}`)); return; }
         // on a wide screen the explanation sits beside the changes instead of above them (see .unit in the stylesheet)
@@ -901,14 +919,25 @@
         (u.questions || []).forEach((q, qi) => {
           const nq = notice('warn', h('strong', { text: 'A question for you: ' }), q);
           if (!locked) {
-            const box = h('textarea', { rows: '2', class: 'answer', 'aria-label': 'Your answer to: ' + q, placeholder: 'Your answer (leave it empty to skip this question). Then press "Answer and revise" below.' });
+            const box = h('textarea', { rows: '2', class: 'answer', 'aria-label': 'Your answer to: ' + q, placeholder: 'Your answer (leave it empty to skip this question). Answer all the questions, then press "Send my responses and re-edit".' });
             drafts.bind(box, `answer:${paper}:${p.id}:${u.unit_id}:${qi}`);
-            answers.push({ q, box });
-            nq.append(box);
-            if (CITE_Q.test(q)) nq.append(h('div', { class: 'row' }, findRefs('Find references for this', q)));
+            const entry = { q, box, find: null };
+            if (CITE_Q.test(q)) {
+              entry.find = h('input', { type: 'checkbox', id: `find-${p.id}-${u.unit_id}-${qi}` });
+              nq.append(box, h('label', { class: 'use-box small', for: entry.find.id }, entry.find, ' I do not have the references: look for some on the internet for this question (you choose which to add)'));
+            } else nq.append(box);
+            answers.push(entry);
+            box.addEventListener('input', updateStatus);
+            if (entry.find) entry.find.addEventListener('change', updateStatus);
           }
           why.append(nq);
         });
+        if (!locked && (u.questions || []).length) {
+          const st1 = h('span', { class: 'small muted', role: 'status', 'aria-live': 'polite' });
+          statusEls.push(st1);
+          why.append(h('div', { class: 'row' }, sendAllButton(), st1));
+          updateStatus();
+        }
         const bad = (u.validators || []).filter((v) => !v.ok);
         if (bad.length) why.append(notice('warn', 'Heads up: ', bad.map((v) => v.detail || v.name).join('; ')));
         if ((u.added_cites || []).length) {
@@ -985,26 +1014,22 @@
         drafts.bind(more, `more:${paper}:${p.id}`);
         moreBox = more;
         const compose = composeFacts;
-        const go = guarded(h('button', { type: 'button', class: 'primary', text: 'Make a new suggestion' }), async () => {
-          const facts = compose();
-          const request = req.value.trim();
-          if (!request) throw new Error('Say what the suggestion should do.');
-          if (!facts && request === (p.instruction || '').trim()) throw new Error('Answer a question, write what to add or change, or change the request first.');
-          if (st.busy) throw new Error('A request is still running. Wait for it to finish, then press the button again.');
-          await send(request, p.kind === 'draft' ? { redraft: p.id, facts } : { chunk_ids: m.data.chunk_ids, facts, revises: p.id, issue: m.data.issue });
-        });
+        wholeFind = h('input', { type: 'checkbox', id: `find-all-${p.id}` });
+        wholeFind.addEventListener('change', updateStatus);
+        const go = guarded(h('button', { type: 'button', class: 'primary', text: 'Send and make a new suggestion' }), async () => { await submitAll(req.value); });
         discuss.append(h('p', { class: 'small secondary', text: answers.length ? 'Your answers to the questions above go with it. Everything you write here is used as given: I add nothing beyond it, and the numbers and names in it are allowed in the new text.' : 'Everything you write here is used as given: I add nothing beyond it, and the numbers and names in it are allowed in the new text.' }),
           h('label', { class: 'small secondary', text: isComment ? 'The reviewer\'s comment (change it if you read it differently)' : 'What I was asked to do (change it if you want it understood differently)' }), req,
           h('label', { class: 'small secondary', text: 'Anything to add or change?' }), more,
+          h('label', { class: 'use-box small', for: wholeFind.id }, wholeFind, ' I do not have the references: look for some on the internet first (you choose which to add)'),
           h('div', { class: 'row' }, go, h('button', { type: 'button', class: 'ghost', text: 'Cancel', onclick: () => { discuss.hidden = true; } }),
             h('span', { class: 'small muted', text: 'This asks OpenAI again for this place and costs about as much as the first time.' })));
       };
-      const discussBtn = h('button', { type: 'button', class: answers.length ? 'primary' : '', text: answers.length ? (isDraft ? 'Answer and draft again' : 'Answer and revise') : (isDraft ? 'Discuss and draft again' : 'Discuss and revise'),
-        title: isDraft ? 'Answer the questions or refine what to add. You get a new insertion suggestion for the same place, and this one is replaced.' : 'Answer the questions, change what was asked, or say what to add. You get a new suggestion for the same place that replaces this one.', onclick: openDiscuss });
-      const refsBtn = findRefs('Find references', '');
+      const discussBtn = h('button', { type: 'button', text: answers.length ? 'Add instructions or change the request' : (isDraft ? 'Discuss and draft again' : 'Discuss and revise'),
+        title: isDraft ? 'Refine what to add, add instructions, or tick that references are looked for first. You get a new insertion suggestion for the same place, and this one is replaced.' : 'Change what was asked, say what to add, or tick that references are looked for first. You get a new suggestion for the same place that replaces this one.', onclick: openDiscuss });
+      const sendAllBtn = answers.length ? sendAllButton() : null;
       if (!nHunks) {
         if (p.status === 'proposed' || p.status === 'no_changes') {
-          holder.append(h('div', { class: 'row actions' }, discussBtn, refsBtn), discuss);
+          holder.append(h('div', { class: 'row actions' }, sendAllBtn, discussBtn), discuss);
           if (drafts.has(`req:${paper}:${p.id}`) || drafts.has(`more:${paper}:${p.id}`)) openDiscuss();          // what was being written there is still there: show it
         }
         return;
@@ -1029,7 +1054,7 @@
           await doApprove(notices, p, { accept: all, push: true, unclean_ok: unclean }, redraw);
         }),
         h('button', { type: 'button', text: 'Polish in QuillBot or by hand', title: 'Opens a panel above the message box: take the text to QuillBot, bring the result back, check it and save', onclick: () => openBanner(p, 1) }),
-        discussBtn, refsBtn,
+        sendAllBtn, discussBtn,
         guarded(h('button', { type: 'button', class: 'ghost', text: 'Not now' }), async () => { await api.post('/api/proposal/record', { paper, id: p.id, accepted: [], rejected: 'all', chat: st.cid }); await redraw(); await reload(); }),
         h('span', { class: 'grow' }), count);
       holder.append(copies, actions, discuss);

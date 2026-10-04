@@ -1247,6 +1247,7 @@ def api_chat_send(r):
     revises = str(r.body.get("revises") or "")
     find_refs = bool(r.body.get("find_refs"))
     words = str(r.body.get("words") or "").strip()[:200]
+    ask_qs = [str(q).strip()[:500] for q in (r.body.get("ask") or []) if isinstance(q, str) and q.strip()][:6]          # the questions the author ticked to have references looked up for
     online = [d for d in (r.body.get("online") or []) if isinstance(d, str)][:6]
     if not online and not find_refs and chat.mentions_selected_references(text) and chat.intent(text) in ("edit", "draft"):
         online = _recent_picks(p, cid)                                  # "...based on the ones selected": the references picked earlier in this chat
@@ -1265,7 +1266,7 @@ def api_chat_send(r):
     asked = chat.strip_pasted(n, p, text) if not ticked else text      # what is asked, without the paragraphs of the paper that the message carries
     inferred = chat.intent(asked)
     kind = "refsearch" if find_refs else "draft" if redraft else (inferred if inferred in ("draft", "refsearch", "layout") else "edit") if ticked else inferred
-    req = {"text": text, "asked": asked, "ticked": ticked, "facts": facts, "online": online, "issue": issue, "redraft": redraft, "revises": revises, "find_refs": find_refs, "words": words}
+    req = {"text": text, "asked": asked, "ticked": ticked, "facts": facts, "online": online, "issue": issue, "redraft": redraft, "revises": revises, "find_refs": find_refs, "words": words, "ask": ask_qs if find_refs else []}
     uses = None
     flag = str(r.body.get("flag") or "")
     if flag in intent.ALL:                                                # the author said what kind of request this is: no reading needed
@@ -1426,7 +1427,7 @@ def _dispatch(app, n, p, cid, kind, req, out, user_mid, uses=None, explicit=Fals
             out.append(chat.append(p, cid, "assistant", "text", "What should I look for? For example: find references on how armed conflict affects energy infrastructure in Colombia."))
         else:
             prior = [m for m in chat.get_thread(p, cid)["messages"] if m["id"] != user_mid]
-            job = _start_refsearch(app, n, p, cid, text, ticked, facts, revises or redraft, issue, words, chat.last_target({"messages": prior}))
+            job = _start_refsearch(app, n, p, cid, text, ticked, facts, revises or redraft, issue, words, chat.last_target({"messages": prior}), ask=req.get("ask") or None)
     elif kind == "draft":
         if config.openai_status()[0] != "ok":
             out.append(chat.append(p, cid, "assistant", "error", "ChatGPT is not set up yet. Open Settings and add your OpenAI key and model, then ask again."))
@@ -1569,7 +1570,7 @@ CITE_REQUEST = "Support the claims of this text with citations from the sources 
 _CITE_WORDS = re.compile(r"\b(?:citation|citations|cite|reference|references|source|sources|literature|evidence|studies|study|publication|publications|peer-reviewed)\b", re.I)
 
 
-def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words, last_ids, force_draft=False, auto_cite=False):
+def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words, last_ids, force_draft=False, auto_cite=False, ask=None):
     """Look for references on the internet in the background; the candidates land in the chat as a card. The search words are chosen from what the author wrote, the passage it is
     about and the author's answers; nothing but those few words leaves this computer, and nothing is added to the bibliography until the author ticks it."""
     def work(progress, set_steps):
@@ -1592,6 +1593,8 @@ def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words,
                     about = draft.subject_of(n, p, instruction or text, o_text, facts)
                 except (OSError, ValueError, KeyError, paper_index.IsolationError):
                     about = ""
+            if ask:                                       # the questions the author ticked, and no others, say what the references are for
+                questions = list(ask)
             topic = words or (" ".join(scholar.focus_terms(about, max_terms=6)) if about else ctx["topic"])
             if not ctx["passage"] and not facts and not about and len(scholar.terms(topic)) < 2:        # nothing to go on: no subject, and no text it could be about
                 steps.finish("words", "nothing to search for", state="failed")

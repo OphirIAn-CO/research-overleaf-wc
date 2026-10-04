@@ -112,16 +112,16 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   const frame = await page.evaluate(() => ({ main: document.querySelector('#main').scrollTop, doc: document.scrollingElement.scrollTop, head: document.querySelector('.chat-head').getBoundingClientRect().top, strip: (document.querySelector('#panes-area .pane-strip') || document.body).getBoundingClientRect().top }));
   ok(frame.main === 0 && frame.doc === 0 && frame.head >= 0 && frame.strip >= 0, 'Show it moves the conversation only: the buttons at the top of the page stay where they are ' + JSON.stringify(frame));
   // the suggestion asks a question: answer it and ask for a new suggestion, which replaces this one
-  ok(await page.isVisible('.thread textarea.answer') && await page.isVisible('.thread .actions button:has-text("Answer and revise")'), 'a question from the model has a box for the answer and an Answer and revise button');
-  await page.click('.thread .actions button:has-text("Answer and revise")');
+  ok(await page.isVisible('.thread textarea.answer') && await page.isVisible('.thread .actions button:has-text("Send my responses and re-edit")'), 'a question from the model has a box for the answer and a Send my responses and re-edit button');
+  await page.click('.thread .actions button:has-text("Add instructions or change the request")');
   await page.waitForSelector('.discuss:not([hidden])');
   ok(/reviewer.s comment/.test(await text(page, '.discuss')) && /No uncertainty|uncertainty/.test(await page.$eval('.discuss textarea', (t) => t.value)), 'the panel shows the reviewer\'s comment so it can be changed');
-  await page.click('.discuss button:has-text("Make a new suggestion")');
+  await page.click('.discuss button:has-text("Send and make a new suggestion")');
   await page.waitForSelector('.toast:has-text("Answer a question")');
   ok(true, 'it asks for an answer or a change before it spends anything');
   await page.fill('.thread textarea.answer', 'Wells with at least 6 months of data.');
   await page.fill('.discuss textarea >> nth=1', 'Keep it to one sentence.');
-  await page.click('.discuss button:has-text("Make a new suggestion")');
+  await page.click('.discuss button:has-text("Send and make a new suggestion")');
   await page.waitForSelector('.thread .badge:has-text("replaced")', { timeout: 30000 });
   ok(/Replaced/.test(await text(page, '.thread')), 'the old suggestion says it was replaced and cannot be saved any more');
   await page.waitForSelector('.thread .msg.user .facts');

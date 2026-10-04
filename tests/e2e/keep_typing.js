@@ -64,7 +64,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) failed+
   await page.waitForSelector('textarea.answer', { timeout: 40000 });
   const answer = 'Wells with at least six months of production were kept.';
   await page.fill('textarea.answer >> nth=0', answer);
-  await page.click('button:has-text("Answer and revise")');
+  await page.click('button:has-text("Add instructions or change the request")');
   await page.waitForSelector('textarea[aria-label="Anything to add or change"]');
   const more = 'Keep it to two sentences.';
   await page.fill('textarea[aria-label="Anything to add or change"]', more);
