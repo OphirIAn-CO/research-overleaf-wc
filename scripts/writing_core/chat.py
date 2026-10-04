@@ -578,6 +578,73 @@ def _units_of(listing, ids):
     return revise.group_chunks(chosen)
 
 
+# ------------------------------------------------------------------------------------------- "for this paragraph: ..." (a paragraph pasted into the message)
+
+def _match_words(text):
+    """The words of a text for comparing a pasted paragraph with the manuscript: protected pieces (\\citep{key}, \\ref{x}), formulas and commands are left out, because they differ."""
+    t = re.sub(r"\\[A-Za-z]+\*?(?:\[[^\]]*\])*\{[^{}]*\}", " ", text or "")
+    t = re.sub(r"\$[^$]*\$", " ", t)
+    t = re.sub(r"\\[A-Za-z]+", " ", t)
+    return re.findall(r"[a-z0-9]+", t.lower())
+
+
+def _shingles(ws, k=4):
+    return {tuple(ws[i:i + k]) for i in range(len(ws) - k + 1)}
+
+
+_PASTE_PHRASE = re.compile(r"\b(?:this|these|the following|the above|the below)\s+(?:paragraph|passage|text|sentence)s?\b|\bfor this paragraph\b|\bparagraph below\b", re.I)
+PASTED_MIN = 12          # words: a shorter block cannot be told from the request itself
+PASTED_SENTENCE_MIN = 10     # a single pasted sentence
+PASTED_SENTENCE_SCORE = 0.8    # ... must be almost entirely in the paragraph
+PASTED_SCORE_WORDS = 10      # a message shorter than this pastes nothing
+PASTED_SCORE = 0.7       # how much of one must be in the other
+
+
+def pasted_paragraphs(proj, tex, text):
+    """The paragraphs of the manuscript that the author pasted into the message ("for this paragraph: ..."), or the paragraph a pasted sentence belongs to.
+    -> ([(chunk, first line, last line)] in manuscript order, at most 5; the message without the pasted pieces, so the request does not carry them twice)"""
+    words = _match_words(text)
+    if len(words) < PASTED_SCORE_WORDS:
+        return [], text
+    msg = _shingles(words)
+    pieces = []                                       # (text, shingles, how much of it must be in a paragraph): blocks between blank lines, and single sentences
+    for blk in re.split(r"\n\s*\n", text):
+        w = _match_words(blk)
+        if len(w) >= PASTED_MIN:
+            pieces.append((blk, _shingles(w), PASTED_SCORE))
+    for sent in re.split(r"(?<=[.!?:;])\s+|\n+", text):
+        w = _match_words(sent)
+        if len(w) >= PASTED_SENTENCE_MIN and sent.strip() not in {p[0].strip() for p in pieces}:
+            pieces.append((sent, _shingles(w), PASTED_SENTENCE_SCORE))
+    hits = []                                                              # (score, chunk order, first line, chunk, last line, its shingles)
+    for c in tex:
+        lines = _lines(proj, c["file"])
+        for a, b in _paragraphs(proj, c):
+            para = _match_words("\n".join(lines[a - 1:b]))
+            ps = _shingles(para)
+            if len(para) < PASTED_SENTENCE_MIN or not ps:
+                continue
+            rev = len(ps & msg) / len(ps) if len(para) >= PASTED_MIN else 0       # how much of the paragraph is in the message
+            fwd = max((len(ps & sh) / len(sh) for _, sh, need in pieces if sh and len(ps & sh) / len(sh) >= need), default=0)      # a pasted piece that is in the paragraph
+            if max(rev if rev >= PASTED_SCORE else 0, fwd):
+                hits.append((max(rev, fwd), c["ord"], a, c, b, ps))
+    hits = sorted(sorted(hits, key=lambda h: -h[0])[:5], key=lambda h: (h[1], h[2]))
+    rest = text
+    for blk, sh, need in sorted(pieces, key=lambda p: -len(p[0])):          # a piece that is (part of) a found paragraph is not repeated in the request
+        if sh and any(len(h[5] & sh) / min(len(h[5]), len(sh)) >= need for h in hits):
+            rest = rest.replace(blk, "[this paragraph]")
+    return [(h[3], h[2], h[4]) for h in hits], rest
+
+
+_SELECTED_REFS = re.compile(r"\b(?:ones|references|sources|citations|papers|articles)\b.{0,40}\b(?:selected|chosen|picked|added|found)\b|"
+                            r"\b(?:selected|chosen|picked|added|found)\b.{0,25}\b(?:references|sources|citations|ones|papers|articles)\b", re.I | re.S)
+
+
+def mentions_selected_references(text):
+    """"...based on the ones selected, in one of the previous answers": the author means the references picked earlier in this chat."""
+    return bool(_SELECTED_REFS.search(" ".join(ask_of(text))))
+
+
 def understand(name, proj, text, chunk_ids=None, last_ids=None, max_units=None):
     """-> {"status": "ready", chunk_ids, parts, title, notes, passages, units}
        | {"status": "choose", why, options, preselect, sections, ...}   (the author is asked to tick or pick)
@@ -592,12 +659,21 @@ def understand(name, proj, text, chunk_ids=None, last_ids=None, max_units=None):
     by_id = {c["id"]: c for c in tex}
     notes, parts, title, ids = [], [], "", []
 
+    request = text
+    pasted = pasted_paragraphs(proj, tex, text) if not chunk_ids else ([], text)
     if chunk_ids:  # the author ticked pieces: take them as they are
         ids = [i for i in chunk_ids if revise.split_range_id(i)[0] in by_id]
         if not ids:
             return {"status": "empty", "why": "Those pieces do not exist any more. The paper may have changed; ask again."}
         parts = sorted({by_id[revise.split_range_id(i)[0]]["part"] for i in ids if by_id[revise.split_range_id(i)[0]]["part"]})
         title = "your selection"
+    elif pasted[0]:   # the author pasted a paragraph of the paper into the message: that paragraph is what to work on, whatever part the words around it name
+        found, request = pasted
+        ids = [_rid(c, a, b) for c, a, b in found]
+        parts = sorted({c["part"] for c, a, b in found if c["part"]})
+        title = "the paragraph you pasted" if len(found) == 1 else f"the {len(found)} paragraphs you pasted"
+        where = ", ".join(f"{c['file']} line {a}" + (f" to {b}" if b != a else "") for c, a, b in found[:3])
+        notes.append(f"Found {'it' if len(found) == 1 else 'them'} in your paper ({where}). Only {'that paragraph' if len(found) == 1 else 'those paragraphs'} go to OpenAI, not the whole section.")
     else:
         tags = taxonomy.classify(text, min_ratio=retrieve.REQUEST_RATIO)
         parents = list(dict.fromkeys(t.split(".")[0] for t in tags))
@@ -641,6 +717,9 @@ def understand(name, proj, text, chunk_ids=None, last_ids=None, max_units=None):
                 notes.append(note)
         title = label.lower() + (", " + notes[0][:1].lower() + notes[0][1:].rstrip(".") if notes else "") if label else "your text"
 
+    if not chunk_ids and not pasted[0] and _PASTE_PHRASE.search(text) and any(len(_match_words(b)) >= 25 for b in re.split(r"\n\s*\n", text)):
+        notes.append("I did not find the paragraph you pasted in your paper (it may have changed since, or come from somewhere else), so I took the part of the paper your words name. "
+                     "Cancel if that is not what you meant, and paste the paragraph again exactly as it is in your paper.")
     groups = _units_of(tex, ids)
     if len(groups) > max_units:
         keep = []
@@ -651,7 +730,7 @@ def understand(name, proj, text, chunk_ids=None, last_ids=None, max_units=None):
         return _choose(f"That is {len(groups)} separate passages and one request handles at most {max_units}. I ticked the first {len(_units_of(tex, keep))}; "
                        "change the ticks if you like, and ask again for the rest.", tex, preselect=keep, in_part=ids, notes=notes, limit=max_units)
     chosen = [by_id[revise.split_range_id(i)[0]] for i in ids]
-    return {"status": "ready", "chunk_ids": ids, "parts": parts, "title": title, "notes": notes, "units": len(groups),
+    return {"status": "ready", "chunk_ids": ids, "parts": parts, "title": title, "notes": notes, "units": len(groups), "request": request,
             "passages": [_option(c) for c in chosen]}
 
 

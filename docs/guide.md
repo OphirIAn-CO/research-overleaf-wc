@@ -86,6 +86,14 @@ If you haven't touched that paper for a while, the bot asks which paper first.
 
 ## Everyday use
 
+### Saying which text you mean
+
+You can say the place in words ("the text before Figure 1 in the methods", "the first paragraph of the introduction"), tick the passages yourself, or **paste the paragraph into the message**:
+*"For this paragraph: ... there is no in-text citation here"*. The app looks for the pasted text in your paper (small differences, such as citations, formulas and line breaks, do not matter, and a single pasted sentence
+finds its paragraph) and works on exactly that paragraph. The card says "I will work on the paragraph you pasted" and where it found it; only that paragraph is sent to OpenAI, whatever section the words around it
+mention. If the text is not found (you changed it, or it came from somewhere else), the card says so and falls back to the part your words name; press *Cancel* if that is not what you meant.
+"The ones selected" or "the references I picked" in a request means the references you ticked earlier in the same chat (see *Finding references on the internet*).
+
 ### Answering the model's questions and changing a suggestion
 
  When OpenAI asks a question ("What specific criteria were used?"), the question has a box under it for your reply, and

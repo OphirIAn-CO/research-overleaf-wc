@@ -1214,6 +1214,8 @@ def api_chat_send(r):
     find_refs = bool(r.body.get("find_refs"))
     words = str(r.body.get("words") or "").strip()[:200]
     online = [d for d in (r.body.get("online") or []) if isinstance(d, str)][:6]
+    if not online and not find_refs and chat.mentions_selected_references(text) and chat.intent(text) in ("edit", "draft"):
+        online = _recent_picks(p, cid)                                  # "...based on the ones selected": the references picked earlier in this chat
     online = [c["doi"] for c in scholar.recall(p, "", force=online)] if online else []              # only references that were added to this paper's bibliography
     if not ((facts or online or find_refs) and PID_RE.match(revises)):
         revises = ""
@@ -1293,7 +1295,7 @@ def api_chat_send(r):
                                    in_part=u["in_part"], limit=u["limit"], notes=u["notes"]))
         else:
             try:
-                pl = chat.plan(n, p, chat.instruction_for(text), u["chunk_ids"], facts=facts, online=online or None)
+                pl = chat.plan(n, p, chat.instruction_for(u.get("request") or text), u["chunk_ids"], facts=facts, online=online or None)
             except (revise.ReviseError, config.ConfigError, openai_client.OpenAIError) as e:
                 out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
                 return {"messages": out}
@@ -1325,6 +1327,17 @@ def _library_answer(n, p, cid, text):
              "text": c["text"][:700] + ("..." if len(c["text"]) > 700 else ""), "in_bib": c["in_bib"], "cite_key": c["cite_key"], "can_add": c["can_add"],
              "has_entry": bool(library.get_doc(c["doc"])["bibtex"])} for c in hits]
     return chat.append(p, cid, "assistant", "library", "", topic=topic, hits=slim, command=cmd, docs=res["docs"], total=st["docs"])
+
+
+def _recent_picks(p, cid, limit=6):
+    """The DOIs of the references the author ticked and added in this chat, the latest first."""
+    out = []
+    for m in reversed(chat.get_thread(p, cid)["messages"]):
+        if m["kind"] == "refsearch":
+            for doi in (m["data"].get("added") or {}):
+                if doi not in out:
+                    out.append(doi)
+    return out[:limit]
 
 
 CITE_REQUEST = "Support the claims of this text with citations from the sources provided: cite a source only where its abstract says what the text says, and leave everything else as it is."
