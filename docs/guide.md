@@ -55,7 +55,8 @@ The chat uses the width of your window. In an answer the explanation, questions 
    not the first link, and do it right away: the code works once and expires within a minute or two. If Mendeley says `invalid_grant` ("Invalid access code"),
    run the command again and use the new link; never reuse an old code.
 
-*A coauthor on another computer.* Everyone should use **their own Overleaf Git token** (Overleaf: Account Settings, Git Integration) and sign in to Mendeley on their own computer.
+*A coauthor on another computer.* Everyone should use **their own Overleaf Git token** (Overleaf: Account Settings, Git Integration) and sign in to Mendeley on their own computer. If Overleaf's Git will not let
+them in, see [Working with a coauthor](#working-with-a-coauthor-overleaf-github-and-the-token).
 Best is that they use their own Mendeley account (you invite them to your Mendeley group) and their own Mendeley app, so that nobody shares a login or a client secret.
 If you do share an app, the `client_id` and `client_secret` in `mendeley_credentials.json` are a secret: send them privately, never through git.
 
@@ -300,6 +301,52 @@ You sign in once and it stays signed in (the sign-in is kept in `~/.config/overl
 
 QuillBot has no public API, so the paste stays yours. **Copy for QuillBot** copies the suggestion with your citations and formulas as tags
 (`[[LX001]]`) so QuillBot cannot damage them.
+
+## Working with a coauthor: Overleaf, GitHub and the token
+
+This is the long version of the short section in the [README](../README.md#working-with-a-coauthor-or-sharing-one-overleaf-account). It comes from a real case: a project shared through one Overleaf login, linked to the owner's GitHub
+repository, and a coauthor who could only get in through GitHub.
+
+**What was going on.** The coauthor's paper folder had been cloned from GitHub, because Overleaf's own Git address asked him for a password nobody could find. So the folder's address was `github.com`. The app only signs in
+to `git.overleaf.com`, so every Test and every *Send* failed, whatever token was saved. The "password" is an Overleaf Git token that did not exist until someone made it.
+
+**The symptoms and what each one means**
+
+| What you see | What it means | What to do |
+|---|---|---|
+| Test: "This paper's folder was cloned from GitHub" | The folder's address is GitHub's. Sending goes to GitHub, where an Overleaf token is useless | Save the project's web address for the paper (Settings > Overleaf project address), press **Test**, then **Clone it from Overleaf** (share a folder for new copies once: `./ui.sh folders add ~/Documents/overleaf`, then restart). Use the new copy. |
+| Test: "a password (or token) written into it" | The folder was cloned with `https://git:TOKEN@git.overleaf.com/...`; Git uses that and never looks at the token in Settings | **Remove it from the address** |
+| Git: `Password for 'https://git@git.overleaf.com'` | Normal on a computer that has never signed in. The answer is an Overleaf **Git token**, not a GitHub or Overleaf password | Make a token (Overleaf > Account settings > Git Integration), paste it (nothing shows while you paste) |
+| `remote: Enter your Git authentication token when prompted for a password` and `Authentication failed` | Overleaf refused what was sent as the password | Run the curl check below. Often the token was copied wrongly, typed instead of pasted, or `$TOKEN` was empty in that Terminal window |
+| Your computer never asks for a password | Your Keychain remembers your token | Nothing; it is not a link to your Git account |
+| The coauthor cannot link their GitHub account in Overleaf | The GitHub link belongs to the project and to whoever linked it. It is not needed for Git | Nothing to link. Use a token instead |
+
+**The token check, and how to read it.** In Terminal on the computer that has the problem:
+
+```bash
+read -s TOKEN      # paste the token, press Enter; nothing is shown
+echo "length: ${#TOKEN}"       # about 40 to 50; 0 means the variable is empty in this window
+curl -s -o /dev/null -w "%{http_code}\n" -u "git:$TOKEN" "https://git.overleaf.com/<project id>/info/refs?service=git-upload-pack"
+```
+
+200 works. 401 the token is not accepted. 403 or 404 the token is fine but its account cannot open the project (invite it under *Share* by email as Editor, and have the invitation accepted). 500 Overleaf failed
+while looking the project up: try again later, and try the token on a blank project that account owns; if that fails too, ask Overleaf support. These numbers are what the Git service usually answers, not something Overleaf documents.
+
+*Account or computer?* Run the same check with the owner's token on the second computer, and the second account's token on the owner's computer. If the owner's token gives 200 on both computers, the second computer is fine and
+the problem is the second account's token or access. If it fails on the second computer only, look at that computer's network (VPN, university network, security software; a phone hotspot is a quick test).
+
+**Cloning without the credential prompt** (when typing the password keeps going wrong): send the same login that the curl check used, and leave nothing in the folder's address:
+
+```bash
+git -c credential.helper= -c http.extraHeader="Authorization: Basic $(printf 'git:%s' "$TOKEN" | base64 | tr -d '\n')" clone https://git.overleaf.com/<project id> ~/Documents/overleaf/MyPaper
+```
+
+**Sharing one Overleaf login.** It works, and it is the simplest way to get a coauthor in. Make **one token per computer** in that login (Account settings > Git Integration), so a lost laptop means deleting one token, not changing the
+password. Each person still needs a fresh clone from Overleaf and the token saved in Settings > Overleaf on their own computer. Edits from the two of you meet in Overleaf: press **Get latest from Overleaf** before **Send to Overleaf**.
+
+**Using GitHub as the hub instead.** If Overleaf's Git will not work for one of you, the GitHub copy can carry the changes. The coauthor, a collaborator on the GitHub repository, works in the GitHub copy and pushes with their own
+GitHub login (in Terminal). The owner, whose GitHub account is the one linked in Overleaf, presses **Menu > Sync > Pull GitHub changes into Overleaf**, and **Push Overleaf changes to GitHub** to send theirs the other way.
+The app does not sign in to GitHub, so from a GitHub folder it can suggest and save text, but **Get latest from Overleaf** and **Send to Overleaf** do not work there. A coauthor in that position can still use the app for the writing help and push with Git.
 
 ## Sending, conflicts, review
 

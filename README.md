@@ -83,12 +83,40 @@ For Claude Code to find the instructions, clone this repository into `~/.claude/
 
 More in the guide: [Safety](docs/guide.md#safety), [Where things live](docs/guide.md#where-things-live).
 
+## Working with a coauthor, or sharing one Overleaf account
+
+Three different things get mixed up, and that is the usual reason a coauthor "cannot connect":
+
+| | What it is | What it decides |
+|---|---|---|
+| **The Overleaf project** | Your paper in Overleaf | Who may edit it: the owner, anyone invited under **Share**, or anyone who has the shared login |
+| **Overleaf's Git address** | `https://git.overleaf.com/<project id>`: the id is the part after `/project/` in the project's web address | **The only thing this app sends to and gets from.** Its password is an Overleaf **Git token** (starts with `olp_`) |
+| **The GitHub link** | An optional Overleaf feature (Menu > Sync) that mirrors the project to a GitHub repository, tied to the GitHub account of whoever linked it | Only the *Sync* buttons inside Overleaf. It does **not** decide who may use Overleaf's Git address, and a coauthor does not have to link a GitHub account |
+
+What to do, in order:
+
+1. **Every computer needs its own Git token.** The "password" Git asks for when you clone from Overleaf is that token: not your Overleaf password, not a GitHub password. Make it in **Overleaf > Account settings > Git Integration**, and copy it at once (Overleaf shows it only once). It must come from an Overleaf account that can open the project: the owner, an account invited under *Share* as Editor, or the login you share. With a shared login, make one token per computer, so each can be deleted on its own. Never paste a token into a chat, an email or a screenshot.
+2. **Clone from Overleaf, not from GitHub.** A folder cloned from GitHub has `github.com` as its address, so the app sends to GitHub, where an Overleaf token cannot work. **Settings > Overleaf > Test** names this case and has a **Clone it from Overleaf** button; or in Terminal: `git clone https://git@git.overleaf.com/<project id>` and paste the token at *Password*. Do not change the address of an existing GitHub folder: the two histories are unrelated. Use a fresh clone.
+3. **Do not write the token inside the address** (`https://git:TOKEN@git.overleaf.com/...`). Git then ignores the token saved in Settings. The Test finds this and has a **Remove it from the address** button.
+4. **Your own computer may never ask for a password.** That is only the macOS Keychain remembering your token; it is not a link between your Git account and the project.
+5. **Check a token without cloning** (the token is typed hidden, and the answer is a number):
+   ```bash
+   read -s TOKEN      # paste the token, press Enter; nothing is shown
+   curl -s -o /dev/null -w "%{http_code}\n" -u "git:$TOKEN" "https://git.overleaf.com/<project id>/info/refs?service=git-upload-pack"
+   ```
+   Usually: **200** the token works for this project; **401** Overleaf does not accept the token (copied wrongly, typed instead of pasted, not an Overleaf Git token, or made in another account); **403 or 404** the token is fine but that account cannot open the project (invite it under *Share* by email, as Editor); **500** Overleaf failed while looking the project up (try again later; if it repeats, ask Overleaf support). Overleaf does not document these numbers, so treat them as a guide.
+   To tell *account* from *computer*: run the same test on the second computer with the **owner's** token. A 200 there means the computer is fine and the second account is the problem; the same error there means the computer or its network is (try a phone hotspot).
+6. **If Overleaf's Git will not work for a coauthor,** GitHub can be the hub. They work from the GitHub copy and push with their own GitHub login (Terminal); the owner presses **Menu > Sync > Pull GitHub changes into Overleaf**, and **Push Overleaf changes to GitHub** to send changes the other way. The app itself signs in to Overleaf only, not to GitHub, so *Get latest* and *Send* do not work from a GitHub folder.
+
+More: [the guide](docs/guide.md#working-with-a-coauthor-overleaf-github-and-the-token).
+
 ## When something goes wrong
 
 | Problem | Fix |
 |---|---|
 | `ui.sh up` says Docker is not running | Start Docker Desktop, wait until it says it is running, try again. |
 | "This app isn't signed in to Overleaf yet" | Paste your Git token in **Settings > Overleaf** and press *Test*. |
+| The Test says the paper "was cloned from GitHub", or Git keeps asking a coauthor for a password | See [Working with a coauthor](#working-with-a-coauthor-or-sharing-one-overleaf-account). |
 | The app does not list a paper | Share the folder that holds it (`./ui.sh folders add <folder>`), then `./ui.sh down && ./ui.sh up`. |
 | Push rejected / "Overleaf has newer changes" | Press *Get the latest from Overleaf, then send again*; if the same lines changed on both sides the app shows each place and lets you choose. |
 | The key was rejected, or the model was not found | **Settings > OpenAI > Test** says which one. |
