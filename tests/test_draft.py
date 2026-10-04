@@ -103,6 +103,16 @@ class Drafting(ReviseBase):
         pl2 = draft.plan(self.name, self.proj, self.ASK, loc["anchor"], loc["part"], facts="Answer: 40 farms.")
         self.assertNotEqual(pl["payload_hash"], pl2["payload_hash"])
 
+    def test_an_author_outline_is_followed_but_is_not_a_source_or_citation(self):
+        files.save_upload(self.proj, "Prompt_Intro.md", b"# Required funnel\n\nMove from risk to risk perception.")
+        loc = self.locate()
+        pl = draft.plan(self.name, self.proj, self.ASK, loc["anchor"], loc["part"])
+        user = openai_text(draft.prepare(self.name, self.proj, self.ASK, loc["anchor"], loc["part"])["body"])
+        self.assertIn("<author_outline>", user)
+        self.assertIn("Move from risk to risk perception", user)
+        self.assertTrue(pl["outline"])
+        self.assertNotIn("Prompt_Intro.md", [s["file"] for s in pl["sources"]])
+
     def test_the_hash_must_match_before_anything_is_sent(self):
         loc = self.locate()
         r = draft.run(self.name, self.proj, self.ASK, loc["anchor"], loc["part"], confirm="deadbeef")

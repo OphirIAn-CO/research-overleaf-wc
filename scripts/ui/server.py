@@ -1592,7 +1592,7 @@ GROUP_NAMES = {"code": "Code", "notebook": "Notebooks", "table": "Tables", "resu
 
 def _file_view(f):
     ext = files.ext_of(f["file"])
-    return {"file": f["file"], "name": f["file"].rsplit("/", 1)[-1], "kind": f["kind"], "role": files.role_of(f), "group": _GROUPS.get(ext, "text"), "upload": f["kind"] == "source", "size": f["size"],
+    return {"file": f["file"], "name": f["file"].rsplit("/", 1)[-1], "kind": f["kind"], "role": files.role_of(f), "group": "instruction" if files.role_of(f) == "outline" else _GROUPS.get(ext, "text"), "upload": f["kind"] == "source", "size": f["size"],
             "parts": f["parts"], "words": int(f["tokens"] * 0.75), "note": f.get("note", ""), "reads": f.get("reads", True)}
 
 
@@ -1634,7 +1634,7 @@ def api_files_parts(r):
 
 
 def api_files_upload(r):
-    """Save one file in the paper's references folder, read it into parts, and send it to Overleaf (alone: whatever else is waiting stays where it is)."""
+    """Save evidence in references, but keep an author prompt/outline local as writing instructions."""
     n, p = paper_ref(r.body.get("paper", ""))
     name, b64 = r.body.get("name"), r.body.get("data")
     if not isinstance(name, str) or not isinstance(b64, str):
@@ -1650,7 +1650,7 @@ def api_files_upload(r):
     paper_index.refresh(n, p, trigger="upload", source="web")
     info = next((f for f in files.listing(n, p) if f["file"] == saved["rel"]), None)
     res = {"ok": True, "saved": saved, "file": _file_view(info) if info else None}
-    send = r.body.get("send")
+    send = False if saved.get("outline") else r.body.get("send")
     if send is None:
         send = config.paper_settings(p)["send_uploads"]
     if send:
@@ -1659,7 +1659,10 @@ def api_files_upload(r):
             res["push"]["pane"] = {"reloading": refresh_overleaf(r.app, n, recompile=False)}      # the new file shows in Overleaf's file list after a reload
     cid = r.body.get("chat")
     if cid:
-        bits = [f"{saved['name']} was already in the {files.UPLOAD_DIR} folder." if saved["duplicate"] else f"Added {saved['name']} to the {files.UPLOAD_DIR} folder."]
+        if saved.get("outline"):
+            bits = [f"{saved['name']} is an author outline. I will follow it when drafting, but it is not evidence, is never cited, and is not sent to Overleaf."]
+        else:
+            bits = [f"{saved['name']} was already in the {files.UPLOAD_DIR} folder." if saved["duplicate"] else f"Added {saved['name']} to the {files.UPLOAD_DIR} folder."]
         if info and info.get("parts"):
             bits.append(f"I split it into {info['parts']} part{'s' if info['parts'] != 1 else ''} (about {int(info['tokens'] * 0.75):,} words) that a request can read one at a time.")
         elif info and info.get("note"):
@@ -1669,7 +1672,7 @@ def api_files_upload(r):
             bits.append("Sent to Overleaf.")
         elif send:
             bits.append("It is saved here but not in Overleaf yet: " + (push.get("summary") or push.get("friendly") or "see the Send button."))
-        else:
+        elif not saved.get("outline"):
             bits.append("It is saved here; it goes to Overleaf with your next send.")
         try:
             chat.append(p, cid, "assistant", "note", " ".join(bits))

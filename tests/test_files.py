@@ -95,6 +95,27 @@ class Saving(FilesBase):
         self.assertTrue(files.remove_upload(self.proj, r["rel"]))
         self.assertFalse((self.root / r["rel"]).exists())
 
+    def test_a_prompt_or_outline_is_local_writing_instruction_not_evidence(self):
+        r = files.save_upload(self.proj, "Prompt_Intro.md", b"# Introduction outline\n\nUse a funnel structure.")
+        self.assertTrue(r["outline"])
+        self.assertTrue(r["rel"].startswith(".overleaf-skill/instructions/"))
+        self.assertFalse((self.root / "references" / "Prompt_Intro.md").exists())
+        found = self.by_name()
+        self.assertEqual(found[r["rel"]]["role"], "outline")
+        self.assertIsNone(files.relevant(self.name, self.proj, "use my files", mode="always"))
+        text, shown = files.outline_context(self.name, self.proj)
+        self.assertIn("Use a funnel structure", text)
+        self.assertEqual(shown[0]["file"], r["rel"])
+
+    def test_a_legacy_outline_in_references_is_not_evidence(self):
+        legacy = self.root / "references" / "Prompt_Intro.md"
+        legacy.parent.mkdir()
+        legacy.write_text("# Introduction outline\n\nUse a funnel structure.")
+        found = self.by_name()
+        self.assertEqual(found["references/Prompt_Intro.md"]["role"], "outline")
+        text, _ = files.outline_context(self.name, self.proj)
+        self.assertIn("Use a funnel structure", text)
+
 
 class Splitting(FilesBase):
     def test_the_files_around_the_paper_are_found_and_secrets_and_junk_are_not(self):

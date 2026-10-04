@@ -21,6 +21,7 @@ from pathlib import Path
 from . import chunk_book, chunk_tex, config, store, taxonomy
 
 UPLOAD_DIR = "references"
+INSTRUCTION_DIR = "instructions"
 MAX_UPLOAD = 25 << 20          # one file, bytes
 MAX_FOLDER = 60 << 20          # everything in references/, a warning (Overleaf projects have a size limit too)
 MAX_PROJECT_FILE = 2_000_000   # bytes of a data or code file that is read
@@ -50,6 +51,7 @@ SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv", "env", "site-packag
 SKIP_NAMES = {"manifest.txt", "changelog.txt", "license", "license.txt", "license.md", "requirements.txt"}
 SECRET_WORDS = ("secret", "password", "passwd", "credential", "token", "apikey", "api_key", "id_rsa", "private_key")
 SECRET_EXT = {"pem", "key", "p12", "pfx", "env"}
+OUTLINE_NAME = re.compile(r"(?:^|[-_ .])(?:prompt|outline|brief|writing[-_ ]?plan|instructions?)(?:[-_ .]|$)", re.I)
 
 
 class FileProblem(Exception):
@@ -63,6 +65,11 @@ def ext_of(name):
 def is_secret(name):
     low = name.lower()
     return low.startswith(".env") or ext_of(low) in SECRET_EXT or any(w in low for w in SECRET_WORDS)
+
+
+def is_outline_name(name):
+    """Author briefs are directions for writing, never literature evidence."""
+    return bool(OUTLINE_NAME.search(Path(str(name or "")).stem))
 
 
 # ------------------------------------------------------------------------------------------------ saving an upload
@@ -106,6 +113,24 @@ def save_upload(proj, filename, data):
     if not _looks_ok(ext_of(name), data):
         raise FileProblem(f"That does not look like a real .{ext_of(name)} file.")
     root = Path(proj["path"])
+    if is_outline_name(name):
+        folder = config.ensure_paper_dir(proj) / INSTRUCTION_DIR
+        folder.mkdir(exist_ok=True)
+        rel = f".overleaf-skill/{INSTRUCTION_DIR}/{{}}"
+        digest = hashlib.sha256(data).hexdigest()
+        stem, e = name.rsplit(".", 1)
+        for i in range(1, 100):
+            cand = folder / (name if i == 1 else f"{stem} ({i}).{e}")
+            if not cand.exists() and not cand.is_symlink():
+                tmp = cand.with_name("." + cand.name + ".part")
+                tmp.write_bytes(bytes(data))
+                os.replace(tmp, cand)
+                break
+            if cand.is_file() and hashlib.sha256(cand.read_bytes()).hexdigest() == digest:
+                return {"rel": rel.format(cand.name), "name": cand.name, "size": len(data), "duplicate": True, "outline": True}
+        else:
+            raise FileProblem("There are too many files with that name already.")
+        return {"rel": rel.format(cand.name), "name": cand.name, "size": len(data), "duplicate": False, "outline": True}
     folder = root / UPLOAD_DIR
     if folder.exists() and not folder.is_dir():
         raise FileProblem(f"There is a file called {UPLOAD_DIR} in your project, so I cannot make the folder for references. Rename that file first.")
@@ -131,11 +156,13 @@ def save_upload(proj, filename, data):
 
 
 def remove_upload(proj, rel):
-    """Deletes one uploaded file (only inside references/). -> True when something was deleted"""
+    """Deletes an uploaded evidence file or a local author outline. -> True when something was deleted"""
     root = Path(proj["path"]).resolve()
     p = (root / rel).resolve()
-    if p.parent.parent != root or p.parent.name != UPLOAD_DIR or not p.is_file() or p.is_symlink():
-        raise FileProblem("I can only remove files that were added to the references folder.")
+    refs = (root / UPLOAD_DIR).resolve()
+    outlines = (config.paper_dir(proj) / INSTRUCTION_DIR).resolve()
+    if p.parent not in (refs, outlines) or not p.is_file() or p.is_symlink():
+        raise FileProblem("I can only remove files that were added as evidence or author outlines.")
     p.unlink()
     return True
 
@@ -247,11 +274,19 @@ def discover(proj):
     "project", "material" or "analysis")."""
     root = Path(proj["path"])
     out, notes = [], []
+    # Author outlines live in the local, git-ignored paper state. They are
+    # indexed so a draft can follow them, but are never sources or citations.
+    instructions = config.paper_dir(proj) / INSTRUCTION_DIR
+    if instructions.is_dir() and not instructions.is_symlink():
+        for p in sorted(instructions.iterdir()):
+            if p.is_file() and not p.is_symlink() and not p.name.startswith(".") and ext_of(p.name) in READ:
+                out.append((p, f".overleaf-skill/{INSTRUCTION_DIR}/{p.name}", "source", "", "outline"))
     up = root / UPLOAD_DIR
     if up.is_dir() and not up.is_symlink():
         for p in sorted(up.iterdir()):
             if p.is_file() and not p.is_symlink() and not p.name.startswith(".") and ext_of(p.name) in UPLOAD_OK:
-                out.append((p, f"{UPLOAD_DIR}/{p.name}", "source", "" if p.stat().st_size <= MAX_UPLOAD else "too big", "source"))
+                role = "outline" if is_outline_name(p.name) else "source"  # legacy outlines uploaded before this distinction
+                out.append((p, f"{UPLOAD_DIR}/{p.name}", "source", "" if p.stat().st_size <= MAX_UPLOAD else "too big", role))
     budget = MAX_FILES
     found, early = _walk(root, PROJECT_OK, budget, skip_top=(UPLOAD_DIR,))
     for p, note in found:
@@ -830,7 +865,7 @@ def relevant(name, proj, instruction, passage="", mode="auto", budget=1800, limi
     where the numbers matter more than a good match).
     -> {"chunks": [...], "files": [names], "images": [{file, name}], "why": "named" | "asked" | "always"}"""
     from . import paper_index, retrieve
-    info = [f for f in listing(name, proj) if f.get("parts") and (analysis_mode if role_of(f) == "analysis" else mode) != "never"]
+    info = [f for f in listing(name, proj) if f.get("parts") and role_of(f) != "outline" and (analysis_mode if role_of(f) == "analysis" else mode) != "never"]
     if not info:
         return None
     named = mentions(info, instruction)
@@ -907,3 +942,26 @@ def relevant(name, proj, instruction, passage="", mode="auto", budget=1800, limi
 def block(res):
     """The parts as the text that goes into the request."""
     return "\n\n".join(f"[{c['where']}]\n{c['text']}" for c in res["chunks"])
+
+
+def outline_context(name, proj, budget=5000):
+    """The author's writing outline, kept separate from evidence and sent whole enough to preserve its order."""
+    from . import paper_index
+    outlines = [f for f in listing(name, proj) if role_of(f) == "outline" and f.get("parts")]
+    if not outlines:
+        return "", []
+    allowed = {f["file"] for f in outlines}
+    con = paper_index.open_index(name, proj)
+    chosen, used = [], 0
+    try:
+        rows = con.execute("SELECT * FROM chunks WHERE kind IN ('source','project') ORDER BY ord").fetchall()
+        for row in rows:
+            if row["file"] not in allowed or used + row["tokens"] > budget:
+                continue
+            used += row["tokens"]
+            chosen.append({"file": row["file"], "where": row["section_path"], "tokens": row["tokens"], "text": row["text"]})
+    finally:
+        con.close()
+    text = "\n\n".join(f"[{c['file']} · {c['where']}]\n{c['text']}" for c in chosen)
+    shown = [{k: c[k] for k in ("file", "where", "tokens")} for c in chosen]
+    return text, shown
