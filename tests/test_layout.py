@@ -200,6 +200,65 @@ class Bibliography(Base):
         self.assertTrue(any("will not print them yet" in w and "no bibliography command" in w for w in out["warnings"]), out["warnings"])
 
 
+class Doctor(Base):
+    """Any LaTeX problem, not only the bibliography: the paper is compiled here, LaTeX's own error and the lines around it go to the model with the request, the model fixes the cause, the fix is
+    checked by compiling a copy, and a question about the problem is answered in words."""
+
+    def setUp(self):
+        super().setUp()
+        from writing_core import latexbuild
+        if not latexbuild.available()[0]:
+            self.skipTest("LaTeX is not installed here")
+        self.main.write_text("\\documentclass{article}\n\\begin{document}\n\\section{Results}\nThe total yield_total rose in all regions.\n\nA second paragraph that is fine.\n\\end{document}\n")
+        paper_index.refresh(self.name, self.proj, trigger="test")
+
+    def test_the_model_is_given_what_latex_says_and_the_lines_around_it_and_the_fix_is_measured(self):
+        text = "my paper does not compile, fix it"
+        answer = {"approach": "The underscore in `yield_total` is a subscript outside math mode, which LaTeX reports as Missing $. I escaped it.", "questions": [], "edits": [
+            {"file": "main.tex", "find": "The total yield_total rose", "replace": "The total yield\\_total rose", "reason": "an underscore in text must be escaped"}]}
+        self.srv.script = [answer]
+        res = self.resolve(text)
+        self.assertEqual((res["targets"], res["document"], res["ask"]), ([], True, None))
+        pl = layout.plan(self.name, self.proj, text, res)
+        self.assertTrue(any("compile your paper" in n for n in pl["notes"]), "the plan says it will read what LaTeX says")
+        out = layout.run(self.name, self.proj, text, res, confirm=pl["payload_hash"], compile_check_on=True)
+        self.assertEqual(out["status"], "proposed", out["proposal"].get("error"))
+        sent = json.dumps(self.srv.requests[-1]["body"])
+        self.assertIn("<compile_log", sent)
+        self.assertIn("Missing $ inserted", sent)
+        self.assertIn("The total yield_total rose in all regions.", sent, "the source around the error is given verbatim")
+        self.assertIn("log", [s["key"] for s in out["proposal"]["steps"]])
+        c = out["proposal"]["compile"]
+        self.assertEqual(c["after"], 0)
+        self.assertGreaterEqual(c["before"], 1, "the compile check says how many errors there were and how many are left")
+        layout.apply(self.name, self.proj, out["proposal"]["id"])
+        from writing_core import latexbuild
+        self.assertEqual(latexbuild.compile(self.proj)["errors"], [])
+
+    def test_a_question_about_a_latex_error_is_answered_in_words_and_nothing_is_changed(self):
+        text = "why does my paper say Missing $ inserted?"
+        long_answer = "The message comes from line 4: `yield_total` has an underscore, which LaTeX reads as a subscript and only allows in math mode. " * 12
+        self.srv.script = [{"approach": long_answer, "questions": [], "edits": []}]
+        res = self.resolve(text)
+        pl = layout.plan(self.name, self.proj, text, res)
+        out = layout.run(self.name, self.proj, text, res, confirm=pl["payload_hash"], compile_check_on=True)
+        self.assertEqual(out["status"], "no_changes")
+        self.assertTrue(out["proposal"]["approach"].startswith("The message comes from line 4"))
+        self.assertGreater(len(out["proposal"]["approach"]), 900, "an explanation is not cut at the length of a summary")
+        self.assertIn("yield_total", self.main.read_text())
+
+    def test_a_fix_that_helps_but_does_not_finish_is_kept_and_says_how_far_it_got(self):
+        self.main.write_text("\\documentclass{article}\n\\begin{document}\n\\section{Results}\nThe total yield_total rose.\n\nThe rate_total fell.\n\n\\end{document}\n")
+        paper_index.refresh(self.name, self.proj, trigger="test")
+        half = {"approach": "I escaped the first underscore; the second is still there.", "questions": [], "edits": [
+            {"file": "main.tex", "find": "The total yield_total rose.", "replace": "The total yield\\_total rose.", "reason": "escape one underscore"}]}
+        out = self.ask("my paper does not compile, fix it", half, compile=True)
+        self.assertEqual(out["status"], "proposed", out["proposal"].get("error"))
+        c = out["proposal"]["compile"]
+        self.assertLess(c["after"], c["before"])
+        self.assertGreater(c["after"], 0)
+
+
 class Edits(unittest.TestCase):
     T = {"a.tex": "one\n  two\n  three\nfour\none\n"}
 
@@ -413,6 +472,26 @@ class InTheChat(ChatBase):
         self.assertIn("\\bibliography{references}\n\\end{document}", text)
         self.assertEqual(text.count("\\end{document}"), 1)
 
+    def test_any_latex_problem_goes_to_the_model_with_what_latex_says_and_the_fix_is_applied(self):
+        """Not only the bibliography: "my paper does not compile, fix it" is compiled here, the error and its lines go along, and the fix is applied and compiles."""
+        from writing_core import latexbuild
+        if not latexbuild.available()[0]:
+            self.skipTest("LaTeX is not installed here")
+        self.main.write_text("\\documentclass{article}\n\\begin{document}\n\\section{Results}\nThe total yield_total rose in all regions.\n\\end{document}\n")
+        paper_index.refresh(self.name, self.proj, trigger="test")
+        self.oa.script = [{"approach": "An underscore in text must be escaped (`yield\\_total`).", "questions": [], "edits": [
+            {"file": "main.tex", "find": "The total yield_total rose", "replace": "The total yield\\_total rose", "reason": "escape the underscore"}]}]
+        r = self.send("my paper does not compile, fix it")
+        self.assertEqual([m["kind"] for m in r["messages"]], ["text", "layout_plan"], r["messages"])
+        self.assertEqual(self.wait_job(r["job"])["status"], "done")
+        self.assertIn("Missing $ inserted", json.dumps(self.oa.requests[-1]["body"]))
+        res = self.last("result")
+        st, prop = self.c.get(f"/api/proposal?paper=alpha&id={res['data']['proposal']}")
+        self.assertEqual((st, prop["status"], prop["compile"]["after"]), (200, "proposed", 0), prop.get("error"))
+        st, out = self.c.post("/api/proposal/approve", {"paper": "alpha", "id": prop["id"], "chat": self.chat_thread()["id"]})
+        self.assertEqual((st, out["ok"]), (200, True), out)
+        self.assertIn("yield\\_total", self.main.read_text())
+
     def test_not_now_sets_the_suggestion_aside_and_writes_nothing(self):
         self.oa.script = [move_to_appendix()]
         r = self.send("move Table 1 to the appendix")
@@ -471,6 +550,13 @@ class InTheChat(ChatBase):
 
 
 class Intent(unittest.TestCase):
+    def test_a_latex_problem_or_a_question_about_one_is_a_latex_request_without_any_figure(self):
+        for t in ["my paper does not compile, fix it", "why does my paper say Missing $ inserted?", "Undefined control sequence in main.tex", "the table is overfull and sticks out",
+                  "why does the pdf show ?? in the citations", "the bibliography is not rendering, fix the latex", "it won't compile"]:
+            self.assertEqual(chat.intent(t), "layout", t)
+        for t in ["improve the flow of the introduction", "fix the grammar in the results", "the problem with the argument in the introduction is the flow"]:
+            self.assertNotEqual(chat.intent(t), "layout", t)
+
     def test_layout_is_a_kind_of_request_the_reader_knows(self):
         self.assertIn("layout", intent.INTENTS)
         self.assertIn("layout", intent.ALL)

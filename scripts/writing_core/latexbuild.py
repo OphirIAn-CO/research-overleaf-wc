@@ -306,8 +306,9 @@ def parse_log(text, root):
             missing.append(mm.group(1))
         if "Warning" in ln and len(warnings) < 40 and ("LaTeX Warning" in ln or "Package" in ln):
             warnings.append(ln.strip()[:240])
+    boxes = [ln.strip()[:160] for ln in lines if re.match(r"^(?:Over|Under)full \\[hv]box", ln)][:40]          # text or a table that sticks out of the page, or is stretched thin
     joined = "\n".join(lines)
-    return {"errors": errors[:40], "warnings": warnings, "missing": missing,
+    return {"errors": errors[:40], "warnings": warnings, "missing": missing, "boxes": boxes,
             "undefined": {"citations": sorted(set(_CITE.findall(joined)))[:40], "references": sorted(set(_REF.findall(joined)))[:40]}}
 
 

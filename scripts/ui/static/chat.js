@@ -221,7 +221,7 @@
     const outlineBtn = h('button', { type: 'button', class: 'attach', text: 'Add outline', title: 'Add a writing brief or outline. It stays local, appears in Your files as an author outline, is followed only when named in a request, and is never cited or sent to Overleaf.' });
     const adding = h('div', { class: 'row chips adding', role: 'status', 'aria-live': 'polite', hidden: true });
     const REQUEST_KINDS = [['edit', 'Improve or correct text that is already written'], ['draft', 'Write new text'], ['cite', 'Add in-text citations to text that is already written'],
-      ['refsearch', 'Find references on the internet'], ['layout', 'Change the LaTeX itself (tables, figures, graphs, the bibliography command, packages, appendix, page layout)'], ['library', 'Answer from my reading (my literature library)'],
+      ['refsearch', 'Find references on the internet'], ['layout', 'LaTeX help: fix a LaTeX problem, explain it, or change the LaTeX (errors, tables, figures, bibliography, packages, layout)'], ['library', 'Answer from my reading (my literature library)'],
       ['inspect', 'Count or list what is in my paper\'s files (references, figures, tables)'], ['bibliography', 'Bring my library into the bibliography (reference entries with keys)'], ['review', 'Peer review']];
     const kindSel = h('select', { id: 'request-kind', class: 'kind-flag', 'aria-label': 'What kind of request is this?', title: 'Leave on Automatic and I read your message and tell you what I understood. Choose a kind to tell me yourself.' },
       h('option', { value: '', text: 'Automatic: you read it' }), REQUEST_KINDS.map(([v, l]) => h('option', { value: v, text: l })));
@@ -492,12 +492,13 @@
         holder.append(notice('bad', h('strong', { text: 'I did not use the change OpenAI proposed. ' }), p.error_plain || p.error || ''));
         return;
       }
-      if (p.approach) holder.append(h('div', { class: 'approach' }, h('strong', { text: 'What changes and why' }), h('p', { text: p.approach })));
+      if (p.approach) holder.append(h('div', { class: 'approach' }, h('strong', { text: p.status === 'no_changes' ? 'My answer' : 'What was wrong, what changes and why' }), h('p', { class: 'pre-line', text: p.approach })));
       (p.questions || []).forEach((q) => holder.append(notice('warn', h('strong', { text: 'OpenAI asks: ' }), q)));
       if (p.status === 'no_changes') {
-        holder.append(notice('ok', 'OpenAI proposed no change.'));
+        if (!p.approach) holder.append(notice('ok', 'OpenAI proposed no change.'));
         return;
       }
+      if (p.compile && p.compile.before != null) holder.append(notice(p.compile.after === 0 ? 'ok' : 'warn', p.compile.after === 0 ? `Compile check: your paper had ${plural(p.compile.before, 'LaTeX error')}; with this change it has none.` : `Compile check: your paper had ${plural(p.compile.before, 'LaTeX error')}; with this change it has ${p.compile.after}.`));
       const bad = (p.validators || []).filter((v) => !v.ok && v.detail);
       if (bad.length) holder.append(notice('warn', 'Heads up: ', bad.map((v) => v.detail).join('; ')));
       else if ((p.validators || []).some((v) => v.name === 'compiles' && v.ok)) holder.append(notice('ok', 'Checked: labels, references, citations and the words of tables and figures are unchanged, and the paper still compiles with the change.'));

@@ -285,12 +285,18 @@ Asking to *write* something (not to improve what is there) is understood as a re
 Ask for it in your own words: *"move this table to the appendix and add the respective reference in tex"*, *"improve the visualization of Table 2"*, *"improve the graph in the following way: larger fonts and a legend"*,
 *"adjust the position of the image and the labels (a), (b) of its parts"*, *"make the figures smaller and centre them"*, and the document itself: *"in the latex before the end document include the bibliography with the .bib file"*,
 *"the bibliography is not rendering, fix the latex"*, *"add a table of contents"*, *"add line numbers"*, *"load the package booktabs"*. This kind of request changes the **LaTeX** of the paper, never what it says.
+**Any LaTeX problem or question works, not only the bibliography:** *"my paper does not compile, fix it"*, *"why does it say Missing $ inserted?"*, *"the table sticks out of the page"*, *"the figure does not appear"*,
+*"citations show as ??"*, *"what does this warning mean?"*. For a request about the document, the app **compiles your paper on this computer first** (nothing is sent for that) and sends what LaTeX itself said with the
+request: each error with the lines of your source around it, citations and references without an entry, files it could not find, warnings, text or tables that stick out. The model starts from the first error (later ones are
+often consequences), fixes the cause with the smallest change, or, when you asked a question, answers it in words that point at the line of your paper and changes nothing. After a fix, the compile check says how many
+errors there were and how many are left ("your paper had 3 LaTeX errors; with this change it has none"); a fix that helps but does not finish is kept and says how far it got. If the cause is outside the LaTeX files
+(a picture file that is not there, a package your template or Overleaf does not provide), it says so and what you can do.
 The model does the work, whatever the request is about: Python only hands it the right parts of your paper and checks what comes back. A request that names no figure or table is never refused for that reason; it gets
 the preamble, the structure, the end of the document, which bibliography files and system the paper uses, any bibliography problem found on your computer (for example `\printbibliography` without biblatex, which LaTeX
 reports as "Undefined control sequence" and which leaves every citation without an entry although the references are in your `.bib`) and the last compile of the LaTeX pane. If it needs something it was not given,
 it asks you a question instead of guessing.
 
-1. **It is read first.** A request about layout is always shown back to you before it goes anywhere (see *Checking that I understood you*), and you can choose *Change the LaTeX itself* yourself under the message box.
+1. **It is read first.** A request about layout is always shown back to you before it goes anywhere (see *Checking that I understood you*), and you can choose *LaTeX help* yourself under the message box.
 2. **Which table or figure.** Name it ("Table 2", "the last figure", a word of its caption, its label such as `tab:results`), tick it in the text, paste its LaTeX, or say "this table" when there is only one. With no clue it
    lists the figures and tables of your paper and asks. Requests about the page or the document itself (margins, spacing, font size, columns, the bibliography, packages) need no figure.
 3. **What goes to OpenAI.** The LaTeX of that figure or table as it is (not hidden behind tags, since it is what changes), the lines that mention it, the outline of the document, its preamble and the end of the

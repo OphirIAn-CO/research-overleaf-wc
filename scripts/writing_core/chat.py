@@ -420,6 +420,10 @@ _LATEX_STRUCT = re.compile(r"\b(?:include|insert|print|display|show|enable|add|p
                            r"(?:\\end\{document\}|end of the (?:latex|document|paper)|\.bib\b|latex|bibtex|biblatex|natbib)|\\(?:printbibliography|bibliography|bibliographystyle|addbibresource|usepackage)\b|"
                            r"\b(?:add|include|insert|enable|turn on)\b.{0,20}\b(?:a\s+|the\s+)?(?:table of contents|list of (?:figures|tables)|line numbers|page numbers|title page)\b|"
                            r"\b(?:fix|solve|repair|resolve)\b.{0,40}\b(?:latex|compil\w*|undefined control sequence|bibliography|the references? (?:list|section)|citations? (?:are|is|do|does|not|show|appear))\b|"
+                           r"\b(?:latex|compil\w*|pdf)\b.{0,40}\b(?:errors?|warnings?|fail\w*|broken|problems?|issues?|not working|doesn'?t work|won'?t)\b|"
+                           r"\b(?:errors?|warnings?|problems?|issues?)\b.{0,30}\b(?:in|with|of) (?:the |my )?(?:latex|pdf|compil\w*)|"
+                           r"\b(?:does(?:n'?t| not)|do not|don'?t|won'?t|will not|can'?t|cannot|fails? to|not)\s+compil\w*|"
+                           r"\bundefined control sequence|\bmissing \$|\b(?:over|under)full\b|\bhbox\b|\bwhy (?:does|do|is|are)\b.{0,50}\b(?:latex|pdf|compil\w*)\b|"
                            r"\b(?:bibliography|references?|citations?)\b.{0,50}\b(?:not (?:rendering|showing|appearing|printing|displayed)|(?:do|does|are|is)n'?t (?:render|show|appear|print)|show(?:s|ing)? (?:as )?\[?\?|undefined)\b|"
                            r"\b(?:in|to|of) the (?:latex|preamble)\b.{0,60}\b(?:include|add|insert|use|load|set|change)\b|\b(?:include|add|insert|load)\b.{0,30}\b(?:the\s+)?(?:package|documentclass|preamble)\b", re.I | re.S)
 

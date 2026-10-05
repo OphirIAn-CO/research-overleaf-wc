@@ -214,7 +214,10 @@ the image and its labels"), you edit LaTeX, not prose. Do it with `Read` and `Ed
 5. For an image file you can change only the LaTeX around it (size, position, caption, subfigure layout); say so and ask when the picture itself would have to change. A graph drawn in LaTeX can be changed in its code.
 6. No shell escapes, no writing or reading files outside the paper.
 7. Show the user the change (old and new text for each edit) before you write it when it moves or deletes something, compile if LaTeX is installed (`latexmk -pdf`) and report errors, then `overleaf_sync` when they ask to send it.
-8. The same applies to the document's own LaTeX when no figure or table is named ("include the bibliography with the .bib file", "the bibliography is not rendering", "add a table of contents", "load a package"): do it, do not
+8. Any LaTeX problem or question is in scope, not only figures and the bibliography: compile first (`latexmk -pdf -interaction=nonstopmode`), read the log from the first error (later ones are often consequences), fix the cause
+   with the smallest edit, compile again and report errors before and after; for a question ("why does it say Missing $ inserted?") explain in plain words pointing at the line, and change nothing unless asked. If the cause
+   is outside the files (a missing picture, a package the template or Overleaf lacks), say so. The web app does this with the model and the same checks.
+9. The same applies to the document's own LaTeX when no figure or table is named ("include the bibliography with the .bib file", "the bibliography is not rendering", "add a table of contents", "load a package"): do it, do not
    ask for a figure. For the bibliography, find which system the paper uses (natbib/BibTeX or biblatex) and which `.bib` file it has; `\printbibliography` without biblatex, `\bibliography` together with biblatex, or
    citations with no bibliography command are the usual reasons that references that are in the `.bib` do not print. Keep the system whose package is loaded, or BibTeX (`\bibliographystyle` + `\bibliography{name}`) when the
    class or template points to it, never invent a `.bib` name, and compile twice (BibTeX) to confirm that no citation is left without an entry. The web app does this with the model and the same checks.

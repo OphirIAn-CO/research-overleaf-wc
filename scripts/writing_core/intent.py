@@ -23,7 +23,7 @@ LABELS = {
     "draft": "Write new text",
     "cite": "Add in-text citations to text that is already written",
     "refsearch": "Find references on the internet",
-    "layout": "Change the LaTeX itself (tables, figures, graphs, the bibliography command, packages, appendix, page layout)",
+    "layout": "LaTeX help: fix a LaTeX problem, explain it, or change the LaTeX (errors, warnings, tables, figures, graphs, bibliography, packages, page layout)",
     "library": "Answer from my reading (my literature library)",
     "review": "Peer review",
     "inspect": "Count or list what is in my paper's files (references, figures, tables, sections, which library documents are in the bibliography)",
@@ -35,7 +35,7 @@ DESCRIBE = {
     "draft": "write text that is not in the paper yet: a section, a paragraph, from an outline, notes, results or the literature; or extend the paper with new text",
     "cite": "add in-text citations to text that already exists, to support or strengthen its statements, from the author's library and/or references found online",
     "refsearch": "only look for references on the internet for a subject or for a place in the paper, without changing any text yet",
-    "layout": "change the LaTeX of the paper and not its words: move, restyle or resize a table, figure or graph, its position, label, caption or reference, the appendix, spacing or page layout, and the structure of the document: put the bibliography in the document (\\bibliography, \\printbibliography), add a package, a table of contents, line numbers, change the preamble, document class or title block, and fix LaTeX problems such as a bibliography that does not print, citations shown as [?] or a compile error",
+    "layout": "anything about the LaTeX of the paper and not its words: fix or explain a compile error or warning, a bibliography or citations that do not print (shown as ?), text or tables that stick out of the page, figures that do not appear or sit wrongly, special characters, packages and fonts, the preamble, document class or title block, and the form of the paper: move, restyle or resize a table, figure or graph, its position, label, caption or reference, the appendix, spacing, page layout, a table of contents, line numbers; also a question about why something happens in the LaTeX or what an error means",
     "library": "answer a question from the author's own reading (the literature library) without changing the paper",
     "review": "a peer review of the paper or of a section: scores and a list of problems",
     "inspect": "a question about what is in the paper's own files, answered by counting or listing, with no change: how many references the .bib has, how many figures, tables or sections, which library documents are already in the bibliography",
@@ -66,7 +66,7 @@ SYSTEM = ("You read what an author asks of a writing assistant for a LaTeX resea
           "1. A paragraph pasted from the manuscript is material: it shows WHICH text the request is about. Its verbs and its citations say nothing about what is asked (\"to create routing alternatives\" "
           "inside a pasted paragraph is not a request to write). The request is in the author's own sentences around it.\n"
           "2. Asking to add or find citations for statements of a text that exists is \"cite\" (or \"refsearch\" if the author only wants to see candidates first). Asking for new prose is \"draft\". "
-          "Asking to improve wording is \"edit\". Moving, restyling or repositioning tables, figures, graphs or captions, and any change to the document's LaTeX code (the bibliography command, packages, preamble, title block, table of contents) is \"layout\", even if the word \"improve\" is used.\n"
+          "Asking to improve wording is \"edit\". Moving, restyling or repositioning tables, figures, graphs or captions, and anything about the document's LaTeX code is \"layout\", even if the word \"improve\" is used: a compile error or warning, a bibliography or citations that do not print, text sticking out of the page, a package, the preamble, the title block, the table of contents, and also a question about why something happens in the LaTeX or what an error means.\n"
           "3. The recent conversation tells what \"it\", \"this\", \"the second one\" or \"again\" refer to.\n"
           "4. The author's earlier corrections (examples) show how this author phrases things; follow them over your own habits.\n"
           "5. \"summary\": one or two plain sentences, addressed to the author (\"You want me to ...\"), that name the action, the place and the sources. \"target\": where in the paper it is about, in "
