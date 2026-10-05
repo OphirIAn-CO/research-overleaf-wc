@@ -397,13 +397,31 @@ _LAYOUT_ACT = re.compile(r"\b(?:move|relocate|shift|reposition|resize|rescale|ro
 _LAYOUT_PROSE = re.compile(r"\b(?:flow|grammar|grammatical|wording|sentences?|paragraphs?|tone|spelling|typos?|wordy|concise|rephrase|reword|rewrite|paraphrase|text (?:before|after)|the text)\b", re.I)
 
 
+# the library as references: "convert the documents in my literature review to references with tags", "make references from all my papers"
+_BRING = re.compile(r"\b(?:convert|turn|transform|import|bring|make|build|create|generate)\b.{0,80}\b(?:library|literature|documents?|papers?|articles?|pdfs?|readings?)\b.{0,80}\b(?:into|to|as|so)?\s*(?:the\s+)?"
+                    r"(?:references?|reference entries|bibliography|\.?bib|bibtex|citation keys?|citation tags?|tags)\b|"
+                    r"\b(?:references?|reference entries|bibliography)\b.{0,40}\bfrom\b.{0,30}\b(?:all\s+)?(?:the\s+|my\s+)?(?:\d+\s+)?(?:documents|library|literature|papers|articles)\b", re.I | re.S)
+# a question about what the paper's files hold: "how many references are in my .bib file", "how many figures does it have"
+_COUNT = re.compile(r"\bhow many\b.{0,60}\b(?:references?|entries|bib|bibliography|citations?|figures?|tables?|sections?|words|documents|papers|articles|pages)\b|"
+                    r"\b(?:count|number of)\b.{0,40}\b(?:references?|entries|figures?|tables?|sections?|words|documents)\b|"
+                    r"\bwhich\b.{0,50}\b(?:documents|papers|articles)\b.{0,50}\b(?:are|is)?\s*(?:not in|missing from|already in|in)\b.{0,30}\b(?:bib|bibliography)\b", re.I | re.S)
+
+
+def is_bring_request(text):
+    return bool(_BRING.search(subject.request_part(text or "")))
+
+
+def is_count_request(text):
+    return bool(_COUNT.search(subject.request_part(text or "")))
+
+
 def is_layout_request(text):
     t = subject.request_part(text or "")
     return bool(_LAYOUT_ACT.search(t)) and bool(re.search(_LAYOUT_OBJ, t, re.I)) and not _LAYOUT_PROSE.search(t)
 
 
 def intent(text):
-    """-> 'refs' | 'review' | 'help' | 'library' | 'refsearch' | 'layout' | 'draft' | 'edit'"""
+    """-> 'refs' | 'review' | 'help' | 'bibliography' | 'inspect' | 'library' | 'refsearch' | 'layout' | 'draft' | 'edit'"""
     if find_dois(text):
         return "refs"
     if _HELP.match(text or ""):
@@ -411,6 +429,10 @@ def intent(text):
     asked = " ... ".join(ask_of(text))                     # in a long message with pasted material, what is asked is at its start or its end
     if _REVIEW.search(asked):
         return "review"
+    if is_bring_request(asked):
+        return "bibliography"
+    if is_count_request(asked):
+        return "inspect"
     if _LIBRARY_ASK.search(asked) and not (set(taxonomy.words(asked.lower())) & (_INTENT_WORDS | _LIBRARY_EDIT)):
         return "library"
     if is_layout_request(asked):
@@ -801,10 +823,10 @@ CHIPS = [("Make it clearer", "Make this clearer and easier to follow."), ("More 
 
 # ------------------------------------------------------------------------------------------- the request, ready to send
 
-def plan(name, proj, instruction, chunk_ids, book_id=None, facts="", online=None):
+def plan(name, proj, instruction, chunk_ids, book_id=None, facts="", online=None, web=None):
     """Prepare the request without sending anything. -> what the chat shows ("2 passages, about 900 tokens") plus the hash that proves
     exactly this payload is what gets sent. online: DOIs of references found online that the author picked for this request."""
-    res = revise.run(name, proj, instruction, chunk_ids=chunk_ids, book_id=book_id, dry_run=True, source="web", facts=facts, online=online)
+    res = revise.run(name, proj, instruction, chunk_ids=chunk_ids, book_id=book_id, dry_run=True, source="web", facts=facts, online=online, web=web)
     return {"instruction": instruction, "facts": (facts or "").strip()[:3000], "chunk_ids": chunk_ids, "online": list(online or []), "units": res["units"], "passages": res["passages"], "est_tokens_in": res["est_tokens_in"],
             "est_cost": res["est_cost"], "manuscript_tokens": res["manuscript_tokens"], "model": res["model"], "tips": len(res["rules"]),
             "payload_hash": res["payload_hash"], "warnings": res["warnings"], "book": res["book"], "parts": res["parts"], "sources": res.get("sources", []),
@@ -816,7 +838,10 @@ def plan(name, proj, instruction, chunk_ids, book_id=None, facts="", online=None
 def refs_place(text, topic):
     """Does a request for references point at a place in the paper ("for the introduction", "the claim in the first paragraph") instead of naming a subject?"""
     from . import scholar
-    return bool(_float_request(text) or _para_request(text) or (topic.strip() and len(scholar.terms(topic)) <= 2))
+    if _float_request(text) or _para_request(text) or (topic.strip() and len(scholar.terms(topic)) <= 2):
+        return True
+    named = taxonomy.classify(_REFS_NOISE.sub(" ", subject.request_part(text)).lower(), min_ratio=retrieve.REQUEST_RATIO)      # "what is written in the introduction": a part of the paper is named (the word "references" is not one here) and the rest are words about the request
+    return bool(named) and len(scholar.focus_terms(topic)) <= 3
 
 
 def passage_text(name, proj, chunk_ids, limit=2500):

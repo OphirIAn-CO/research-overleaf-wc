@@ -46,6 +46,8 @@ RISK = [["Risk perception and trust across hazards", "Paul Smith and Ana Lopez, 
          "Risk perception is measured with psychometric scales and regression models of perceived risk toward hazards such as floods and earthquakes."],
         ["# Results", "Perceived risk differs between people, and aggregate models of risk perception hide this heterogeneity across hazards."],
         ["Published online 3 March 2019. https://doi.org/10.5555/risk.2019.007"]]
+# the same article, but a file that says nothing else about itself: a DOI, and neither authors nor a year
+RISK_PLAIN = [RISK[0], RISK[1], ["https://doi.org/10.5555/risk.2019.007"]]
 # an article that names no DOI at all
 HETERO = [["Heterogeneity of hazard perception across countries and contexts", "Maria Garcia, University of Nowhere", "# Introduction",
            "Hazard perception is heterogeneous across countries and socioeconomic contexts, so a single model of risk perception does not fit."]]
@@ -220,9 +222,11 @@ class LibraryByTheSubject(Offline):
 
 @needs_pdf
 class WhyNotCitable(Offline):
+    """A document the file says too little about (no authors, no year) and that has no record, no DOI that works and no title Crossref knows cannot be cited: it says why."""
+
     def setUp(self):
         super().setUp()
-        self.read_library(**{"Garcia - 2018 - Heterogeneity of hazard perception.pdf": HETERO, "Smith et al. - 2019 - Risk perception and trust.pdf": RISK})
+        self.read_library(**{"a-hetero.pdf": HETERO, "b-risk.pdf": RISK_PLAIN})
 
     def test_each_document_that_cannot_be_cited_says_why(self):
         self.DOIS.clear()
@@ -234,7 +238,7 @@ class WhyNotCitable(Offline):
         self.assertEqual(len(why), 2, why)
         self.assertTrue(any("doi.org" in w and "10.5555/risk.2019.007" in w for w in why.values()), why)
         self.assertTrue(any("names no DOI" in w for w in why.values()), why)
-        self.assertTrue(any("Smith" in w or "Garcia" in w for w in p["warnings"]), "the reasons are in the warning the author sees")
+        self.assertTrue(any("hetero" in w.lower() for w in p["warnings"]), "the reasons are in the warning the author sees")
 
     def test_a_title_that_crossref_does_not_know_is_not_made_a_citation(self):
         scholar.fetch = Net({"https://api.crossref.org/works": json.dumps({"message": {"items": [{"DOI": "10.1/zzz", "title": ["Something else entirely about soil"], "type": "journal-article"}]}})})
@@ -258,57 +262,71 @@ class WhyNotCitable(Offline):
         self.assertEqual(scholar.fetch.asked, [])
 
 
+def openalex(*items):
+    """OpenAlex's answer for a few works: (doi, title, year)"""
+    return json.dumps({"results": [{"doi": "https://doi.org/" + doi, "title": title, "publication_year": year, "authorships": [], "primary_location": None, "abstract_inverted_index": None,
+                                    "cited_by_count": 3} for doi, title, year in items]})
+
+
+GUIDE_HIT = ("10.1/guide", "Academic writing guidelines for graduate students", 2015)
+RISK_HIT = ("10.5555/risk.2019.007", "Risk perception and trust across hazards", 2019)
+JUNK_HIT = ("10.1016/j.hm.2016.07.002", "On Khinchin's paper Ideas of intuitionism and the struggle for a subject matter in contemporary mathematics", 2016)
+
+
 class InTheChat(ChatBase):
-    """The chat: citations are asked for and nothing in the library can be cited, so the search of the internet starts, on the subject of the outline."""
+    """The chat: citations are asked for, the library cannot supply them, so the app looks on the internet itself, on the subject of the outline, and cites what is about that subject."""
     def setUp(self):
         super().setUp()
         self._fetch, self._doi = scholar.fetch, doi_bot.fetch_bibtex
         self.addCleanup(setattr, scholar, "fetch", self._fetch)
         self.addCleanup(setattr, doi_bot, "fetch_bibtex", self._doi)
-        self.net = scholar.fetch = Net(routes())
+        doi_bot.fetch_bibtex = lambda d: BIB_RISK if d == RISK_HIT[0] else (_ for _ in ()).throw(RuntimeError("HTTP 404"))
+        self.net = scholar.fetch = Net({**routes(), "https://api.openalex.org/works": openalex(GUIDE_HIT, JUNK_HIT, RISK_HIT), "https://api.crossref.org/works": json.dumps({"message": {"items": []}})})
         self.main.write_text(PAPER)
         paper_index.refresh(self.name, self.proj, trigger="test")
         files.save_upload(self.proj, "outlined_intro.md", OUTLINE.encode(), purpose="outline")
-        self.oa.script = [{"queries": ["academic writing guidelines", "risk perception heterogeneity across hazards", "psychometric measurement of risk perception"]}]
+        self.bib = Path(self.proj["path"]) / self.proj["bib"]
 
-    def test_the_search_is_about_the_outline_and_never_about_academic_writing(self):
+    def proposal(self):
+        st, prop = self.c.get(f"/api/proposal?paper=alpha&id={self.last('result')['data']['proposal']}")
+        return prop
+
+    def test_the_app_searches_the_subject_of_the_outline_itself_and_cites_what_fits(self):
+        self.oa.script = [draft_reply("Risk perception shapes how people act toward hazards [[LX901]]. It has been measured with psychometric scales.",
+                                      [{"statement": "Risk perception", "source": "L1"}, {"statement": "It has been", "source": "request"}])]
+        before = self.bib.read_text()
         r = self.send(ASK)
-        self.assertEqual([m["kind"] for m in r["messages"]], ["text", "text"], r["messages"])
-        self.assertIn("I could not cite anything from your literature library", r["messages"][1]["text"])
+        self.assertEqual([m["kind"] for m in r["messages"]], ["text", "draft_plan"], r["messages"])
+        plan = r["messages"][1]["data"]
+        self.assertEqual(plan["plan"]["web"], {"ask": []}, "the app looks for the sources itself")
+        self.assertIsNone(plan["confirm"], "no stop to ask the author to choose")
         j = self.wait_job(r["job"])
         self.assertEqual(j["status"], "done", j)
-        d = self.last("refsearch")["data"]
-        self.assertEqual(d["how"], "model")
-        self.assertEqual(d["queries"], ["risk perception heterogeneity across hazards", "psychometric measurement of risk perception"], "the query about writing was refused")
-        sent = json.dumps(self.oa.requests[0]["body"]["input"])
-        self.assertIn("Why risk is hard to study", sent, "the outline sections asked for are what the words are made from")
-        self.assertIn("aggregate models hide heterogeneity", sent, "and the abstract")
-        self.assertNotIn("SECTIONFIVE", sent)
-        self.assertNotIn("cohesion", sent, "how to write is not sent to the model that writes the search words")
-        self.assertTrue(d["ctx"]["draft"])
-        self.assertTrue(all("writing" not in q for q in self.net.asked if "duckduckgo" in q), self.net.asked)
+        self.assertIn("web", [s["key"] for s in j["steps"]])
+        asked = " ".join(u for u in self.net.asked if "openalex" in u).lower()
+        self.assertIn("perception", asked, "the words are the subject of the outline")
+        for bad in ("writing", "cohesion", "academic", "orthography"):
+            self.assertNotIn(bad, asked, "how to write is never searched for")
+        prop = self.proposal()
+        unit = prop["units"][0]
+        self.assertEqual(len(unit["added_cites"]), 1, unit.get("error"))
+        self.assertEqual([a["doi"] for a in prop["bib_adds"]], [RISK_HIT[0]])
+        shown = [x["label"] + " " + x["title"] for x in prop["library"]]
+        self.assertTrue(any("Risk perception and trust" in t for t in shown), shown)
+        self.assertFalse(any("Academic writing" in t or "Khinchin" in t for t in shown), "a guide to writing and a paper on mathematics are not offered: " + str(shown))
+        self.assertEqual(self.bib.read_text(), before, "its entry is written only when the text that cites it is saved")
+        self.assertFalse([m for m in self.chat_thread()["thread"]["messages"] if m["kind"] == "refsearch"], "no candidates to choose from")
 
-    def test_without_a_model_the_words_are_still_the_subject(self):
-        self.oa.script = [{"queries": []}]
+    def test_records_that_are_not_about_the_subject_are_never_cited_and_the_author_is_told(self):
+        self.net = scholar.fetch = Net({**routes(), "https://api.openalex.org/works": openalex(GUIDE_HIT, JUNK_HIT), "https://api.crossref.org/works": json.dumps({"message": {"items": []}})})
+        self.oa.script = [draft_reply("Risk perception shapes how people act toward hazards.")]
         r = self.send(ASK)
-        self.wait_job(r["job"])
-        d = self.last("refsearch")["data"]
-        joined = " ".join(d["queries"])
-        self.assertIn("perception", joined)
-        self.assertNotIn("writing", joined)
-        self.assertNotIn("academic", joined)
-
-    def test_a_guide_to_writing_found_on_the_web_is_not_offered_as_a_reference(self):
-        guide = json.dumps({"results": [{"doi": "https://doi.org/10.1/guide", "title": "Academic writing guidelines for graduate students", "publication_year": 2015,
-                                         "authorships": [], "primary_location": None, "abstract_inverted_index": None, "cited_by_count": 9},
-                                        {"doi": "https://doi.org/10.5555/risk.2019.007", "title": "Risk perception and trust across hazards", "publication_year": 2019,
-                                         "authorships": [], "primary_location": None, "abstract_inverted_index": None, "cited_by_count": 3}]})
-        scholar.fetch = Net({**routes(), "https://api.openalex.org/works": guide})
-        r = self.send(ASK)
-        self.wait_job(r["job"])
-        titles = [c["title"] for c in self.last("refsearch")["data"]["candidates"]]
-        self.assertTrue(any("Risk perception" in t for t in titles), titles)
-        self.assertFalse(any("Academic writing" in t for t in titles), titles)
+        j = self.wait_job(r["job"])
+        self.assertEqual(j["status"], "error", j)
+        err = self.last("error")["text"]
+        self.assertIn("nothing", err.lower())
+        self.assertIn("internet", err.lower())
+        self.assertEqual(self.oa.requests, [], "no uncited draft was asked for")
 
     def test_internet_search_switched_off_says_what_is_missing_instead(self):
         config.set_paper_setting(self.proj, "use_online", "never")
@@ -317,18 +335,21 @@ class InTheChat(ChatBase):
         self.assertIn("requires in-text citations", r["messages"][1]["text"])
         self.assertIsNone(r.get("job"))
 
-    def test_a_pasted_paragraph_that_needs_a_citation_starts_the_search_for_that_paragraph(self):
+    def test_a_pasted_paragraph_that_needs_a_citation_is_searched_and_cited_by_the_app(self):
         para = "The second paragraph describes soils, slopes and the access roads that were used to reach every farm in the sample."
         self.main.write_text(MAIN)
         paper_index.refresh(self.name, self.proj, trigger="test")
-        self.oa.script = [{"queries": ["access roads and sampling of farms in rural surveys", "soil and slope effects on farm accessibility"]}]
+        hit = ("10.5555/roads.2012.001", "Access roads, soils and slopes in farm surveys", 2012)
+        self.net = scholar.fetch = Net({**routes(), "https://api.openalex.org/works": openalex(hit, JUNK_HIT), "https://api.crossref.org/works": json.dumps({"message": {"items": []}})})
+        doi_bot.fetch_bibtex = lambda d: ("@article{x,\n author={Diaz, Ana},\n title={Access roads, soils and slopes in farm surveys},\n year={2012},\n journal={Survey Methods},\n doi={%s}\n}" % hit[0]) if d == hit[0] else (_ for _ in ()).throw(RuntimeError("HTTP 404"))
+        self.oa.script = [revise_reply((para, para[:-1] + " [[LX901]]."))]
         r = self.send(f"For this paragraph:\n\n{para}\n\nthere was no in-text citation added in the methodology")
-        self.assertEqual([m["kind"] for m in r["messages"]], ["text", "text"], r["messages"])
-        self.assertIn("You asked for in-text citations", r["messages"][1]["text"])
+        self.assertEqual([m["kind"] for m in r["messages"]], ["text", "plan"], r["messages"])
+        self.assertIn("web", r["messages"][1]["data"]["plan"])
         j = self.wait_job(r["job"])
         self.assertEqual(j["status"], "done", j)
-        d = self.last("refsearch")["data"]
-        self.assertEqual(len(d["ctx"]["chunk_ids"]), 1, "the references are for that paragraph, and picking them cites them there")
-        self.assertIn("access roads", json.dumps(self.oa.requests[0]["body"]["input"]), "the paragraph is what the search words are made from")
-        self.assertEqual((d["how"], d["queries"][0]), ("model", "access roads and sampling of farms in rural surveys"))
-        self.assertEqual(d["ctx"]["request"].split("\n")[0], "For this paragraph:", "picking them later repeats this request, with the paragraph, so they are cited there")
+        asked = " ".join(u for u in self.net.asked if "openalex" in u).lower()
+        self.assertIn("roads", asked, "the paragraph is what the search words are made from")
+        prop = self.proposal()
+        self.assertEqual([a["doi"] for a in prop["bib_adds"]], [hit[0]])
+        self.assertEqual(len(prop["units"][0]["added_cites"]), 1)

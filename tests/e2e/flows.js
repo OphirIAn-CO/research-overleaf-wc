@@ -592,7 +592,7 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   ok(/new text after line/.test(draftCard) && /Nothing here yet/.test(draftCard) && /Rests on: metrics\.csv/.test(draftCard), 'the suggestion is new text: nothing is there yet, and each paragraph says which file it rests on');
   ok(/Numbers that came from your files: [^\n]*0\.412/.test(draftCard), 'the numbers that came from the files are pointed out to be checked');
   await shot(page, '06h-draft');
-  await page.click('.msg.assistant:has-text("What each statement rests on") >> nth=-1 >> button:has-text("Save in my files")');
+  await page.click('.msg.assistant:has-text("What each statement rests on") >> nth=-1 >> button:has-text("insert in my files")');
   const draftSavedBy = Date.now() + 20000;
   while (Date.now() < draftSavedBy && !/Training loss reached 0\.24/.test(fs.readFileSync(`${home}/papers/soil-yield/main.tex`, 'utf8'))) await new Promise((r) => setTimeout(r, 200));
   await page.waitForFunction(() => [...document.querySelectorAll('.msg.assistant')].some((m) => m.innerText.includes('What each statement rests on') && m.innerText.includes('Saved in your files')), null, { timeout: 20000 });

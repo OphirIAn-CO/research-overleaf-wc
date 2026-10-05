@@ -29,14 +29,15 @@ const PARA = 'The second paragraph describes soils, slopes and the access roads 
   await page.screenshot({ path: `${out}/pasted-paragraph.png` });
 
   await page.waitForFunction(() => document.querySelector('.composer button.primary') && document.querySelector('.composer button.primary').textContent === 'Send', null, { timeout: 40000 });
-  // ---- the same paragraph, with an in-text citation asked for: nothing in the library can be cited, so the search for references starts, for that paragraph
+  // ---- the same paragraph, with an in-text citation asked for: the app looks for sources on the internet itself, for that paragraph, and does not hand a list back
   await page.fill('#composer', `For this paragraph:\n\n${PARA}\n\nthere was no in-text citation added in the methodology`);
   await page.press('#composer', 'Enter');
-  await page.waitForSelector('.msg.assistant:has-text("You asked for in-text citations")', { timeout: 30000 });
-  await page.waitForSelector('.refcand', { timeout: 40000 });
-  const card = await page.$eval('.msg.assistant:has(.refcand)', (e) => e.innerText);
-  ok(/Tick the ones you want/.test(card), 'it offers references to choose from, and adds nothing by itself');
-  ok(await page.isVisible('button:has-text("Add them and cite them in the text")'), 'and can cite the ticked ones in that paragraph');
+  await page.waitForSelector('.msg.assistant:has-text("I will also look for sources on the internet")', { timeout: 30000 });
+  ok(true, 'it says it will look for sources on the internet itself');
+  await page.waitForFunction(() => document.querySelector('.composer button.primary') && document.querySelector('.composer button.primary').textContent === 'Send', null, { timeout: 60000 });
+  ok(!(await page.$('.refcand')), 'and does not hand a list of candidates back to the author');
+  const afterThread = await page.$eval('.thread', (e) => e.innerText);
+  ok(!/Tick the ones you want/.test(afterThread), 'nothing waits to be ticked');
   await page.screenshot({ path: `${out}/pasted-paragraph-citation.png` });
   await browser.close();
   const real = errors.filter((e) => !/Failed to load resource/i.test(e));

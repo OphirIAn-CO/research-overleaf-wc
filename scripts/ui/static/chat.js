@@ -221,7 +221,8 @@
     const outlineBtn = h('button', { type: 'button', class: 'attach', text: 'Add outline', title: 'Add a writing brief or outline. It stays local, appears in Your files as an author outline, is followed only when named in a request, and is never cited or sent to Overleaf.' });
     const adding = h('div', { class: 'row chips adding', role: 'status', 'aria-live': 'polite', hidden: true });
     const REQUEST_KINDS = [['edit', 'Improve or correct text that is already written'], ['draft', 'Write new text'], ['cite', 'Add in-text citations to text that is already written'],
-      ['refsearch', 'Find references on the internet'], ['layout', 'Change the layout or format (tables, figures, graphs, position, appendix)'], ['library', 'Answer from my reading (my literature library)'], ['review', 'Peer review']];
+      ['refsearch', 'Find references on the internet'], ['layout', 'Change the layout or format (tables, figures, graphs, position, appendix)'], ['library', 'Answer from my reading (my literature library)'],
+      ['inspect', 'Count or list what is in my paper\'s files (references, figures, tables)'], ['bibliography', 'Bring my library into the bibliography (reference entries with keys)'], ['review', 'Peer review']];
     const kindSel = h('select', { id: 'request-kind', class: 'kind-flag', 'aria-label': 'What kind of request is this?', title: 'Leave on Automatic and I read your message and tell you what I understood. Choose a kind to tell me yourself.' },
       h('option', { value: '', text: 'Automatic: you read it' }), REQUEST_KINDS.map(([v, l]) => h('option', { value: v, text: l })));
     const composer = h('form', { class: 'composer' }, chips, adding, h('div', { class: 'row top' }, attachBtn, outlineBtn, ta, sendBtn), h('div', { class: 'row small kind-row' }, h('label', { for: 'request-kind', class: 'secondary', text: 'This is a request to:' }), kindSel), fileInput);
@@ -762,6 +763,50 @@
       Object.assign(extra, ctx.draft && ctx.revises ? { redraft: ctx.revises } : ctx.draft ? {} : { chunk_ids: ctx.chunk_ids, revises: ctx.revises || undefined });
       await send(ctx.request || 'Support the claims of this text with citations from the sources provided.', extra);
     }
+    const ORIGINS = { record: 'from the bibliography record in your library', doi: 'from its DOI', title: 'found at Crossref by its title', file: 'made from the title, authors and year the file gives: check it' };
+    function bringBubble(m) {
+      const d = m.data, rows = d.rows || [], cmd = d.command || '\\cite', counts = d.counts || {};
+      const fresh = rows.filter((r) => r.status === 'new'), have = rows.filter((r) => r.status === 'have'), cannot = rows.filter((r) => r.status === 'cannot');
+      const kids = [h('p', { text: `Your library has ${plural(rows.length, 'document')}: ${counts.new || 0} can become reference entries, ${counts.have || 0} are in your bibliography already and ${counts.cannot || 0} cannot be added. ` +
+        'Each entry gets a citation key, so a request to write or to cite can use it. Nothing is written until you press the button.' })];
+      if (d.state === 'done' && d.result) {
+        const r = d.result;
+        kids.push(notice('ok', `Added ${plural((r.added || []).length, 'entry', 'entries')} to your bibliography${d.pushed ? ' and sent them to Overleaf' : ''}. Cite one with ${cmd}{key}.`));
+        if ((r.added || []).length) kids.push(h('details', { open: true }, h('summary', { class: 'small', text: 'The keys' }),
+          h('ul', { class: 'small' }, r.added.map((a) => h('li', null, h('code', { class: 'cite', text: `${cmd}{${a.key}}` }), ' ', a.label)))));
+        if ((r.failed || []).length) kids.push(h('p', { class: 'small secondary', text: plural(r.failed.length, 'document') + ' could not be added.' }));
+      } else if (d.state === 'working') {
+        kids.push(busy('Adding the entries to your bibliography...'));
+      } else if (fresh.length) {
+        const picks = new Set(fresh.map((r) => r.doc));
+        const count = h('span', { class: 'small muted' });
+        const sync = () => { count.textContent = `${picks.size} of ${fresh.length} ticked`; };
+        const boxes = fresh.map((r) => {
+          const box = h('input', { type: 'checkbox', checked: true, 'aria-label': 'Add ' + (r.label || r.title) });
+          box.addEventListener('change', () => { if (box.checked) picks.add(r.doc); else picks.delete(r.doc); sync(); });
+          return [box, r];
+        });
+        sync();
+        kids.push(h('div', { class: 'stack tight' }, boxes.map(([box, r]) => h('label', { class: 'hit row tight' }, box, h('div', { class: 'stack tight grow' },
+          h('div', null, h('strong', { text: r.label || r.title }), ' ', h('code', { class: 'cite', text: `${cmd}{${r.key}}` })),
+          h('div', { class: 'small secondary', text: (r.title && r.title !== r.label ? r.title + ' · ' : '') + (ORIGINS[r.origin] || '') }))))));
+        kids.push(h('div', { class: 'row actions' },
+          guarded(h('button', { type: 'button', class: 'primary', text: 'Add the ticked to my bibliography' }), async () => {
+            if (!picks.size) throw new Error('Tick at least one document.');
+            if (st.busy) throw new Error('A request is still running. Wait for it to finish.');
+            const r = await api.post('/api/library/bring', { paper, id: st.cid, message: m.id, doc_ids: [...picks] });
+            await watch(r.job);
+          }),
+          h('button', { type: 'button', class: 'small', text: 'Tick none', onclick: () => { picks.clear(); boxes.forEach(([b]) => { b.checked = false; }); sync(); } }),
+          h('button', { type: 'button', class: 'small', text: 'Tick all', onclick: () => { fresh.forEach((r) => picks.add(r.doc)); boxes.forEach(([b]) => { b.checked = true; }); sync(); } }),
+          h('span', { class: 'grow' }), count));
+      } else kids.push(notice('ok', 'Nothing to add: every document that can be cited is in your bibliography already.'));
+      if (have.length) kids.push(h('details', null, h('summary', { class: 'small', text: `Already in your bibliography: ${have.length}` }),
+        h('ul', { class: 'small' }, have.map((r) => h('li', null, h('code', { class: 'cite', text: `${cmd}{${r.key}}` }), ' ', r.label || r.title)))));
+      if (cannot.length) kids.push(h('details', null, h('summary', { class: 'small', text: `Cannot be added: ${cannot.length}` }),
+        h('ul', { class: 'small' }, cannot.map((r) => h('li', null, h('strong', { text: r.label || r.title }), ': ' + r.why)))));
+      return assistant(...kids);
+    }
     function refsearchBubble(m) {
       const d = m.data, ctx = d.ctx || {}, added = d.added || {}, cmd = d.command || '\\cite';
       const picks = new Set();
@@ -784,9 +829,10 @@
           c.abstract ? h('details', null, h('summary', { class: 'small', text: 'Abstract' }), h('div', { class: 'small', text: c.abstract })) : h('div', { class: 'small muted', text: 'No abstract was available.' }),
           have ? h('div', { class: 'row tight' }, h('code', { class: 'cite', text: `${cmd}{${have.key}}` }), copy(`${cmd}{${have.key}}`), h('span', { class: 'small secondary', text: have.how })) : null));
       };
-      if (!(d.candidates || []).length) kids.push(notice('warn', 'I found no papers with a DOI for those words. Try other words below, or paste the DOI of a paper you know.'));
+      if (!(d.candidates || []).length) kids.push(notice('warn', d.hidden ? `I found ${plural(d.hidden, 'record')}, but none was about your paper's subject, so I am not showing them. Try other words below, or paste the DOI of a paper you know.` : 'I found no papers with a DOI for those words. Try other words below, or paste the DOI of a paper you know.'));
       else {
         (d.candidates || []).forEach((c) => kids.push(row(c)));
+        if (d.hidden) kids.push(h('p', { class: 'small muted', text: `${plural(d.hidden, 'other record')} left out: nothing in the title or abstract was about your paper's subject.` }));
         const useIt = (ctx.chunk_ids && ctx.chunk_ids.length) || ctx.draft;
         kids.push(h('div', { class: 'row actions' },
           guarded(h('button', { type: 'button', class: useIt ? '' : 'primary', text: 'Add the ticked to my bibliography' }), async () => { await pickRefs(m, [...picks]); }),
@@ -924,7 +970,7 @@
             const entry = { q, box, find: null };
             if (CITE_Q.test(q)) {
               entry.find = h('input', { type: 'checkbox', id: `find-${p.id}-${u.unit_id}-${qi}` });
-              nq.append(box, h('label', { class: 'use-box small', for: entry.find.id }, entry.find, ' I do not have the references: look for some on the internet for this question (you choose which to add)'));
+              nq.append(box, h('label', { class: 'use-box small', for: entry.find.id }, entry.find, ' I do not have the references: look for them on the internet for this question (I choose the best ones and cite them)'));
             } else nq.append(box);
             answers.push(entry);
             box.addEventListener('input', updateStatus);
@@ -1020,7 +1066,7 @@
         discuss.append(h('p', { class: 'small secondary', text: answers.length ? 'Your answers to the questions above go with it. Everything you write here is used as given: I add nothing beyond it, and the numbers and names in it are allowed in the new text.' : 'Everything you write here is used as given: I add nothing beyond it, and the numbers and names in it are allowed in the new text.' }),
           h('label', { class: 'small secondary', text: isComment ? 'The reviewer\'s comment (change it if you read it differently)' : 'What I was asked to do (change it if you want it understood differently)' }), req,
           h('label', { class: 'small secondary', text: 'Anything to add or change?' }), more,
-          h('label', { class: 'use-box small', for: wholeFind.id }, wholeFind, ' I do not have the references: look for some on the internet first (you choose which to add)'),
+          h('label', { class: 'use-box small', for: wholeFind.id }, wholeFind, ' I do not have the references: look for them on the internet (I choose the best ones and cite them)'),
           h('div', { class: 'row' }, go, h('button', { type: 'button', class: 'ghost', text: 'Cancel', onclick: () => { discuss.hidden = true; } }),
             h('span', { class: 'small muted', text: 'This asks OpenAI again for this place and costs about as much as the first time.' })));
       };
@@ -1257,6 +1303,7 @@
       if (m.kind === 'refs') return refsBubble(m);
       if (m.kind === 'library') return libraryBubble(m);
       if (m.kind === 'refsearch') return refsearchBubble(m);
+      if (m.kind === 'bring') return bringBubble(m);
       if (m.kind === 'review_plan') return reviewPlanBubble(m);
       if (m.kind === 'review') return reviewBubble(m);
       if (m.kind === 'review_done') return reviewDoneBubble(m);

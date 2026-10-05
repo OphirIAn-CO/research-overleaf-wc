@@ -9,7 +9,7 @@ from tests.test_revise import ReviseBase, user_of
 from tests.test_v2_chat_api import ChatBase
 from writing_core import chat, config, draft, files, library, paper_index, revise
 
-RESULTS_TEXT = ("The best model reached an RMSE of 0.412 on the held-out farms, against 0.588 for the recurrent baseline, as Table~[[LX910]] shows.\n\n"
+RESULTS_TEXT = ("The best model reached an RMSE of 0.412 on the held-out farms, against 0.588 for the recurrent baseline, as Table~[[LX950]] shows.\n\n"
                 "Training loss fell from 0.31 to 0.24 between epochs 10 and 20.")
 BASIS = [{"statement": "The best model reached an RMSE of 0.412", "source": "S1"}, {"statement": "Training loss fell from 0.31", "source": "S2"}]
 
@@ -95,7 +95,7 @@ class Drafting(ReviseBase):
         body = draft.prepare(self.name, self.proj, self.ASK, loc["anchor"], loc["part"])["body"]
         user = openai_text(body)
         self.assertIn("[S1]", user)
-        self.assertIn("<usable_tags>\n[[LX910]] = the number of Table 1 (caption: Means.)", user)
+        self.assertIn("<usable_tags>\n[[LX950]] = the number of Table 1 (caption: Means.)", user)
         self.assertIn("<book_rules>", user)
         self.assertIn("rmse_by_model.png", user)
         self.assertIn("<surrounding_text>", user)
@@ -138,7 +138,7 @@ class Drafting(ReviseBase):
         self.assertEqual(len(u["hunks"]), 2, "one change per paragraph, so some can be kept and others left")
         self.assertEqual(u["hunks"][0]["rests_on"], ["S1"])
         self.assertIn("Table~\\ref{tab:a}", u["hunks"][0]["new"])
-        self.assertEqual(u["new_tags"], ["LX910"])
+        self.assertEqual(u["new_tags"], ["LX950"])
         self.assertIn("0.412", u["from_files"])
         self.assertEqual([b["source"] for b in u["basis"]], ["S1", "S2"])
         body = self.srv.requests[-1]["body"]
@@ -153,7 +153,7 @@ class Drafting(ReviseBase):
         res = revise.apply(self.name, self.proj, r["proposal"]["id"], accept="all", unclean_ok=True)
         self.assertEqual(res["status"], "applied")
         after = self.main.read_text().split("\n")
-        new = RESULTS_TEXT.replace("[[LX910]]", "\\ref{tab:a}").split("\n")
+        new = RESULTS_TEXT.replace("[[LX950]]", "\\ref{tab:a}").split("\n")
         pad_before = [""] if before[a - 1].strip() else []
         pad_after = [""] if before[a].strip() else []
         self.assertEqual(after, before[:a] + pad_before + new + pad_after + before[a:])

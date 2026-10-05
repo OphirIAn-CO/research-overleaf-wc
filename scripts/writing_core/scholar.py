@@ -663,6 +663,62 @@ def search(queries, *, limit=8, use_web=True, use_index=True, steps=None, pages=
     return {"queries": qs, "candidates": cands, "others": [{"title": o["title"], "url": o["url"]} for o in others[:6]], "tried": tried}
 
 
+def subject_stems(text, max_terms=40):
+    return {_stem(w) for w in focus_terms(text, max_terms=max_terms)}
+
+
+def on_subject(c, subject_text, need=2):
+    """Does a record found on the internet say anything about the subject? Its title and abstract must share at least `need` of the subject's own words (stems of the most used
+    words of the paper's title, abstract and keywords, of the passage, of the topic). A record about something else that merely shares a word of the request ("ideas", "introduction")
+    does not pass. With less than two subject words there is nothing to judge by and every record passes."""
+    want = subject_stems(subject_text)
+    if len(want) < 2:
+        return True
+    have = set(terms((c.get("title") or "") + " " + (c.get("abstract") or "")))
+    return len(want & have) >= min(need, len(want))
+
+
+def auto_find(topics, *, per=3, total=10, subject_text="", exclude=(), steps=None):
+    """References found for the writer, without asking: for each topic (a section of an outline, or the subject of the writing) the scholarly indexes are asked and the best records that
+    have a DOI are kept, a few for each topic and `total` in all, the best of every topic first so that each point has a chance. No model is called: the search words are the subject
+    words of each topic. Only a few words per topic leave this computer. -> {candidates: [...], note: ''} where `note` says what went wrong (nothing could be reached) or ''."""
+    topics = [t for t in (topics or []) if (t or "").strip()][:8]
+    skip = {norm_doi(d) for d in exclude}
+    lists, errors = [], []
+    if steps:
+        steps.start("web", "Looking for sources on the internet")
+
+    def one(topic):
+        words = [q for q in local_queries(topic) if not bad_query(q, subject_text)] or ([" ".join(focus_terms(topic, max_terms=6))] if focus_terms(topic) else [])
+        if not words:
+            return []
+        try:
+            return search(words[:2], limit=per * 3, use_web=False, use_index=True)["candidates"]
+        except ScholarError as e:
+            errors.append(str(e))
+            return []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+        lists = list(ex.map(one, topics))
+    topic_of = {id(c): t for c, t in zip(lists, topics)}
+    out, seen = [], set(skip)
+    for rank in range(per):
+        for cands in lists:
+            picked = [c for c in cands if c["doi"] not in seen and not bad_query(c["title"], subject_text) and c.get("title")
+                      and on_subject(c, f"{topic_of[id(cands)]} {subject_text}")]
+            if picked:
+                c = picked[0]
+                seen.add(c["doi"])
+                out.append(c)
+                if len(out) >= total:
+                    break
+        if len(out) >= total:
+            break
+    note = errors[0] if errors and not out else ""
+    if steps:
+        steps.finish("web", f"{len(out)} found" if out else (note or "nothing fitting found"), state="done" if out or not note else "failed", label="Looked for sources on the internet")
+    return {"candidates": out, "note": note}
+
+
 # ------------------------------------------------------------------------------------------------ remembering what was added
 
 FILE = "found_refs.json"

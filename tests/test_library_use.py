@@ -87,8 +87,11 @@ class Use(ReviseBase):
         self.go(ASK_INFORM, part="methods")
         self.assertNotIn("library_sources", user_of(self.srv.requests[-1]["body"]), "the paper's own setting decides when the call does not")
 
-    def test_a_source_that_is_not_in_the_bibliography_informs_but_cannot_be_cited(self):
-        self.bib.write_text("@book{doe2019, author={Doe, A.}, title = {Soil}, year = 2019}\n")
+    def test_a_source_the_file_says_too_little_about_informs_but_cannot_be_cited(self):
+        for f in self.lib.glob("*.pdf"):
+            f.unlink()
+        make_pdf(self.lib / "scan0001.pdf", [["# Methods", "We sampled 40 farms by stratified random sampling and measured moisture weekly with capacitance probes at thirty centimetres."]])
+        library.update()
         self.srv.script = [reply(("We sampled", "We drew a sample of"))]
         r = self.go(ASK_INFORM, part="methods")
         user = user_of(self.srv.requests[-1]["body"])
@@ -96,6 +99,17 @@ class Use(ReviseBase):
         self.assertNotIn("[[LX901]]", user)
         self.assertEqual(r["proposal"]["units"][0]["new_tags"], [])
         self.assertTrue(all(x["tag"] == "" for x in r["proposal"]["library"]))
+
+    def test_a_source_the_bibliography_does_not_have_is_cited_through_an_entry_made_from_the_file(self):
+        import doi_bot
+        self.addCleanup(setattr, doi_bot, "fetch_bibtex", doi_bot.fetch_bibtex)
+        doi_bot.fetch_bibtex = lambda d: (_ for _ in ()).throw(RuntimeError("HTTP 404"))
+        self.bib.write_text("@book{doe2019, author={Doe, A.}, title = {Soil}, year = 2019}\n")
+        self.srv.script = [reply((SAMPLED, WITH_CITE))]
+        r = self.go(ASK, part="methods")
+        self.assertEqual(r["status"], "proposed", r["proposal"]["units"][0].get("error"))
+        self.assertIn("Cite it with [[LX901]].", user_of(self.srv.requests[-1]["body"]))
+        self.assertEqual([(a["key"], a["origin"]) for a in r["proposal"]["bib_adds"]], [("Smith2020Soil", "file")])
 
     def test_the_preview_says_what_would_go_out_and_the_hash_follows_it(self):
         a = self.go(ASK, part="methods", dry_run=True)

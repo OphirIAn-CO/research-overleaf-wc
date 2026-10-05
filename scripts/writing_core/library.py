@@ -920,7 +920,7 @@ WANTS_LIBRARY = re.compile(
     r"cite|citations?|add (?:a |some )?(?:source|reference|citation)s?|find (?:a |some )?(?:source|reference|evidence|literature)s?|evidence (?:for|from)|literature (?:says|shows|on|about))\b"
     r"|\bwhat does (?:the )?literature say\b", re.I)
 FIRST_TAG = 901                      # tags LX901, LX902, ...: the citations a request may add (the original text never has this many protected pieces)
-MAX_CITABLE = 9
+MAX_CITABLE = 24                     # tags LX901 to LX924: a literature review of dozens of papers can be cited from, not only the first few
 
 
 def wants(instruction):
@@ -1028,12 +1028,54 @@ def _doi_from_title(proj, d):
     return doi
 
 
+def _bibtex_text(s):
+    return re.sub(r"([&%#_$])", r"\\\1", s)
+
+
+def _bibtex_name(person):
+    """'John Smith' / 'Smith, J.' -> 'Smith, John' / 'Smith, J.'"""
+    person = person.strip()
+    if "," in person or len(person.split()) < 2:
+        return person
+    w = person.split()
+    return f"{w[-1]}, {' '.join(w[:-1])}"
+
+
+def local_entry(d, text, taken=(), doi="", note=None):
+    """A BibTeX entry made from what the file itself says (its title, authors and year), for a document with no record and no DOI that Crossref knows. It is marked in its note so that
+    the author knows to check it. -> (bibtex, key) or None when the file says too little to cite (a title alone, or a title that is not one)."""
+    import doi_bot
+    title = _plausible_title(d.get("title") or "")
+    if len(_tokens_of(title)) < 3:
+        return None
+    etal = bool(re.search(r"\bet\s+al\.?\s*$", d.get("authors") or "", re.I))
+    people = author_list(re.sub(r"[\s,]*\bet\s+al\.?\s*$", "", d.get("authors") or "", flags=re.I))
+    year = d.get("year") or ""
+    year = year if re.fullmatch(r"(?:19|20)\d{2}", year) else ""
+    if not people and not year:
+        return None
+    first = doi_bot.ascii_(surname(people[0])) if people else "Anon"
+    word = next((w for w in re.findall(r"[A-Za-z]{4,}", title) if w.lower() not in {"the", "with", "from", "using", "based", "this", "that", "their", "into"}), "")
+    base = (first or "Anon") + year + doi_bot.ascii_(word).capitalize()
+    key, n = base, 1
+    while re.search(r"@\w+\s*\{\s*" + re.escape(key) + r"\s*,", text) or key in taken:
+        n += 1
+        key = base + (chr(96 + n) if n <= 27 else str(n))
+    fields = []
+    if people:
+        fields.append("author = {" + " and ".join(_bibtex_text(_bibtex_name(x)) for x in people[:12]) + (" and others" if etal or len(people) > 12 else "") + "}")
+    fields += ["title = {{" + _bibtex_text(title) + "}}"] + ([f"year = {{{year}}}"] if year else []) + ([f"doi = {{{doi}}}"] if doi else [])
+    fields.append("note = {" + (note or "Entry made from the file " + _bibtex_text(Path(d.get("rel") or d.get("path") or "").name) + ": no DOI or record was found, so the details are what the file itself says. Check them before submitting.") + "}")
+    return "@misc{" + key + ",\n    " + ",\n    ".join(fields) + "\n}", key
+
+
 def entry_for(proj, chunk, text, taken=()):
     """The bibliography entry a library document would get, without writing anything. -> ({key, bibtex, doi, title, doc, label}, '') or (None, why it cannot be cited, in words for the author)"""
     import doi_bot
     d = get_doc(chunk["doc"])
     if not d:
         return None, "it is no longer in the library"
+    origin = "record"
     try:
         if d["bibtex"]:
             key, n = d["bib_key"], 1
@@ -1043,25 +1085,126 @@ def entry_for(proj, chunk, text, taken=()):
             bib, doi = d["bibtex"].replace("{" + d["bib_key"] + ",", "{" + key + ",", 1), d["doi"] or ""
         else:
             doi, how = d["doi"] or _recalled(d["id"]), "its DOI"
+            origin = "doi"
             if not doi:
                 doi, how = _doi_from_title(proj, d), "a title match at Crossref"
-                if not doi:
-                    return None, ("the file names no DOI and has no bibliography record, and Crossref has no work with its title" if len(_tokens_of(d["title"])) >= 4 and
-                                  config.paper_settings(proj).get("use_online") != "never" else
-                                  "the file names no DOI and has no bibliography record (add its DOI or a .bib with its entry to the library folder)")
-                _remember(d["id"], doi, d["title"])
-            try:
-                bib, key = doi_bot.prepare_entry(doi, text, taken, fetch=_fetched)
-            except Exception as e:  # noqa: BLE001 - no network, an unknown DOI
-                return None, f"I could not get the reference data for DOI {doi} from doi.org ({str(e)[:90] or type(e).__name__}); check the connection, then ask again"
+                origin = "title"
+                if doi:
+                    _remember(d["id"], doi, d["title"])
+            local = None
+            if not doi:
+                local = local_entry(d, text, taken)
+                if not local:
+                    return None, ("the file names no DOI and has no bibliography record, Crossref has no work with its title, and the file's own title, authors and year are too little to build an entry from"
+                                  if len(_tokens_of(d["title"])) >= 3 else "the file names no DOI and has no bibliography record, and I could not read a title from it (add its DOI or a .bib with its entry to the library folder)")
+                bib, key = local
+                doi, origin = "", "file"
+            if doi:
+                try:
+                    bib, key = doi_bot.prepare_entry(doi, text, taken, fetch=_fetched)
+                except Exception as e:  # noqa: BLE001 - no network, an unknown DOI: the file's own details are the next best thing
+                    local = local_entry(d, text, taken, doi=doi)
+                    if not local:
+                        return None, f"I could not get the reference data for DOI {doi} from doi.org ({str(e)[:90] or type(e).__name__}); check the connection, then ask again"
+                    bib, key = local
+                    doi, origin = "", "file"
     except Exception as e:  # noqa: BLE001
         return None, f"its record could not be used ({str(e)[:90] or type(e).__name__})"
-    return {"key": key, "bibtex": bib, "doi": doi or "", "title": d["title"] or chunk.get("title", ""), "doc": chunk["doc"], "label": chunk.get("label", "")}, ""
+    return {"key": key, "bibtex": bib, "doi": doi or "", "title": d["title"] or chunk.get("title", ""), "doc": chunk["doc"], "label": chunk.get("label", ""), "origin": origin}, ""
 
 
 def plan_entry(proj, chunk, text, taken=()):
     """entry_for without the reason: the entry, or None."""
     return entry_for(proj, chunk, text, taken)[0]
+
+
+_SOURCE_Q = re.compile(r"\b(?:sources?|references?|citations?|bibliograph\w*|literature|publications?|studies|articles?|papers?)\b", re.I)
+_DATA_SOURCE = re.compile(r"\bdata[\s-]?sources?\b|\bsources?\s+(?:of|for)\s+(?:the\s+|this\s+|these\s+)?(?:data|dataset|sample|numbers?|figures?|tables?|values?|images?|photos?|maps?)\b", re.I)
+_SOURCE_ASK = re.compile(r"\b(?:which|what|provide|supply|give|specify|share|confirm|choose|select|identify|name|point|tell|can you|could you|please|should|replace|need|needed|missing|available|appropriate|use)\b", re.I)
+
+
+def is_source_question(q):
+    """A question of the model that asks the author to supply or pick the sources for a claim ("Which bibliography sources should replace the placeholders for ...?"): the model has the
+    author's library and what was found online, so choosing the source is its job and not a question for the author."""
+    if _DATA_SOURCE.search(q or ""):
+        return False                                          # where the data come from is the author's to say
+    return bool(_SOURCE_Q.search(q or "") and _SOURCE_ASK.search(q or ""))
+
+
+def drop_source_questions(questions):
+    """-> (the questions that only the author can answer, the ones that asked for sources)"""
+    keep, dropped = [], []
+    for q in questions or []:
+        (dropped if is_source_question(q) else keep).append(q)
+    return keep, dropped
+
+
+def source_gap_warning(dropped, searched):
+    """The sentence that replaces the model's questions about sources: said once, without handing the work back."""
+    if not dropped:
+        return ""
+    where = "your library and the internet" if searched else "your library"
+    return (f"I looked in {where} and found nothing that supports {'one claim' if len(dropped) == 1 else str(len(dropped)) + ' of the claims'}, so I did not ask you to choose sources. "
+            "Those claims are written without a citation (or left out); add a source yourself, or say which paper to use.")
+
+
+def web_entry(proj, c, text, taken=()):
+    """The bibliography entry for a reference found on the internet: doi.org's record under the paper's key style, or, when doi.org does not answer, the details the search found (marked in
+    the entry's note). -> {key, bibtex, doi, title, doc, label, origin} or None"""
+    import doi_bot
+    doi = c["doi"]
+    try:
+        bib, key = doi_bot.prepare_entry(doi, text, taken, fetch=_fetched)
+        origin = "web"
+    except Exception:  # noqa: BLE001 - no network to doi.org: what the search found is the next best thing
+        people = "; ".join(c.get("authors") or [])
+        local = local_entry({"title": c.get("title", ""), "authors": people, "year": str(c.get("year") or ""), "rel": ""}, text, taken, doi=doi,
+                            note="Entry made from an internet search result: doi.org did not answer, so the details are what the search found. Check them before submitting.")
+        if not local:
+            return None
+        (bib, key), origin = local, "web-search"
+    return {"key": key, "bibtex": bib, "doi": doi, "title": c.get("title", ""), "doc": "found:" + doi, "label": c.get("label", ""), "origin": origin}
+
+
+def web_chunk(c):
+    """A reference found on the internet (search result with its abstract) as a part of the library a request can read: only its title and abstract are known."""
+    from . import scholar
+    return dict(scholar.chunk_of(dict(c, key="")), cite_key="", in_bib=False, web=True)
+
+
+def file_entry_warning(adds):
+    """The sentence for the author when some of the references a request cites are entries made from a file's own details. '' when there are none."""
+    fromfile = [a for a in adds if a.get("origin") == "file"]
+    if not fromfile:
+        return ""
+    return (f"{len(fromfile)} of the sources have no bibliography record and no DOI that I could find, so their reference entry ({', '.join(a['key'] for a in fromfile[:6])}{'...' if len(fromfile) > 6 else ''}) "
+            "is made from the title, authors and year the file itself gives. They are marked in the entry's note: check them when they are added to your bibliography.")
+
+
+def _prefetch(proj, chunks, limit=None):
+    """Ask doi.org for the reference data of the documents that name a DOI, and Crossref for the DOI of those that name none, a handful at a time, so that dozens of documents are not
+    asked one after the other. What they say is kept (and so is a refusal); entry_for then finds it there."""
+    from concurrent.futures import ThreadPoolExecutor
+    dois, titles = [], []
+    for c in chunks[:limit or MAX_CITABLE * 2]:
+        d = get_doc(c["doc"])
+        if not d or d["bibtex"]:
+            continue
+        doi = d["doi"] or _recalled(d["id"])
+        if doi and doi not in dois:
+            dois.append(doi)
+        elif not doi:
+            titles.append(d)
+
+    def one(x):
+        try:
+            _fetched(x) if isinstance(x, str) else _doi_from_title(proj, x)
+        except Exception:  # noqa: BLE001 - kept as a refusal for a minute; entry_for says why
+            pass
+    todo = dois + titles
+    if len(todo) > 1:
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            list(ex.map(one, todo))
 
 
 def offer_new(proj, lib):
@@ -1071,8 +1214,23 @@ def offer_new(proj, lib):
     adds = lib.setdefault("bib_adds", [])
     bad = lib.setdefault("uncitable", [])
     text = _bib_text(proj)
+    _prefetch(proj, [c for c in lib["chunks"] if not c.get("cite_key") and not c.get("online")])
     citable = {c["cite_key"] for c in lib["chunks"] if c.get("cite_key")}
+    bib = paper_bib(proj)
     for c in lib["chunks"]:
+        if c.get("web") and not c.get("cite_key"):                    # found on the internet by this request: in the bibliography already, or an entry that waits for the saving
+            have = cite_for({"doi": c["doi"], "title": c["title"]}, bib)
+            if have:
+                c.update(cite_key=have["key"], in_bib=True)
+            elif len(citable) < MAX_CITABLE:
+                prior = next((a for a in adds if a["doc"] == c["doc"]), None) or web_entry(proj, c, text, {a["key"] for a in adds})
+                if prior:
+                    if prior not in adds:
+                        adds.append(prior)
+                    c.update(cite_key=prior["key"], pending=True, can_add=False)
+            if c.get("cite_key"):
+                citable.add(c["cite_key"])
+            continue
         if c.get("cite_key") or c.get("online"):
             continue
         prior = next((a for a in adds if a["doc"] == c["doc"]), None)
@@ -1098,26 +1256,111 @@ def retrieval_text(instruction="", passage="", facts="", subject=""):
     return " ".join(list(dict.fromkeys(first + rest))[:14])
 
 
-def relevant(proj, instruction, passage="", mode="auto", k=4, budget=1600, facts="", online=(), subject=""):
+def query_sections(texts, k=24, budget=6500, per_doc=2):
+    """The library looked up once for each part of what is being written (each section of an outline, say), and the results merged so that every part is represented: the best part of
+    each query in turn, then the next. A literature review of dozens of papers is read for every point of the outline, not only for the request as a whole. -> list of hits"""
+    per = []
+    for t in texts:
+        r = query(t, k=k, budget=10 ** 6, per_doc=per_doc, guides=False)["chunks"] if t.strip() else []
+        per.append(r)
+    out, seen, used, per_doc_n, i = [], set(), 0, {}, 0
+    while len(out) < k and any(i < len(r) for r in per):
+        for r in per:
+            if i >= len(r):
+                continue
+            c = r[i]
+            if c["id"] in seen or per_doc_n.get(c["doc"], 0) >= per_doc or (out and used + c["tokens"] > budget):
+                continue
+            seen.add(c["id"])
+            per_doc_n[c["doc"]] = per_doc_n.get(c["doc"], 0) + 1
+            used += c["tokens"]
+            out.append(c)
+            if len(out) >= k:
+                break
+        i += 1
+    return out
+
+
+def relevant(proj, instruction, passage="", mode="auto", k=4, budget=1600, facts="", online=(), subject="", sections=(), web=()):
     """The parts of the library a request should see, or None. In "auto" a request uses the library when it asks for sources, citations or the author's reading (in the
     request or in the author's answers to the model's questions); "always" searches for every request; "never" for none. Also the references found online and added to this
     paper's bibliography that fit the request, and always the ones the author picked (online: their DOIs).
-    What is looked up is the subject (`subject`: the outline sections asked for and the abstract; `passage`: the text around the place), never the words that say how to write; and a
-    guide to writing is never returned as literature.
+    What is looked up is the subject (`subject`: the outline sections asked for and the abstract; `passage`: the text around the place), never the words that say how to write; with
+    `sections` (the parts of an outline) the library is looked up once for each, so that every point has its sources; and a guide to writing is never returned as literature.
     -> {chunks: [hit with in_bib / cite_key], bib_adds: [entries that go to the bibliography when the citing text is saved], uncitable: [{label, why}], why, command}"""
     from . import scholar
     ask = f"{instruction}\n{facts}".strip()
     forced = scholar.recall(proj, "", force=online) if online else []
-    if not forced and (mode == "never" or (mode != "always" and not wants(ask))):
+    if not forced and not web and (mode == "never" or (mode != "always" and not wants(ask))):
         return None
     text = retrieval_text(instruction, passage, facts, subject) or f"{ask} {passage[:800]}"
-    chunks = annotate(query(text, k=k, budget=budget, per_doc=2, guides=False)["chunks"], proj) if mode != "never" and _db_path().exists() else []
+    if mode != "never" and _db_path().exists():
+        if sections:
+            queries = [text] + [" ".join(scholar.focus_terms(sec, facts, max_terms=12)) for sec in sections]
+            chunks = annotate(query_sections(queries, k=k, budget=budget), proj)
+        else:
+            chunks = annotate(query(text, k=k, budget=budget, per_doc=2, guides=False)["chunks"], proj)
+    else:
+        chunks = []
     have = {c["cite_key"] for c in forced + chunks if c.get("cite_key")}
     found = [] if mode == "never" else [c for c in scholar.recall(proj, text, k=3) if c["cite_key"] not in have and c["id"] not in {x["id"] for x in forced}]
-    every = forced + found + chunks
+    mine = {doc_doi for doc_doi in (c.get("doi") for c in chunks) if doc_doi}
+    novel = [web_chunk(c) for c in web if c.get("doi") and c["doi"] not in mine and c["doi"] not in {x["doi"] for x in forced + found}]
+    every = forced + found + chunks[:16] + novel + chunks[16:]      # the author's own library first; what was found online comes before the tail so that the tag limit does not cut it
     if not every:
         return None
     return offer_new(proj, {"chunks": every, "why": "picked" if forced else "always" if mode == "always" else "asked", "command": cite_command(proj)})
+
+
+def bring_plan(proj, doc_ids=None):
+    """What each document of the library would be in this paper's bibliography. -> [{doc, label, title, rel, status, key, origin, doi, why, bibtex}] with status
+    "have" (it is in the bibliography already, under `key`), "new" (an entry can be made: `origin` says from what: a record in the library, its DOI, a title match at Crossref, or
+    the file's own details) or "cannot" (`why`). The keys are the ones the entries would get, all different from each other and from the bibliography's."""
+    docs = [d for d in docs_all() if not doc_ids or d["id"] in set(doc_ids)]
+    bib, text = paper_bib(proj), _bib_text(proj)
+    todo = []
+    rows = []
+    for d in docs:
+        hit = cite_for({"doi": d["doi"], "title": d["title"]}, bib)
+        if hit:
+            rows.append({"doc": d["id"], "label": d["label"] or d["rel"], "title": d["title"], "rel": d["rel"], "status": "have", "key": hit["key"], "origin": "", "doi": d["doi"], "why": "", "bibtex": ""})
+        else:
+            todo.append(d)
+    _prefetch(proj, [{"doc": d["id"]} for d in todo], limit=len(todo))
+    taken = set()
+    for d in todo:
+        entry, why = entry_for(proj, {"doc": d["id"], "title": d["title"], "label": d["label"]}, text, taken)
+        if entry:
+            taken.add(entry["key"])
+            rows.append({"doc": d["id"], "label": d["label"] or d["rel"], "title": d["title"], "rel": d["rel"], "status": "new", "key": entry["key"], "origin": entry["origin"], "doi": entry["doi"],
+                         "why": "", "bibtex": entry["bibtex"]})
+        else:
+            rows.append({"doc": d["id"], "label": d["label"] or d["rel"], "title": d["title"], "rel": d["rel"], "status": "cannot", "key": "", "origin": "", "doi": d["doi"], "why": why, "bibtex": ""})
+    order = {"new": 0, "cannot": 1, "have": 2}
+    return sorted(rows, key=lambda r: (order[r["status"]], (r["label"] or "").lower()))
+
+
+def docs_all():
+    """Every document of the library that can be a reference: the articles and books, and the entries of the .bib files in it."""
+    return [d for d in docs(limit=100000) if d.get("parts", 1)]
+
+
+def bring_apply(proj, doc_ids):
+    """Write the entries of these documents to the paper's bibliography (not to Mendeley: dozens at once is the author's to decide). -> {added: [{doc, key, origin}], had: n, failed: [{doc, why}]}"""
+    import doi_bot
+    rows = bring_plan(proj, doc_ids)
+    bib_path = Path(proj["path"]) / proj["bib"]
+    out = {"added": [], "had": sum(1 for r in rows if r["status"] == "have"), "failed": [{"doc": r["doc"], "label": r["label"], "why": r["why"]} for r in rows if r["status"] == "cannot"]}
+    for r in rows:
+        if r["status"] != "new":
+            continue
+        try:
+            doi_bot.commit_entry(bib_path, r["bibtex"], r["key"], r["doi"], source="library", mirror=False, push=False)
+        except OSError as e:
+            out["failed"].append({"doc": r["doc"], "label": r["label"], "why": f"could not write to the bibliography ({e})"})
+            continue
+        out["added"].append({"doc": r["doc"], "label": r["label"], "key": r["key"], "origin": r["origin"]})
+    return out
 
 
 def request_block(lib):

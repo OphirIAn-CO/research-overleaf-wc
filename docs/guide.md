@@ -120,9 +120,12 @@ mention. If the text is not found (you changed it, or it came from somewhere els
 while you answer; one button, **Send my responses and re-edit** (under the questions and in the row of buttons), sends everything together and asks OpenAI again for the same place. It uses your replies as
 given: it adds nothing beyond them, and the numbers and names in them are not treated as invented (everything else is checked as before). A line next to the button counts the questions you have answered.
 
-- **If you do not have the references a question asks for,** tick **I do not have the references: look for some on the internet for this question**. It is a tick, not a button: nothing is searched when you tick it.
-  When you press **Send my responses and re-edit**, the references are looked for first (the words come from the ticked questions, your answers and the text), you choose which to add, and **Add them and write the
-  suggestion again with them** then makes the new suggestion with every answer and the references you chose.
+- **The model does not ask you to choose sources.** When it would ask "Which sources should replace the placeholders?", the app answers that itself: it reads your library for every point of your outline, looks
+  on the internet for the points your library does not cover, and cites what fits. If nothing supports a claim, the suggestion says so ("I looked in your library and the internet and found nothing that supports
+  one claim") and writes the claim without a citation; it never hands the choice back to you.
+- **If you want references looked for on the internet for one of the remaining questions,** tick **I do not have the references: look for them on the internet for this question**. It is a tick, not a button:
+  nothing is searched when you tick it. When you press **Send my responses and re-edit**, the app searches (the words come from the ticked questions, your answers and the text), keeps the records that are about your
+  subject, writes the suggestion again with every answer and cites them. You are not asked to choose; their entries are written to your bibliography only if the text you save cites them.
 - **To change what was asked, or to add something not covered by a question,** press **Add instructions or change the request** (**Discuss and revise** when there was no question). It opens a small panel with the request
   as it was understood (for a reviewer's comment: the comment itself, which you can reword), a box for anything to add or change ("keep it to two sentences") and a tick to look for references first. **Send and make a new
   suggestion** sends everything together, as above.
@@ -164,7 +167,14 @@ Point the app at the folder where you keep books, articles and PDFs (**Settings 
 - **Search it from the chat.** Ask a question about your reading and you get the best parts, with the document, the page and how to cite it, found on your computer (nothing goes to OpenAI):
   *"what do my articles say about well data curation?"*, *"search my library for stratified sampling"*. A part whose document is already in the paper's bibliography shows its `\cite{key}`.
   One that is not has **Add to my bibliography**: it copies the entry from your `.bib`, or adds the document by its DOI the usual way (bibliography, Mendeley group, Overleaf).
-- **Use it in a request.** A request that asks for sources, citations or your reading ("support the sampling statement with my library", "add citations to the introduction") sends the few best parts to the model
+- **Every document is a reference.** A document of your library can be cited right away, whatever it is: it takes its entry from a `.bib` record, else from its DOI (the one in the file, or the one Crossref
+  gives for its exact title), else from the title, authors and year the file itself gives. An entry made from a file is marked in its `note` field ("check the details") and the suggestion tells you which ones
+  they are. Only a file that says too little about itself (no title, or neither authors nor year) cannot be cited, and the app says why for each such document.
+- **Bring the whole library into the bibliography.** *"Convert the documents of my library into references"* (or *"bring my library into the bibliography"*) lists what each document would become, with its citation key
+  (the "tag" you can cite it with). Tick the ones you want and press **Add the ticked to my bibliography**; they are written to your `.bib` and sent to Overleaf. Nothing is written before you press the button.
+  *"How many references are in my .bib file?"* (or how many figures or tables the paper has, or which documents are not in the bibliography yet) is answered from your files, with nothing sent anywhere.
+- **Use it in a request.** A request that asks for sources, citations or your reading ("support the sampling statement with my library", "add citations to the introduction") sends the best parts to the model
+  (for a long outline: the best parts for every point of it, up to 24 sources)
   with it. Each source the paper's bibliography already has comes with a tag the model may write to cite it; the app turns the tag into the real `\citep{key}` (or whatever command the paper uses most).
   Any other citation is refused, and a source that is not in the bibliography can inform the wording but is never cited. Per paper you can set the library to *when I ask* (default), *every request* or *never*.
   The request card lists the parts that go out; the answer lists the citations it adds.
@@ -178,11 +188,12 @@ The app looks on the open web the way you would (a web search, then the page of 
 indexes, OpenAlex and Crossref, as a second source. Only a few search words leave your computer. You get a card with each paper, its abstract, a link to it by DOI and, for a paper already in your
 bibliography, its `\cite`.
 
-- **Nothing is added by itself.** Tick the papers you want and press **Add the ticked to my bibliography**: they go into your `.bib`, your Mendeley group and Overleaf like a pasted DOI, and the card gives the `\cite` to paste.
-- **From a question in a suggestion.** When the model asks which citations would justify a statement (or the reviewer comment you are answering asks for support), that question has a tick, **I do not have the
-  references: look for some on the internet for this question**. Answer the other questions, then press **Send my responses and re-edit**: the search runs first, with the ticked questions, all your answers and the text
-  as its subject. Tick the papers and press **Add them and write the suggestion again with them**: the suggestion is written again with your answers and their abstracts, and cites them where its sentences are
-  supported. The first suggestion is marked as replaced.
+- **When you ask for citations while writing or editing, the app searches for you.** If the request asks for citations or sources (or your outline has places marked [REF], (Author, year) or "citation needed"), the app
+  looks for papers on the internet for each point of the outline (or for the passage), keeps only the records whose title or abstract is about your paper's subject, and offers them to the model with the ones in
+  your library. Nothing is shown for you to choose from, and an entry reaches your bibliography only if the text you save cites it. The suggestion lists what it cited and marks each as found online. A record
+  that merely shares a word of your request with your paper ("ideas", "introduction") is never used.
+- **A search you ask for yourself shows its findings.** For *"find references about X"*, the card lists the papers that are about the subject (and says how many it left out because they were not), and nothing is added by itself. Tick the papers you want and press **Add the ticked to my bibliography**: they go into your `.bib`, your Mendeley group and Overleaf like a pasted DOI, and the card gives the `\cite` to paste.
+- **From a question in a suggestion.** See [Answering the model's questions](#answering-the-models-questions-and-changing-a-suggestion): ticking the question makes the app search, pick and cite without a list to choose from.
 - **What the model knows about a paper found online is its abstract.** The app never has the paper itself. The suggestion says so next to the citation ("cited from its abstract only: read the paper"), the model is told to say
   no more than the abstract says, and a citation is only ever one of those you added; an invented one is refused like any other.
 - **Later requests can cite them too.** Once added, a request that asks for sources or citations ("support the sampling statement with a source about armed groups attacking pipelines, and cite it") is offered the
@@ -260,8 +271,12 @@ Asking to *write* something (not to improve what is there) is understood as a re
   read for it), otherwise by looking its title up at Crossref. The entry (`Author2019Word`, and the Mendeley copy) is written to your bibliography only when you save a text that really cites it, and the `\cite{key}` uses that key.
   A document that cannot be cited says why in the plan ("the file names no DOI and has no bibliography record", "I could not get the reference data for DOI ... from doi.org"), so you know what to fix: add its DOI, or a `.bib` with its entry,
   to the library folder.
-- **When nothing in the library can be cited**, the app does not write an uncited text. It searches the internet for references on the subject of your outline, shows them with their abstracts, and
-  **Add them and cite them in the text** writes the paragraphs again with the ones you ticked. The same happens when you ask for an in-text citation in a pasted paragraph or a selected text: the search is made from that text.
+- **The library is read for every point of the outline**, not for the request as a whole: each numbered section is looked up in your library and the best parts of each go along (up to 24 sources, one library
+  of dozens of papers being used as a literature review). Where the outline has a placeholder for a reference ([REF], [ref: topic], (Author, year), "citation needed"), the model picks the source that fits and cites it;
+  it is not allowed to ask you which sources to use.
+- **Where the library has nothing for a point, the app searches the internet itself** (a few words per outline section), keeps the records whose title or abstract is about your subject, and cites those that fit
+  (marked as found online; the model sees only their abstract and may say no more than it says). If nothing citable on your subject exists in the library or on the internet, the app says so and does not write an
+  uncited text. The same happens when you ask for an in-text citation in a pasted paragraph or a selected text: the search is made from that text.
 - **Complete paragraphs.** A request to write a section from an outline produces the paragraphs themselves, with the section heading when the section does not exist yet, not edits.
 
 ## Changing the form of the paper: tables, figures, graphs, the appendix

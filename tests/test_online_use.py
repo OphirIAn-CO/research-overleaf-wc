@@ -157,14 +157,18 @@ class UploadedButNotInTheBibliography(Offline):
         self.assertEqual(b["status"], "proposed")
         self.assertEqual(self.asked, ["10.1234/abc.2020.001"], "doi.org was asked once")
 
-    def test_if_doi_org_does_not_know_the_document_it_informs_but_is_not_cited(self):
+    def test_if_doi_org_does_not_know_the_document_its_entry_is_made_from_what_the_file_says_and_flagged(self):
         self.DOIS.clear()
         self.addCleanup(self.DOIS.update, {"10.1234/abc.2020.001": DOI_ENTRY})
-        self.srv.script = [reply(("We sampled", "We drew a sample of"))]
-        r = self.go(self.ASK.replace(" and cite it", ""), part="methods")
-        self.assertIn("Not in the paper's bibliography: it can inform the wording but must not be cited.", user_of(self.srv.requests[-1]["body"]))
-        self.assertEqual(r["proposal"]["bib_adds"], [])
-        self.assertEqual(r["proposal"]["units"][0]["new_tags"], [])
+        self.srv.script = [reply((SAMPLED, WITH_CITE))]
+        r = self.go(self.ASK, part="methods")
+        self.assertIn("Cite it with [[LX901]].", user_of(self.srv.requests[-1]["body"]))
+        add = r["proposal"]["bib_adds"][0]
+        self.assertEqual((add["key"], add["origin"], add["doi"]), ("Smith2020Soil", "file", ""))
+        self.assertIn("doi = {10.1234/abc.2020.001}", add["bibtex"], "the DOI the file named is kept in the entry")
+        self.assertIn("Entry made from the file", add["bibtex"])
+        self.assertTrue(any("made from the title, authors and year the file itself gives" in w for w in r["proposal"]["warnings"]), r["proposal"]["warnings"])
+        self.assertEqual(r["proposal"]["units"][0]["added_cites"], ["\\cite{Smith2020Soil}"])
 
     def test_a_key_that_is_taken_by_another_entry_gets_a_free_one(self):
         self.bib.write_text(self.bib.read_text() + "@article{Smith2020Soil, author={Other, A.}, title={Something else entirely}, year={2020}}\n")

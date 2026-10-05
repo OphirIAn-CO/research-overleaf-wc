@@ -169,7 +169,7 @@ class Search(ChatBase):
         pid, ids = res["data"]["proposal"], res["data"]["chunk_ids"]
         facts = "Question: Which additional citations would help justify the points about security?\nAnswer: add a citation of how armed groups attacking pipelines affects the infrastructure in Colombia"
         self.oa.script = [{"queries": ["armed groups attacks on pipelines Colombia infrastructure", "violence effects on energy infrastructure"]}]
-        j, m = self.search("Find references for the question about security", find_refs=True, chunk_ids=ids, facts=facts, revises=pid)
+        j, m = self.search("Find references for the question about security", flag="refsearch", chunk_ids=ids, facts=facts, revises=pid)
         d = m["data"]
         self.assertEqual(d["how"], "model")
         sent = json.dumps(self.oa.requests[-1]["body"])
@@ -181,6 +181,63 @@ class Search(ChatBase):
         # the author types other words
         j, m2 = self.search("Find references about pipelines", find_refs=True, chunk_ids=ids, facts=facts, revises=pid, words="oil pipeline sabotage Colombia")
         self.assertEqual((m2["data"]["how"], m2["data"]["queries"]), ("given", ["oil pipeline sabotage Colombia"]))
+
+    def test_ticking_look_for_references_while_answering_searches_picks_and_cites_without_asking(self):
+        """The author answers the model's question and ticks "look for them on the internet": the app searches, keeps what is about the subject, rewrites with it and cites it."""
+        self.oa.script = [reply(("Each region has a distinct climate and soil.", "Each region has its own climate and soil."), questions=["Which additional citations would help justify the points about security?"])]
+        r = self.send(ASK)
+        self.wait_job(r["job"])
+        res = self.last("result")
+        pid, ids = res["data"]["proposal"], res["data"]["chunk_ids"]
+        facts = "Question: Which additional citations would help justify the points about security?\nAnswer: add a citation of how armed groups attacking pipelines affects the infrastructure in Colombia"
+        self.oa.script = [reply(("Each region has a distinct climate and soil.", "Each region has a distinct climate and soil [[LX901]]."))]
+        before = self.bib.read_text()
+        r = self.send("Revise the suggestion with my answers", find_refs=True, chunk_ids=ids, facts=facts, revises=pid)
+        plan = r["messages"][1]["data"]["plan"]
+        self.assertEqual(plan["web"], {"ask": []}, "the app looks for the sources itself")
+        done = self.wait_job(r["job"])
+        self.assertEqual(done["status"], "done", done)
+        self.assertEqual([m["kind"] for m in self.chat_thread()["thread"]["messages"] if m["kind"] == "refsearch"], [], "no card of candidates to choose from")
+        keys = [s["key"] for s in done["steps"]]
+        self.assertIn("web", keys)
+        st, prop = self.c.get(f"/api/proposal?paper=alpha&id={self.last('result')['data']['proposal']}")
+        u = prop["units"][0]
+        self.assertEqual(u["added_cites"], ["\\cite{Rojas2019Armed}"], u.get("error"))
+        self.assertTrue(any(x["online"] and x["cite_key"] == "Rojas2019Armed" for x in prop["library"]))
+        self.assertEqual([a["key"] for a in prop["bib_adds"]], ["Rojas2019Armed"])
+        self.assertEqual(self.bib.read_text(), before, "the entry is written when the text that cites it is saved, not before")
+        sent = json.dumps(self.oa.requests[-1]["body"])
+        self.assertIn("found online", sent)
+
+    def test_a_request_about_what_is_written_in_the_introduction_searches_the_papers_subject_and_hides_the_off_topic_records(self):
+        """The real case: "from what is written in te introduction ... strengthen the ideas being made" matched papers on mathematics, law and teaching because of the words "ideas" and
+        "introduction". The place is the introduction (the typo does not matter), the words are the paper's subject, and a record that is not about it is not shown."""
+        from tests.test_outline_citations import openalex
+        hits = openalex(("10.1016/j.hm.2016.07.002", "On Khinchin's paper Ideas of intuitionism and the struggle for a subject matter in contemporary mathematics", 2016),
+                        ("10.22215/etd/2012-09451", "Translating travelling ideas: the introduction of unemployment insurance and labour law reforms", 2012),
+                        ("10.5555/soil.2020.1", "Soil moisture and crop yield across regions: evidence from forty farms", 2020))
+        self.net.pages["https://api.openalex.org/works"] = hits
+        self.net.pages["https://api.crossref.org/works"] = json.dumps({"message": {"items": []}})
+        self.net.pages["https://html.duckduckgo.com/html/"] = "<html></html>"
+        self.oa.script = [{"queries": ["soil moisture and crop yield on farms", "irrigation guidance for farmers"]}]
+        j, m = self.search("from what is written in te introduction it is necessary to find references to strengthen the ideas being made")
+        d = m["data"]
+        self.assertTrue(d["ctx"]["chunk_ids"], "the introduction is the place, whatever the typo")
+        self.assertEqual([c["doi"] for c in d["candidates"]], ["10.5555/soil.2020.1"])
+        self.assertEqual(d["hidden"], 2, "the two records that share only the words of the request are left out")
+        asked = " ".join(self.net.asked).lower()
+        self.assertIn("moisture", asked)
+        self.assertNotIn("ideas", asked, "the words of the request are never the search")
+        planner = json.dumps(self.oa.requests[-1]["body"]["input"])
+        self.assertIn("soil moisture shapes crop yield", planner, "the paper's own abstract is what the words are made from")
+
+    def test_records_that_share_only_the_words_of_the_request_are_not_shown(self):
+        """The search matched "ideas" and "introduction" in papers about mathematics and law: nothing about the paper's subject, so nothing is shown."""
+        junk = [{"title": "On Khinchin's paper Ideas of intuitionism and the struggle for a subject matter in contemporary mathematics"}]
+        self.assertTrue(scholar.on_subject({"title": "Armed conflict and pipeline attacks in Colombia", "abstract": ""}, "armed groups attacking pipelines in Colombia"))
+        self.assertFalse(scholar.on_subject(dict(title=junk[0]["title"], abstract=""), "perceived risk survey hazard heuristics population heterogeneity"))
+        self.assertTrue(scholar.on_subject({"title": "Risk perception and hazard heuristics", "abstract": ""}, "perceived risk survey hazard heuristics population heterogeneity"))
+        self.assertTrue(scholar.on_subject({"title": "anything"}, "x"), "with no subject to judge by, nothing is held back")
 
 
 if __name__ == "__main__":

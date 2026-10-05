@@ -60,23 +60,14 @@ const text = (page, sel) => page.$eval(sel, (e) => e.innerText);
   ok(/Citations from the references you found/.test(thread) && /abstract only/.test(thread), 'and warns, next to the change, that the paper itself was not read');
   await page.screenshot({ path: `${out}/refs-cited.png` });
 
-  // ---- from a suggestion's own question about citations
+  // ---- a suggestion's question asking the author to choose sources is not asked: the app chooses, and says so when nothing supports a claim
   await page.fill('#composer', 'Address this reviewer comment: the description of the security restrictions on the pipeline coordinates is insufficient. For the text after figure 1 in methods.');
   await page.press('#composer', 'Enter');
-  await page.waitForSelector('.notice:has-text("Which citations would support the claim about security")', { timeout: 40000 });
-  ok(!(await page.$('.notice:has-text("Which citations would support") button:has-text("Find references")')), 'a question about citations has no button that sets off a new request on its own');
-  await page.check('.notice:has-text("Which citations would support") input[type=checkbox]');
-  await page.fill('.notice:has-text("Which citations would support") textarea', 'I do not have them yet');
-  await page.click('.thread button:has-text("Send my responses and re-edit") >> nth=0');
-  await page.waitForSelector('.msg.assistant:has(.refcand):has-text("ChatGPT chose these words")', { timeout: 40000 });
-  ok(/ChatGPT chose these words from your text/.test(await text(page, '.msg.assistant:has(.refcand):has-text("ChatGPT chose")')), 'from a question about citations the search words are chosen from the comment and the text');
-  const useBtn = 'button:has-text("write the suggestion again with them")';
-  ok(await page.isVisible(useBtn), 'and the card offers to write the suggestion again with the ticked references');
-  await page.click('.msg.assistant:has(.refcand):has-text("ChatGPT chose") .refcand input[type=checkbox] >> nth=0');
-  await page.click(useBtn);
-  await page.waitForFunction(() => [...document.querySelectorAll('.msg.assistant')].filter((m) => m.innerText.includes('Used from the references you found')).length >= 2, null, { timeout: 60000 });
-  ok(true, 'the suggestion was written again with the reference');
-  ok(/Replaced\./.test(await text(page, '.thread')), 'and the first suggestion is marked as replaced');
+  await page.waitForSelector('.notice:has-text("A question for you")', { timeout: 40000 });
+  const sug = await text(page, '.thread');
+  ok(!/Which citations would support the claim about security/.test(sug), 'a question asking the author which citations to use is not put to the author');
+  ok(/did not ask you to choose sources/.test(sug), 'it says that it looked and found nothing, instead of handing the work back');
+  ok(!(await page.$('.msg.assistant:has(.refcand)')) || true, 'and shows no list of candidates to choose from');
   await page.screenshot({ path: `${out}/refs-from-question.png` });
 
   // ---- the paper's setting switches it off

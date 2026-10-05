@@ -17,7 +17,7 @@ import time
 
 from . import config, openai_client, store, subject
 
-INTENTS = ("edit", "draft", "cite", "refsearch", "layout", "library", "review")
+INTENTS = ("edit", "draft", "cite", "refsearch", "layout", "library", "review", "inspect", "bibliography", "other")
 LABELS = {
     "edit": "Improve or correct text that is already written",
     "draft": "Write new text",
@@ -26,6 +26,9 @@ LABELS = {
     "layout": "Change the layout or format (tables, figures, graphs, position, appendix)",
     "library": "Answer from my reading (my literature library)",
     "review": "Peer review",
+    "inspect": "Count or list what is in my paper's files (references, figures, tables, sections, which library documents are in the bibliography)",
+    "bibliography": "Bring my library into the bibliography (a reference entry and a citation key for each document)",
+    "other": "None of these",
 }
 DESCRIBE = {
     "edit": "improve, correct or restyle text that already exists: flow, grammar, wording, tone, length, structure of a paragraph",
@@ -35,6 +38,9 @@ DESCRIBE = {
     "layout": "change the form of the paper and not its words: move, restyle or resize a table, figure or graph, its position, its label, caption or reference, the appendix, spacing or page layout",
     "library": "answer a question from the author's own reading (the literature library) without changing the paper",
     "review": "a peer review of the paper or of a section: scores and a list of problems",
+    "inspect": "a question about what is in the paper's own files, answered by counting or listing, with no change: how many references the .bib has, how many figures, tables or sections, which library documents are already in the bibliography",
+    "bibliography": "turn the documents of the author's literature library into reference entries of the paper's bibliography, each with a citation key, so that they can be cited later (nothing is written in the text)",
+    "other": "something none of the kinds above can do (an action outside the paper's files and writing); use it when you would otherwise have to pick a kind that does not do what the author asked, and say what was asked in \"summary\"",
 }
 ALL = INTENTS + ("refs", "help")
 
@@ -167,7 +173,7 @@ def agrees(intent, rules_kind):
 def needs_card(mode, reading, rules_kind, signals=()):
     """Whether to show the reading and wait for a yes. mode: "always" | "unsure" (default) | "never". In "unsure" the author is asked when the reading is not clearly right: the model is
     not confident, it disagrees with the word-based guess, it has a question or a close alternative, or the request changes the layout of the paper."""
-    if mode == "never" or not reading:
+    if mode == "never" or not reading or reading["intent"] == "other":                         # "other" is answered at once, honestly: no card whose kinds cannot do it
         return False
     if mode == "always":
         return True

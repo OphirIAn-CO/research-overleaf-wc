@@ -495,8 +495,11 @@ The web app does the same from its chat ("find references about ..." searches th
 ones the author ticks to the bibliography; a suggestion can then cite them from their abstracts, and documents of the author's library that the bibliography does not have yet are
 added to it when the text that cites them is saved). When the author writes from an outline, the search words are the **subject** (the outline sections asked for, "sections 1-4", and the abstract), never the
 words about how to write: the writing book is for style rules only and is never a subject or a reference, and a guide to writing in the library is skipped. In Claude Code use `WebSearch`/`WebFetch` as below, and search for the
-paper's subject in the same way. Either way: show the candidate first, never add one silently, never invent a citation,
-and remember that an abstract is not the paper.
+paper's subject in the same way. The web app also searches by itself when a request to write or edit asks for citations (or the outline has reference placeholders): it keeps only records whose title or
+abstract is about the paper's subject (never ones that merely share a word of the request), cites those that fit, and writes their entries only when the saved text cites them; the model is not allowed to ask
+the author which sources to use. Every document of the author's library is citable (a `.bib` record, its DOI, a Crossref title match, or, marked in the entry's note, the file's own title, authors and year),
+"convert my library into references" lists them with their keys to tick, and "how many references are in my .bib" is answered from the files. Either way: never add one silently when the author is the one choosing
+(a search the author asked for shows its findings), never invent a citation, and remember that an abstract is not the paper.
 
 When the user wants a paper cited that isn't already in their Mendeley
 library:

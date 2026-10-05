@@ -37,52 +37,49 @@ class Together(ChatBase):
         self.pid = self.last("result")["data"]["proposal"]
         self.ids = self.chat_thread()["thread"]["messages"][1]["data"]["chunk_ids"]
 
-    def search(self, **body):
-        self.oa.script = [{"queries": ["armed groups and the security of pipelines in Colombia", "violence and energy infrastructure"]}]
-        r = self.send("Find references for these questions: " + Q1, find_refs=True, revises=self.pid, chunk_ids=self.ids, **body)
-        self.assertEqual(self.wait_job(r["job"])["status"], "done")
-        return r
+    ANSWER = "Question: " + Q1 + "\nAnswer: add a citation of how armed groups attacking pipelines affects the infrastructure in Colombia\nQuestion: " + Q2 + "\nAnswer: 62 percent responded"
 
-    def test_the_suggestion_has_the_questions_and_nothing_has_been_asked_of_the_internet_yet(self):
+    def test_the_questions_about_sources_are_not_asked_the_others_are(self):
         prop = self.c.get(f"/api/proposal?paper=alpha&id={self.pid}")[1]
-        self.assertEqual(prop["units"][0]["questions"], [Q1, Q2])
+        self.assertEqual(prop["units"][0]["questions"], [Q2], "choosing sources is the app's job, not a question for the author")
+        self.assertTrue(any("found nothing that supports" in w for w in prop["warnings"]), prop["warnings"])
         self.assertEqual(self.net.asked, [])
 
-    def test_the_ticked_question_and_every_answer_go_into_one_search_and_the_unticked_one_does_not_set_the_words(self):
-        facts = f"Question: {Q2}\nAnswer: 62 percent responded"
-        self.search(facts=facts, ask=[Q1])
+    def test_ticking_look_for_references_while_answering_searches_picks_and_cites_without_asking_again(self):
+        self.oa.script = [reply(("Each region has a distinct climate and soil.", "Each region has a distinct climate and soil [[LX901]]."))]
+        r = self.send("Find references for these questions: " + Q1, find_refs=True, revises=self.pid, chunk_ids=self.ids, facts=self.ANSWER, ask=[Q1])
+        self.assertEqual(r["messages"][1]["data"]["plan"]["web"], {"ask": [Q1]})
+        j = self.wait_job(r["job"])
+        self.assertEqual(j["status"], "done", j)
+        self.assertIn("web", [s["key"] for s in j["steps"]])
+        asked = " ".join(u for u in self.net.asked if "openalex" in u).lower()
+        self.assertIn("security", asked, "the ticked question says what the references are for")
+        sent = json.dumps(self.oa.requests[-1]["body"]["input"])
+        self.assertIn("62 percent responded", sent, "every answer goes along")
+        self.assertIn("Rojas and Smith 2019", sent)
+        self.assertFalse([m for m in self.chat_thread()["thread"]["messages"] if m["kind"] == "refsearch"], "no card to choose from, and no new question")
+        new = self.c.get(f"/api/proposal?paper=alpha&id={self.last('result')['data']['proposal']}")[1]
+        self.assertEqual(new["units"][0]["added_cites"], ["\\cite{Rojas2019Armed}"])
+        self.assertEqual(revise.get_proposal(self.proj, self.pid)["status"], "superseded", "the first suggestion is replaced only when the new one is ready")
+
+    def test_a_search_the_author_asked_for_with_the_kind_flag_still_shows_the_candidates_to_choose_from(self):
+        self.oa.script = [{"queries": ["armed groups and the security of pipelines in Colombia", "violence and energy infrastructure"]}]
+        r = self.send("Find references for these questions: " + Q1, flag="refsearch", revises=self.pid, chunk_ids=self.ids, facts=self.ANSWER)
+        self.assertEqual(self.wait_job(r["job"])["status"], "done")
         d = self.last("refsearch")["data"]
         planner = self.oa.requests[-1]["body"]["input"]
-        self.assertIn(f"<question>\n{Q1}\n</question>", planner, "only the ticked question says what the references are for")
-        self.assertNotIn(f"<question>\n{Q1} {Q2}", planner)
-        self.assertIn("62 percent responded", planner, "but every answer goes along")
-        self.assertEqual((d["ctx"]["facts"], d["ctx"]["revises"]), (facts, self.pid), "and is kept for the re-edit that follows the choice of references")
+        self.assertIn("62 percent responded", planner)
+        self.assertEqual((d["ctx"]["facts"], d["ctx"]["revises"]), (self.ANSWER, self.pid))
         self.assertEqual(d["candidates"][0]["doi"], DOI)
-
-    def test_choosing_references_then_rewrites_with_all_the_answers_and_the_references(self):
-        facts = f"Question: {Q2}\nAnswer: 62 percent responded"
-        self.search(facts=facts, ask=[Q1])
-        d = self.last("refsearch")["data"]
         st, r = self.c.post("/api/chat/refs/pick", {"paper": "alpha", "message": self.last("refsearch")["id"], "dois": [DOI]})
         self.assertEqual(st, 200, r)
         self.assertEqual(self.wait_job(r["job"])["status"], "done")
-        self.oa.script = [reply(("Each region has a distinct climate and soil.", "Each region has its own climate and soil."))]
-        again = self.send(d["ctx"]["request"] or "x", online=[DOI], facts=d["ctx"]["facts"], revises=d["ctx"]["revises"], chunk_ids=d["ctx"]["chunk_ids"])
-        self.wait_job(again["job"])
-        sent = json.dumps(self.oa.requests[-1]["body"]["input"])
-        self.assertIn("62 percent responded", sent)
-        self.assertIn("Rojas and Smith 2019", sent)
-        self.assertEqual(revise.get_proposal(self.proj, self.pid)["status"], "superseded", "the first suggestion is replaced only when the new one is ready")
-
-    def test_without_ticks_the_search_still_uses_the_citation_questions_as_before(self):
-        self.search()
-        self.assertIn(Q1, self.oa.requests[-1]["body"]["input"])
 
     def test_the_questions_of_the_card_have_a_tick_and_one_button_not_a_button_each(self):
         js = (STATIC / "chat.js").read_text()
         self.assertNotIn("'Find references for this'", js)
         self.assertNotIn("findRefs(", js)
-        for needed in ("Send my responses and re-edit", "I do not have the references: look for some on the internet", "Add instructions or change the request", "Send and make a new suggestion", "ask: qs.length ? qs : undefined"):
+        for needed in ("Send my responses and re-edit", "I do not have the references: look for them on the internet", "Add instructions or change the request", "Send and make a new suggestion", "ask: qs.length ? qs : undefined"):
             self.assertIn(needed, js)
 
 

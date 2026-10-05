@@ -65,7 +65,12 @@ def main():
     doi_bot.fetch_bibtex = fake_bibtex
     from writing_core import scholar  # noqa: E402
     from tests.test_scholar import Net, routes  # noqa: E402
-    scholar.fetch = Net(routes())          # the internet search answers from fixed pages: a search page, a journal page, OpenAlex and Crossref
+    import json as _json  # noqa: E402
+    from tests.test_scholar import OPENALEX  # noqa: E402
+    soil = {"doi": "https://doi.org/10.5555/farms.2020.001", "title": "Soil moisture, slopes and access roads in farm sampling across regions", "publication_year": 2020, "cited_by_count": 14,
+            "authorships": [{"author": {"display_name": "Kim Lee"}}], "primary_location": {"source": {"display_name": "Agricultural Surveys"}},
+            "abstract_inverted_index": {"Farm": [0], "samples": [1], "were": [2], "drawn": [3], "by": [4], "soil": [5], "moisture,": [6], "slope": [7], "and": [8], "road": [9], "access.": [10]}, "type": "article"}
+    scholar.fetch = Net(routes(**{"https://api.openalex.org/works": _json.dumps({"results": OPENALEX["results"] + [soil]})}))          # the internet search answers from fixed pages: a search page, a journal page, OpenAlex and Crossref
     doi_bot.to_mendeley = lambda bib, doi, bib_path, group: f"Mendeley: added to {group}."
     doi_bot.git_sync = lambda bib_path, message: (True, "Pushed to Overleaf.")
     papers_dir = Path(home) / "papers"
@@ -118,7 +123,7 @@ def main():
             if "incite citation" in this:
                 return {"intent": "cite", "confidence": 0.6, "summary": "You want references found on the internet for the paragraph you pasted, so they can be cited in it.", "target": "the paragraph you pasted",
                         "uses": {"library": False, "online": True, "outline": False}, "question": "", "alternatives": ["edit"]}
-            return {"intent": guess if guess in ("edit", "draft", "refsearch", "library", "review", "layout") else "edit", "confidence": 0.95, "summary": "You want me to " + guess + " as you asked.", "target": "not given",
+            return {"intent": guess if guess in ("edit", "draft", "refsearch", "library", "review", "layout", "inspect", "bibliography", "other") else "edit", "confidence": 0.95, "summary": "You want me to " + guess + " as you asked.", "target": "not given",
                     "uses": {"library": False, "online": False, "outline": False}, "question": "", "alternatives": []}
         if (((body.get("text") or {}).get("format")) or {}).get("name") == "layout":       # move the table it was shown to a new appendix, and point the text there
             blk = re.search(r'<float kind="table"[^>]*file="([^"]*)"[^>]*label="([^"]*)">\n(.*?)\n</float>', user, re.S)
