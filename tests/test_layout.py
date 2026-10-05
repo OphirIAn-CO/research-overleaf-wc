@@ -8,7 +8,7 @@ from pathlib import Path
 from tests.test_book import needs_pdf
 from tests.test_revise import ReviseBase
 from tests.test_v2_chat_api import ChatBase
-from writing_core import chat, config, intent, layout, paper_index, revise
+from writing_core import chat, config, intent, latex_mask, layout, openai_client, paper_index, revise
 
 TABLE = r"""\begin{table}[h]
 \centering
@@ -86,6 +86,27 @@ class Finding(Base):
         res = self.resolve("make the margins narrower and use a smaller font size")
         self.assertEqual((res["targets"], res["document"], res["ask"]), ([], True, None))
 
+    def test_a_request_about_the_documents_own_latex_is_not_taken_for_a_question_about_a_figure(self):
+        res = self.resolve("in the latex before the end document include the bibliography with the .bib file")
+        self.assertEqual((res["targets"], res["document"], res["ask"]), ([], True, None), "no figure or table is named, so the model gets the document, not a question")
+
+    def test_with_no_figure_or_table_in_the_paper_a_request_about_the_bibliography_still_goes_ahead(self):
+        (Path(self.proj["path"]) / "main.tex").write_text("\\documentclass{article}\n\\begin{document}\nWe measured yield \\cite{smith2020}.\n\\end{document}\n")
+        paper_index.refresh(self.name, self.proj, trigger="test")
+        res = self.resolve("include the bibliography with my .bib file")
+        self.assertEqual((res["targets"], res["document"], res["ask"]), ([], True, None))
+        res = self.resolve("improve the visualization of the table")
+        self.assertIn("I cannot see any figure or table", res["ask"], "a request that does name a table still gets this answer")
+
+    def test_the_model_is_told_which_bibliography_files_and_system_the_paper_has(self):
+        res = self.resolve("include the bibliography with the .bib file")
+        pl = layout.plan(self.name, self.proj, "include the bibliography with the .bib file", res)
+        user = json.dumps(pl["payload"])
+        self.assertIn("<paper_setup>", user)
+        self.assertIn("references.bib", user)
+        self.assertIn("bibliography system: BibTeX", user)
+        self.assertIn("<end_of_document", user)
+
     def test_pasted_latex_of_a_float_is_found_by_its_label(self):
         res = self.resolve("Make this one look better:\n\n" + TABLE.replace("4.1", "4.2"))
         self.assertEqual([f["label"] for f in res["targets"]], ["tab:means"])
@@ -105,6 +126,78 @@ class Finding(Base):
         self.assertIn("\\usepackage{booktabs}", user)
         self.assertIn("existing_labels>fig:map, tab:means", user)
         self.assertEqual(shown[0]["lines"], [7, 16])
+
+
+class Bibliography(Base):
+    """Why the references are in the .bib and still do not print: facts about the LaTeX found here and given to the model, and a warning when the references are saved."""
+
+    def problems(self, preamble, tail):
+        self.main.write_text("\\documentclass{article}\n" + preamble + "\n\\begin{document}\nWe measured yield \\cite{smith2020}.\n" + tail + "\n\\end{document}\n")
+        paper_index.refresh(self.name, self.proj, trigger="test")
+        return layout.bibliography_problems(self.proj)
+
+    def test_printbibliography_without_biblatex_is_the_undefined_control_sequence(self):
+        why = self.problems("", "\\printbibliography")
+        self.assertEqual(len(why), 1)
+        self.assertIn("biblatex is not loaded", why[0])
+        self.assertIn("Undefined control sequence", why[0])
+
+    def test_citations_and_no_bibliography_command_print_as_question_marks(self):
+        why = self.problems("", "")
+        self.assertIn("no bibliography command", why[0])
+
+    def test_a_working_bibliography_has_no_problem(self):
+        self.assertEqual(self.problems("", "\\bibliographystyle{plain}\n\\bibliography{references}"), [])
+        self.assertEqual(self.problems("\\usepackage[backend=biber]{biblatex}\n\\addbibresource{references.bib}", "\\printbibliography"), [])
+
+    def test_the_two_systems_mixed_and_a_missing_resource_are_named(self):
+        self.assertIn("together with biblatex", self.problems("\\usepackage{biblatex}\n\\addbibresource{references.bib}", "\\bibliography{references}")[0])
+        self.assertIn("no \\addbibresource", self.problems("\\usepackage{biblatex}", "\\printbibliography")[0])
+
+    def test_the_model_is_given_the_problem_and_the_last_compile_of_the_latex_pane(self):
+        from writing_core import latexbuild
+        self.problems("", "\\printbibliography")
+        keep = latexbuild.last
+        self.addCleanup(setattr, latexbuild, "last", keep)
+        latexbuild.last = lambda proj: {"errors": [{"file": "main.tex", "line": 6, "message": "Undefined control sequence.", "context": "\\printbibliography"}],
+                                        "undefined": {"citations": ["Anon1998Reliabili"], "references": []}, "warnings": []}
+        res = self.resolve("the bibliography is not rendering, fix the latex")
+        self.assertEqual((res["targets"], res["document"], res["ask"]), ([], True, None))
+        payload = layout.plan(self.name, self.proj, "fix it", res)["payload"]
+        user = payload["input"] + payload["instructions"]
+        self.assertIn("problem: \\printbibliography is used but biblatex is not loaded", user)
+        self.assertIn("Undefined control sequence", user)
+        self.assertIn("Anon1998Reliabili", user)
+        self.assertIn("keep the system whose package the preamble already loads", user)
+
+    def test_the_users_case_printbibliography_without_biblatex_is_repaired_and_the_references_print(self):
+        """References were in the .bib, \\printbibliography was in the document, biblatex was not: "Undefined control sequence" and every citation showed as missing. The model repairs the LaTeX; the
+        repaired paper is compiled here, and it compiles with the bibliography printed."""
+        from writing_core import latexbuild
+        if not latexbuild.available()[0]:
+            self.skipTest("LaTeX is not installed here")
+        (Path(self.proj["path"]) / self.proj["bib"]).write_text("@article{smith2020,\n author={Smith, Jane},\n title={Soil moisture and yield},\n year={2020},\n journal={Soil Journal}\n}\n")
+        self.main.write_text("\\documentclass{article}\n\\begin{document}\n\\section{Methods}\nWe measured yield on forty farms \\cite{smith2020}.\n\n\\printbibliography\n\\end{document}\n")
+        paper_index.refresh(self.name, self.proj, trigger="test")
+        broken = latexbuild.compile(self.proj)
+        self.assertTrue(broken["errors"], "the paper as it is reports the error the author saw")
+        self.assertIn("Undefined control sequence", broken["errors"][0]["message"])
+        answer = {"approach": "The paper uses BibTeX, so I replaced \\printbibliography with the BibTeX commands for references.bib.", "questions": [], "edits": [
+            {"file": "main.tex", "find": "\\printbibliography", "replace": "\\bibliographystyle{plain}\n\\bibliography{references}", "reason": "\\printbibliography needs biblatex, which this paper does not load"}]}
+        out = self.ask("the bibliography is not rendering, fix the latex", answer, compile=True)
+        self.assertEqual(out["status"], "proposed", out["proposal"].get("error"))
+        self.assertTrue(any(v["name"] == "compiles" and v["ok"] for v in out["proposal"]["validators"]), out["proposal"]["validators"])
+        layout.apply(self.name, self.proj, out["proposal"]["id"])
+        fixed = latexbuild.compile(self.proj)
+        self.assertEqual((fixed["errors"], fixed["undefined"]["citations"]), ([], []), "no error and no citation without an entry")
+
+    def test_saving_references_whose_document_cannot_print_them_says_so(self):
+        self.problems("", "")
+        add = {"key": "Smith2020Soil", "doi": "", "title": "Soil", "bibtex": "@misc{Smith2020Soil,\n title={Soil}\n}", "doc": "d1"}
+        self.main.write_text(self.main.read_text().replace("\\cite{smith2020}", "\\cite{Smith2020Soil}"))
+        out = revise._add_bib_entries(self.proj, {"bib_adds": [add]}, ["main.tex"])
+        self.assertEqual([a["key"] for a in out["added"]], ["Smith2020Soil"])
+        self.assertTrue(any("will not print them yet" in w and "no bibliography command" in w for w in out["warnings"]), out["warnings"])
 
 
 class Edits(unittest.TestCase):
@@ -246,6 +339,16 @@ class Asking(Base):
         self.assertEqual(r["status"], "failed")
         self.assertIn("not in main.tex", r["proposal"]["error"])
 
+    def test_the_model_puts_the_bibliography_in_the_document_and_every_check_passes(self):
+        text = "in the latex before the end document include the bibliography with the .bib file"
+        answer = {"approach": "The bibliography now prints at the end, from references.bib.", "questions": [], "edits": [
+            {"file": "main.tex", "find": "\\end{document}", "replace": "\\bibliographystyle{plain}\n\\bibliography{references}\n\\end{document}", "reason": "print the bibliography before the end of the document"}]}
+        out = self.ask(text, answer)
+        self.assertEqual(out["status"], "proposed", out["proposal"].get("error"))
+        self.assertFalse(latex_mask.errors(out["proposal"]["validators"]), out["proposal"]["validators"])
+        sent = json.dumps(self.srv.requests[-1]["body"])
+        self.assertIn("references.bib", sent)
+
     def test_a_question_and_no_edit_is_passed_on(self):
         r = self.ask("improve the graph", {"approach": "I cannot see the data.", "questions": ["The graph is a PNG: what should change in the picture itself?"], "edits": []})
         self.assertEqual(r["status"], "no_changes")
@@ -292,6 +395,23 @@ class InTheChat(ChatBase):
         self.assertIn("\\appendix", self.main.read_text())
         self.assertIn("Saved in main.tex.", self.last("note")["text"])
         self.assertNotIn("text-cleaning", self.last("note")["text"], "a layout change is LaTeX, not prose")
+
+    def test_the_exact_request_that_was_refused_now_reaches_the_model_and_the_bibliography_is_written(self):
+        """The reading was right ("add the LaTeX commands to display the bibliography from your .bib file before \\end{document}") and the answer was "I cannot see any figure or table"."""
+        self.oa.script = [{"approach": "The bibliography now prints at the end, from references.bib.", "questions": [], "edits": [
+            {"file": "main.tex", "find": "\\end{document}", "replace": "\\bibliographystyle{plain}\n\\bibliography{references}\n\\end{document}", "reason": "print the bibliography"}]}]
+        r = self.send("in the latex before the end document include the bibliography with the .bib file")
+        self.assertEqual([m["kind"] for m in r["messages"]], ["text", "layout_plan"], r["messages"])
+        self.assertEqual(r["messages"][1]["data"]["plan"]["targets"], [], "it is about the document, not a figure or a table")
+        self.assertEqual(self.wait_job(r["job"])["status"], "done")
+        res = self.last("result")
+        st, prop = self.c.get(f"/api/proposal?paper=alpha&id={res['data']['proposal']}")
+        self.assertEqual((st, prop["status"], len(prop["edits"])), (200, "proposed", 1), prop.get("error"))
+        st, out = self.c.post("/api/proposal/approve", {"paper": "alpha", "id": prop["id"], "chat": self.chat_thread()["id"]})
+        self.assertEqual((st, out["ok"]), (200, True), out)
+        text = self.main.read_text()
+        self.assertIn("\\bibliography{references}\n\\end{document}", text)
+        self.assertEqual(text.count("\\end{document}"), 1)
 
     def test_not_now_sets_the_suggestion_aside_and_writes_nothing(self):
         self.oa.script = [move_to_appendix()]

@@ -1041,11 +1041,22 @@ def _bibtex_name(person):
     return f"{w[-1]}, {' '.join(w[:-1])}"
 
 
+_HEADER = re.compile(r"\b\d{1,3}\s*\((?:19|20)\d{2}\)\s*\d+\s*[-\u2013\u2014]\s*\d+|\bvol(?:ume)?\.?\s*\d+|\bissn\b|\u00a9|\bcopyright\b|\bwww\.|\bhttps?://|^\w{3,}-\s+[A-Z]|\bpp?\.\s*\d+\s*[-\u2013]\s*\d+|\bavailable online\b", re.I)
+
+
+def _header_like(title):
+    """Is this the running header or footer of a journal page (volume, year, pages, a hyphenated first word) rather than the title of a work?"""
+    return bool(title and _HEADER.search(title))
+
+
 def local_entry(d, text, taken=(), doi="", note=None):
     """A BibTeX entry made from what the file itself says (its title, authors and year), for a document with no record and no DOI that Crossref knows. It is marked in its note so that
     the author knows to check it. -> (bibtex, key) or None when the file says too little to cite (a title alone, or a title that is not one)."""
     import doi_bot
     title = _plausible_title(d.get("title") or "")
+    if _header_like(title):                                    # a running header ("Reliabili- Engineering and System Safety 59 (1998) 49-62") is not the title: the file's name is the better guess
+        named = _plausible_title(_from_name(Path(d.get("rel") or d.get("path") or "").stem).get("title", ""))
+        title = named if len(_tokens_of(named)) >= 3 and not _header_like(named) else ""
     if len(_tokens_of(title)) < 3:
         return None
     etal = bool(re.search(r"\bet\s+al\.?\s*$", d.get("authors") or "", re.I))
@@ -1065,7 +1076,9 @@ def local_entry(d, text, taken=(), doi="", note=None):
     if people:
         fields.append("author = {" + " and ".join(_bibtex_text(_bibtex_name(x)) for x in people[:12]) + (" and others" if etal or len(people) > 12 else "") + "}")
     fields += ["title = {{" + _bibtex_text(title) + "}}"] + ([f"year = {{{year}}}"] if year else []) + ([f"doi = {{{doi}}}"] if doi else [])
-    fields.append("note = {" + (note or "Entry made from the file " + _bibtex_text(Path(d.get("rel") or d.get("path") or "").name) + ": no DOI or record was found, so the details are what the file itself says. Check them before submitting.") + "}")
+    fname = _bibtex_text(Path(d.get("rel") or d.get("path") or "").name)
+    why = "doi.org did not answer for its DOI" if doi else "no DOI or record was found"
+    fields.append("note = {" + (note or f"Entry made from the file {fname}: {why}, so the details are what the file itself says. Check them before submitting.") + "}")
     return "@misc{" + key + ",\n    " + ",\n    ".join(fields) + "\n}", key
 
 

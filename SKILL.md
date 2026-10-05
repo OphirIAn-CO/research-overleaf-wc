@@ -199,7 +199,7 @@ its `\cite`s say nothing about what is asked; the request is in the user's own s
 library, or a reference already cited; "improve the table" can be wording or layout), say in one or two sentences what you understood (the action, the exact text or place, the sources) and let the user confirm, correct or
 refuse before you change anything. Prefer a short question to a wrong edit. Remember how this user phrases things within the conversation, and do what they corrected you on the next time.
 
-## Changing the form of the paper (tables, figures, graphs, the appendix, layout)
+## Changing the form of the paper (tables, figures, graphs, the appendix, layout, the bibliography command and the document's setup)
 
 When the user asks for a change of form ("move this table to the appendix and add the reference in tex", "improve the visualization of the table", "improve the graph in the following way ...", "adjust the position of
 the image and its labels"), you edit LaTeX, not prose. Do it with `Read` and `Edit` on the real files (`overleaf_pull` first), and keep these guarantees, because the web app checks the same things:
@@ -214,6 +214,10 @@ the image and its labels"), you edit LaTeX, not prose. Do it with `Read` and `Ed
 5. For an image file you can change only the LaTeX around it (size, position, caption, subfigure layout); say so and ask when the picture itself would have to change. A graph drawn in LaTeX can be changed in its code.
 6. No shell escapes, no writing or reading files outside the paper.
 7. Show the user the change (old and new text for each edit) before you write it when it moves or deletes something, compile if LaTeX is installed (`latexmk -pdf`) and report errors, then `overleaf_sync` when they ask to send it.
+8. The same applies to the document's own LaTeX when no figure or table is named ("include the bibliography with the .bib file", "the bibliography is not rendering", "add a table of contents", "load a package"): do it, do not
+   ask for a figure. For the bibliography, find which system the paper uses (natbib/BibTeX or biblatex) and which `.bib` file it has; `\printbibliography` without biblatex, `\bibliography` together with biblatex, or
+   citations with no bibliography command are the usual reasons that references that are in the `.bib` do not print. Keep the system whose package is loaded, or BibTeX (`\bibliographystyle` + `\bibliography{name}`) when the
+   class or template points to it, never invent a `.bib` name, and compile twice (BibTeX) to confirm that no citation is left without an entry. The web app does this with the model and the same checks.
 
 ## Writing a section from the author's own results (a Discussion, a Results paragraph)
 

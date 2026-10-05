@@ -200,6 +200,7 @@ bibliography, its `\cite`.
   references of this paper that fit it. The author's own answers count as a request: if you answer a question with "add a citation of how violence affects infrastructure", the references (and your library) are used.
 - **Your uploaded reading is cited and referenced the same way, even when the paper's bibliography does not have it yet.** A document of your library with a DOI (or an entry in a `.bib` file there) can be cited right away; the
   suggestion says "will be added to your bibliography when you save", and the entry is written, with the Mendeley copy, in the same click that saves the text, only if the saved text really cites it.
+  If the document then has no working bibliography command, saving warns you ("the references are in your .bib file, but LaTeX will not print them yet: ...") and you can ask *"include the bibliography with the .bib file"*.
 - **Switch it off** per paper: **Settings > Literature library > Search the internet for ...: Never**.
 - **If the search finds nothing or cannot connect**, the card or message says so, and says which of the web search, OpenAlex and Crossref did not answer. Search pages sometimes refuse automated requests or change
   their layout; the two indexes are the backstop. Change the words with **Search again**, or paste the DOI of a paper you know. A page found on the web that names no DOI is listed apart and cannot be added.
@@ -279,14 +280,19 @@ Asking to *write* something (not to improve what is there) is understood as a re
   uncited text. The same happens when you ask for an in-text citation in a pasted paragraph or a selected text: the search is made from that text.
 - **Complete paragraphs.** A request to write a section from an outline produces the paragraphs themselves, with the section heading when the section does not exist yet, not edits.
 
-## Changing the form of the paper: tables, figures, graphs, the appendix
+## Changing the LaTeX: tables, figures, graphs, the appendix, the bibliography, the document's setup
 
 Ask for it in your own words: *"move this table to the appendix and add the respective reference in tex"*, *"improve the visualization of Table 2"*, *"improve the graph in the following way: larger fonts and a legend"*,
-*"adjust the position of the image and the labels (a), (b) of its parts"*, *"make the figures smaller and centre them"*. This kind of request changes the **form** of the paper, never what it says.
+*"adjust the position of the image and the labels (a), (b) of its parts"*, *"make the figures smaller and centre them"*, and the document itself: *"in the latex before the end document include the bibliography with the .bib file"*,
+*"the bibliography is not rendering, fix the latex"*, *"add a table of contents"*, *"add line numbers"*, *"load the package booktabs"*. This kind of request changes the **LaTeX** of the paper, never what it says.
+The model does the work, whatever the request is about: Python only hands it the right parts of your paper and checks what comes back. A request that names no figure or table is never refused for that reason; it gets
+the preamble, the structure, the end of the document, which bibliography files and system the paper uses, any bibliography problem found on your computer (for example `\printbibliography` without biblatex, which LaTeX
+reports as "Undefined control sequence" and which leaves every citation without an entry although the references are in your `.bib`) and the last compile of the LaTeX pane. If it needs something it was not given,
+it asks you a question instead of guessing.
 
-1. **It is read first.** A request about layout is always shown back to you before it goes anywhere (see *Checking that I understood you*), and you can choose *Change the layout or format* yourself under the message box.
+1. **It is read first.** A request about layout is always shown back to you before it goes anywhere (see *Checking that I understood you*), and you can choose *Change the LaTeX itself* yourself under the message box.
 2. **Which table or figure.** Name it ("Table 2", "the last figure", a word of its caption, its label such as `tab:results`), tick it in the text, paste its LaTeX, or say "this table" when there is only one. With no clue it
-   lists the figures and tables of your paper and asks. Requests about the page itself (margins, spacing, font size, columns) need no figure.
+   lists the figures and tables of your paper and asks. Requests about the page or the document itself (margins, spacing, font size, columns, the bibliography, packages) need no figure.
 3. **What goes to OpenAI.** The LaTeX of that figure or table as it is (not hidden behind tags, since it is what changes), the lines that mention it, the outline of the document, its preamble and the end of the
    document. The plan lists it and can show the exact text. Nothing is sent without that plan; with *Ask me before anything is sent* on, it waits for you.
 4. **What comes back** is a list of exact edits ("find this text, put that text"), each with its reason. A move is a removal plus an insertion plus the sentence that now points to the table; they are

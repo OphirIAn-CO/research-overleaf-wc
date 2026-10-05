@@ -26,7 +26,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) failed+
 
   // a change of layout is always shown first
   await page.waitForSelector('.msg.assistant:has-text("Is this what you want?")', { timeout: 30000 });
-  ok((await page.$$eval('.msg.assistant select option', (o) => o.map((x) => x.textContent))).some((t) => /Change the layout or format/.test(t)), 'a change of layout is a kind of request the author can see and choose');
+  ok((await page.$$eval('.msg.assistant select option', (o) => o.map((x) => x.textContent))).some((t) => /Change the LaTeX itself/.test(t)), 'a change of layout is a kind of request the author can see and choose');
   await page.click('button:has-text("Yes, go ahead")');
 
   // the plan says what changes and what goes out; then the suggestion

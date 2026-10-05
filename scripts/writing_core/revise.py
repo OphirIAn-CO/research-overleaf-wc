@@ -753,6 +753,11 @@ def _add_bib_entries(proj, proposal, files_written):
             out["warnings"].append(f"Could not add {a['key']} to your bibliography: {e}")
             continue
         out["added"].append({"key": a["key"], "doi": a["doi"], "title": a.get("title", ""), "mendeley": res["mendeley"]})
+    if out["added"]:                                                    # entries in the .bib print only if the document has a working bibliography command
+        from . import layout
+        why = layout.bibliography_problems(proj)
+        if why:
+            out["warnings"].append("The references are in your .bib file, but LaTeX will not print them yet: " + "; ".join(why) + ". Ask me: \"include the bibliography with the .bib file\" and I will fix the LaTeX.")
     return out
 
 

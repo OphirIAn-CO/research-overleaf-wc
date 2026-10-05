@@ -415,8 +415,19 @@ def is_count_request(text):
     return bool(_COUNT.search(subject.request_part(text or "")))
 
 
+# a request to change the document's own LaTeX: "include the bibliography before \end{document}", "add the package booktabs", "add a table of contents"
+_LATEX_STRUCT = re.compile(r"\b(?:include|insert|print|display|show|enable|add|put|place|use)\b.{0,40}\b(?:the\s+)?(?:bibliography|reference list|list of references|table of contents|list of (?:figures|tables)|line numbers|page numbers)\b.{0,60}"
+                           r"(?:\\end\{document\}|end of the (?:latex|document|paper)|\.bib\b|latex|bibtex|biblatex|natbib)|\\(?:printbibliography|bibliography|bibliographystyle|addbibresource|usepackage)\b|"
+                           r"\b(?:add|include|insert|enable|turn on)\b.{0,20}\b(?:a\s+|the\s+)?(?:table of contents|list of (?:figures|tables)|line numbers|page numbers|title page)\b|"
+                           r"\b(?:fix|solve|repair|resolve)\b.{0,40}\b(?:latex|compil\w*|undefined control sequence|bibliography|the references? (?:list|section)|citations? (?:are|is|do|does|not|show|appear))\b|"
+                           r"\b(?:bibliography|references?|citations?)\b.{0,50}\b(?:not (?:rendering|showing|appearing|printing|displayed)|(?:do|does|are|is)n'?t (?:render|show|appear|print)|show(?:s|ing)? (?:as )?\[?\?|undefined)\b|"
+                           r"\b(?:in|to|of) the (?:latex|preamble)\b.{0,60}\b(?:include|add|insert|use|load|set|change)\b|\b(?:include|add|insert|load)\b.{0,30}\b(?:the\s+)?(?:package|documentclass|preamble)\b", re.I | re.S)
+
+
 def is_layout_request(text):
     t = subject.request_part(text or "")
+    if _LATEX_STRUCT.search(t) and not _LAYOUT_PROSE.search(t):
+        return True
     return bool(_LAYOUT_ACT.search(t)) and bool(re.search(_LAYOUT_OBJ, t, re.I)) and not _LAYOUT_PROSE.search(t)
 
 

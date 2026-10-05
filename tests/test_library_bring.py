@@ -159,5 +159,23 @@ class EveryDocumentIsCitable(ChatBase):
         self.assertIn("1 of the sources have no bibliography record", library.file_entry_warning([entry]))
 
 
+class FileEntries(unittest.TestCase):
+    def test_a_journal_header_is_not_taken_for_the_title_and_the_file_name_is(self):
+        d = {"title": "Reliabili- Engineering and System Safety 59 (1998) 49\u201362", "authors": "", "year": "1998", "rel": "The role of risk perception for risk management.pdf"}
+        bib, key = library.local_entry(d, "")
+        self.assertIn("The role of risk perception for risk management", bib)
+        self.assertNotIn("Engineering and System Safety", bib)
+        self.assertTrue(key.startswith("Anon1998"), key)
+        self.assertIsNone(library.local_entry(dict(d, rel="scan0001.pdf"), ""), "a header and a file name that says nothing: too little to cite")
+
+    def test_the_note_says_what_really_happened(self):
+        d = {"title": "Public readiness for hydrogen infrastructure in community settings", "authors": "Ning Huan", "year": "2025", "rel": "Dimitros1.pdf"}
+        with_doi = library.local_entry(d, "", doi="10.1016/j.cities.2025.106600")[0]
+        self.assertIn("doi.org did not answer for its DOI", with_doi)
+        self.assertNotIn("no DOI or record was found", with_doi)
+        without = library.local_entry(d, "")[0]
+        self.assertIn("no DOI or record was found", without)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -221,7 +221,7 @@
     const outlineBtn = h('button', { type: 'button', class: 'attach', text: 'Add outline', title: 'Add a writing brief or outline. It stays local, appears in Your files as an author outline, is followed only when named in a request, and is never cited or sent to Overleaf.' });
     const adding = h('div', { class: 'row chips adding', role: 'status', 'aria-live': 'polite', hidden: true });
     const REQUEST_KINDS = [['edit', 'Improve or correct text that is already written'], ['draft', 'Write new text'], ['cite', 'Add in-text citations to text that is already written'],
-      ['refsearch', 'Find references on the internet'], ['layout', 'Change the layout or format (tables, figures, graphs, position, appendix)'], ['library', 'Answer from my reading (my literature library)'],
+      ['refsearch', 'Find references on the internet'], ['layout', 'Change the LaTeX itself (tables, figures, graphs, the bibliography command, packages, appendix, page layout)'], ['library', 'Answer from my reading (my literature library)'],
       ['inspect', 'Count or list what is in my paper\'s files (references, figures, tables)'], ['bibliography', 'Bring my library into the bibliography (reference entries with keys)'], ['review', 'Peer review']];
     const kindSel = h('select', { id: 'request-kind', class: 'kind-flag', 'aria-label': 'What kind of request is this?', title: 'Leave on Automatic and I read your message and tell you what I understood. Choose a kind to tell me yourself.' },
       h('option', { value: '', text: 'Automatic: you read it' }), REQUEST_KINDS.map(([v, l]) => h('option', { value: v, text: l })));
