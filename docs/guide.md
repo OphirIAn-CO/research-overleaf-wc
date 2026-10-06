@@ -116,10 +116,14 @@ and reports what it cited and what it could not support. There is no card to ans
   call per section (or a few short ones together, up to about twenty passages) with an instruction made for that section and for the journal, and leaves out what needs nothing. Each call is a suggestion card of
   its own that you accept or set aside. A web address you give (the journal's page) is read when the publisher allows it; many refuse automated readers, and then it says so and uses what it knows of the journal.
   It has up to twenty steps for a request and is told how many are left; if they run out it says what is done and what is left, and you say "continue".
+- **"Check what is missing".** A request like *"revise the style, and also look for white spaces or missing information that would make the methodology more robust"* is two jobs: it improves the
+  wording (a suggestion you accept or not) and it **lists the gaps in its answer**: what is missing, where it would go, and the question only you can answer (a value, a setting, a sample size, a software
+  version, why a choice was made). It never writes the missing content into the text as if it were known. After a few reads with nothing written, it is told to stop reading and do the work.
 - **How it reads your paper.** It never sends the whole manuscript in one go (a peer review is the one place that does), and it is not limited to a few pieces either. It always has a **map of the whole
-  paper**: every section with the ids of its pieces, what kind of section it is (methods, results, abstract...), where it is and how long. It reads the text of what it needs, about five thousand
-  characters at a time, by piece id or range, by the kind of section (*"the methodology"* is the section called Materials and Methods, whatever its title), by title, or by a quoted sentence, and the step shows what it
-  read ("Read: Materials and Methods (C9-C12, 4 pieces)"). Citations and formulas show to it as `[ref]`. A writing step then gets only what it needs: the passages being edited, or the text around the place for
+  paper**: every section with the ids of its pieces, what kind of section it is (methods, results, abstract...), where it is and how long. It reads the text of what it needs, about seven thousand
+  characters at a time (a long section takes a few reads, each starting where the last stopped), by piece id or range, by the kind of section (*"the methodology"* is the section called Materials and Methods, whatever its title), by title, or by a quoted sentence, and the step shows what it
+  read ("Read: Materials and Methods (C9-C12, 4 pieces)"). **What it has read stays in front of it for the rest of that request** (up to about 36,000 characters, oldest first), so a section read in several turns is
+  not forgotten and read again, and a part it already has is not sent twice. Citations and formulas show to it as `[ref]`. A writing step then gets only what it needs: the passages being edited, or the text around the place for
   new text, with your library and the sources it chose. If the part you named is not the one it works on, say so in your next message: it stays in the part you name.
 - **"Required citations" is not guessed from a word.** It asks for a new citation to be required only when you ask to cite; a brief that says "keep the citations" is not a demand for one. If a result has no new
   citation where you wanted one, it sees that and decides.

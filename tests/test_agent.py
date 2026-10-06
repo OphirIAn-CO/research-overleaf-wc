@@ -284,6 +284,88 @@ class Broad(Base):
         self.assertIn("LAST action", self.bodies()[2])
 
 
+class Memory(Base):
+    """What the model has read stays in front of it for the whole request: a section read in several turns is not forgotten three turns later and read again (the cause of a request that
+    only ever read, in the author's screenshot), and what is already in front of it is not sent twice."""
+
+    def big_paper(self, n=4, size=3200):
+        from pathlib import Path
+        text = "\\documentclass{article}\n\\begin{document}\n" + "".join(
+            f"\\section{{Method {i}}}\n" + " ".join(f"Step {i} of the procedure number {j} is carried out as described." for j in range(1, size // 55)) + "\n\n" for i in range(1, n + 1)) + "\\end{document}\n"
+        (Path(self.proj["path"]) / "main.tex").write_text(text)
+        paper_index.refresh(self.name, self.proj, trigger="test")
+        return agent.Ctx(self.name, self.proj, "t", "x")
+
+    def test_a_section_read_over_several_turns_is_still_in_front_of_the_model_at_the_end(self):
+        c = self.big_paper(6, 1500)
+        ids = list(c.pieces)
+        self.say(*[act("read_paper", f"Reading part {i}", query=ids[i]) for i in range(6)], act("finish", message="Read it all."))
+        r = self.send("revise the style of the methods, but also look for missing information that would make the methodology more robust")
+        self.wait_job(r["job"])
+        b = self.bodies()
+        self.assertEqual(len(b), 7)
+        for i in range(6):
+            self.assertIn(f"[{ids[i]}] ", b[6], f"piece {ids[i]} was read at step {i + 1} and is still there at step 7")
+        self.assertIn("Step 1 of the procedure number 26 is carried", b[6], "not only its first line: the last sentence of what was read at step 1 is still there")
+        self.assertIn("The text is in <paper_read_so_far>", b[6], "the list of steps only says it was read: the text is not repeated in it")
+        self.assertEqual(b[6].count(f"[{ids[0]}] "), 1, "and it is there once")
+
+    def test_reading_what_is_in_front_of_it_again_returns_only_the_new_parts(self):
+        c = self.big_paper(4, 800)
+        ids = list(c.pieces)
+        first, _ = agent.t_read_paper(c, {"query": f"{ids[0]}-{ids[1]}"})
+        self.assertIn(f"[{ids[0]}] ", first)
+        again, _ = agent.t_read_paper(c, {"query": f"{ids[0]}-{ids[3]}"})
+        self.assertIn(f"Already in front of you: {ids[0]}-{ids[1]}", again)
+        self.assertNotIn(f"[{ids[0]}] ", again, "what it has is not sent again")
+        self.assertIn(f"[{ids[2]}] ", again)
+        self.assertIn(f"[{ids[3]}] ", again)
+        none, _ = agent.t_read_paper(c, {"query": f"{ids[0]}-{ids[3]}"})
+        self.assertTrue(none.startswith("You already have"), none)
+        self.assertNotIn("[C", none)
+
+    def test_a_long_section_is_read_in_pages_and_the_next_page_starts_where_the_last_stopped(self):
+        c = self.big_paper(4, 3200)
+        ids = list(c.pieces)
+        page1, _ = agent.t_read_paper(c, {"query": "Method"})
+        self.assertIn("Not read yet (too long for one read)", page1.split("\n\n")[0])
+        got1 = [k for k in ids if f"[{k}] " in page1]
+        self.assertTrue(0 < len(got1) < len(ids), got1)
+        page2, _ = agent.t_read_paper(c, {"query": "Method"})
+        got2 = [k for k in ids if f"[{k}] " in page2]
+        self.assertFalse(set(got1) & set(got2), "the second page is the next part, not the first again")
+        self.assertIn("Already in front of you", page2.split("\n\n")[0])
+        while len(set(got1) | set(got2)) < len(ids):
+            more, _ = agent.t_read_paper(c, {"query": "Method"})
+            new = [k for k in ids if f"[{k}] " in more]
+            self.assertTrue(new, more[:200])
+            got2 += new
+
+    def test_when_there_is_too_much_the_oldest_goes_first_and_can_be_read_again(self):
+        keep = agent.KEEP_READ
+        self.addCleanup(setattr, agent, "KEEP_READ", keep)
+        agent.KEEP_READ = 5000
+        c = self.big_paper(3, 2500)
+        ids = list(c.pieces)
+        for k in ids:
+            agent.t_read_paper(c, {"query": k})
+        self.assertFalse(c.has_read(ids[0]), "the oldest was let go")
+        self.assertTrue(c.has_read(ids[-1]))
+        again, _ = agent.t_read_paper(c, {"query": ids[0]})
+        self.assertIn(f"[{ids[0]}] ", again)
+
+    def test_a_request_that_only_reads_is_told_to_do_the_work(self):
+        c = self.big_paper(6, 600)
+        ids = list(c.pieces)
+        self.say(*[act("read_paper", f"Reading {i}", query=ids[i]) for i in range(5)], act("finish", message="Done."))
+        r = self.send("revise the style of the methods, but also look for missing information that would make the methodology more robust")
+        self.wait_job(r["job"])
+        b = self.bodies()
+        self.assertNotIn("have not written anything yet", b[3], "three steps of reading are not too many")
+        self.assertIn("you have spent 4 steps reading and have not written anything yet", b[4])
+        self.assertIn("<paper_read_so_far>", b[4])
+
+
 class Routing(Base):
     def test_the_ways_that_have_a_card_or_a_choice_of_their_own_are_not_taken_by_the_agent(self):
         self.say(reply(("Each region has a distinct climate and soil.", "Each region has its own climate and soil.")))
