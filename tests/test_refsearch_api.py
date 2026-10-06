@@ -231,6 +231,20 @@ class Search(ChatBase):
         planner = json.dumps(self.oa.requests[-1]["body"]["input"])
         self.assertIn("soil moisture shapes crop yield", planner, "the paper's own abstract is what the words are made from")
 
+    def test_a_ticked_reference_whose_record_cannot_be_read_is_still_added_from_what_the_search_found(self):
+        """doi.org's record could not be used ("list index out of range" on an empty author): the title, authors and year the search found make the entry, marked so that it is checked."""
+        j, m = self.search()
+        doi_bot.fetch_bibtex = lambda d: (_ for _ in ()).throw(RuntimeError("list index out of range"))
+        st, r = self.c.post("/api/chat/refs/pick", {"paper": "alpha", "message": m["id"], "dois": [DOI]})
+        self.assertEqual(st, 200, r)
+        self.assertEqual(self.wait_job(r["job"])["status"], "done")
+        text = self.bib.read_text()
+        self.assertIn("Rojas2019Armed", text)
+        self.assertIn("Entry made from an internet search result", text)
+        self.assertIn(DOI, text)
+        card = self.last("refs")["data"]["results"][0]
+        self.assertEqual(card["status"], "added")
+
     def test_records_that_share_only_the_words_of_the_request_are_not_shown(self):
         """The search matched "ideas" and "introduction" in papers about mathematics and law: nothing about the paper's subject, so nothing is shown."""
         junk = [{"title": "On Khinchin's paper Ideas of intuitionism and the struggle for a subject matter in contemporary mathematics"}]

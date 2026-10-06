@@ -834,6 +834,7 @@
       else {
         (d.candidates || []).forEach((c) => kids.push(row(c)));
         if (d.hidden) kids.push(h('p', { class: 'small muted', text: `${plural(d.hidden, 'other record')} left out: nothing in the title or abstract was about your paper's subject.` }));
+        if (d.excluded) kids.push(h('p', { class: 'small muted', text: `${plural(d.excluded, 'record')} left out because you asked not to use ${(d.avoid || []).join(', ') || 'those authors'}.` }));
         const useIt = (ctx.chunk_ids && ctx.chunk_ids.length) || ctx.draft;
         kids.push(h('div', { class: 'row actions' },
           guarded(h('button', { type: 'button', class: useIt ? '' : 'primary', text: 'Add the ticked to my bibliography' }), async () => { await pickRefs(m, [...picks]); }),

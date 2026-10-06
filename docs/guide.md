@@ -99,6 +99,9 @@ recent conversation (so "it", "again" and "the second one" mean something), what
 - **When it is clearly right, I go ahead and show how I read it:** a line *"Read as: ..."* under your message, with **Not what I meant** next to it if I got it wrong (it opens the same card).
 - **The kinds of request I distinguish:** improve or correct text that is already written; write new text; add in-text citations to text that is already written (from your reading, from references found online, or
   both); find references on the internet; change the layout or format (tables, figures, graphs, position, appendix); answer from your reading; peer review.
+- **Whom or what to leave out is part of the reading.** *"Don't use references from Amaya Gomez or Cabrales"* is read as a list of authors to avoid. They are left out of the references found for you, of your library's sources
+  and of the sources a suggestion may cite, and the card says how many records were left out for that reason. A name matches an author when all its words are in the author's name, whatever the order or the accents.
+- **"The references just found"** means the ones you ticked earlier in this chat: when the reading says that is what you mean, they are used, and no new search is made.
 - **You can say the kind yourself.** Under the message box, *This is a request to:* lets you choose the kind for the next message; then nothing is read and no tokens are used for it.
 - **How often I ask** is a setting per paper (**Settings > Preferences > Check that I understood your request**): *only when I am not sure* (the default: I am not sure when I am not confident, when my reading differs from
   a quick read of the words, when I have a question, or when the request changes the layout), *every time*, or *never* (the words alone decide, as before; no model call is made to read it).
@@ -113,6 +116,11 @@ You can say the place in words ("the text before Figure 1 in the methods", "the 
 finds its paragraph) and works on exactly that paragraph. The card says "I will work on the paragraph you pasted" and where it found it; only that paragraph is sent to OpenAI, whatever section the words around it
 mention. If the text is not found (you changed it, or it came from somewhere else), the card says so and falls back to the part your words name; press *Cancel* if that is not what you meant.
 "The ones selected" or "the references I picked" in a request means the references you ticked earlier in the same chat (see *Finding references on the internet*).
+
+**When the words do not say where new text goes** ("add a passage that supports this part", "now add it to the text"), the app does not ask you the same question again. The model chooses the place from what you
+wrote, how your request was read and the conversation: the pieces of your paper (with their sections, lines and first words) and the suggestions in this chat that are not saved yet. If "this part" is in a
+suggestion you have not accepted, the new passage is written together with it, in its place, and the old suggestion is marked as replaced when the new one is ready. The card says which place it chose and why. It asks
+only when it truly cannot tell, and then with a question that names what it needs ("the end of the introduction or the end of the methods?").
 
 ### Answering the model's questions and changing a suggestion
 
@@ -194,6 +202,8 @@ bibliography, its `\cite`.
   that merely shares a word of your request with your paper ("ideas", "introduction") is never used.
 - **A search you ask for yourself shows its findings.** For *"find references about X"*, the card lists the papers that are about the subject (and says how many it left out because they were not), and nothing is added by itself. Tick the papers you want and press **Add the ticked to my bibliography**: they go into your `.bib`, your Mendeley group and Overleaf like a pasted DOI, and the card gives the `\cite` to paste.
 - **From a question in a suggestion.** See [Answering the model's questions](#answering-the-models-questions-and-changing-a-suggestion): ticking the question makes the app search, pick and cite without a list to choose from.
+- **A reference you tick is added even when its record cannot be read.** If doi.org's record for a DOI is broken or missing (for example it lists an empty author), the title, authors and year the search found make the
+  entry, and its `note` says so: check it. A record with an empty author name is cleaned (the empty name is dropped) before the key is made.
 - **What the model knows about a paper found online is its abstract.** The app never has the paper itself. The suggestion says so next to the citation ("cited from its abstract only: read the paper"), the model is told to say
   no more than the abstract says, and a citation is only ever one of those you added; an invented one is refused like any other.
 - **Later requests can cite them too.** Once added, a request that asks for sources or citations ("support the sampling statement with a source about armed groups attacking pipelines, and cite it") is offered the

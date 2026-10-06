@@ -1294,7 +1294,7 @@ def query_sections(texts, k=24, budget=6500, per_doc=2):
     return out
 
 
-def relevant(proj, instruction, passage="", mode="auto", k=4, budget=1600, facts="", online=(), subject="", sections=(), web=()):
+def relevant(proj, instruction, passage="", mode="auto", k=4, budget=1600, facts="", online=(), subject="", sections=(), web=(), avoid=()):
     """The parts of the library a request should see, or None. In "auto" a request uses the library when it asks for sources, citations or the author's reading (in the
     request or in the author's answers to the model's questions); "always" searches for every request; "never" for none. Also the references found online and added to this
     paper's bibliography that fit the request, and always the ones the author picked (online: their DOIs).
@@ -1320,6 +1320,8 @@ def relevant(proj, instruction, passage="", mode="auto", k=4, budget=1600, facts
     mine = {doc_doi for doc_doi in (c.get("doi") for c in chunks) if doc_doi}
     novel = [web_chunk(c) for c in web if c.get("doi") and c["doi"] not in mine and c["doi"] not in {x["doi"] for x in forced + found}]
     every = forced + found + chunks[:16] + novel + chunks[16:]      # the author's own library first; what was found online comes before the tail so that the tag limit does not cut it
+    if avoid:                                                       # "don't use references from X": no source of this request is by them (the author's picks included: they said not to)
+        every = [c for c in every if not scholar.avoided(c.get("authors"), avoid)]
     if not every:
         return None
     return offer_new(proj, {"chunks": every, "why": "picked" if forced else "always" if mode == "always" else "asked", "command": cite_command(proj)})

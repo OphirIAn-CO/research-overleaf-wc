@@ -327,7 +327,7 @@ class ThroughTheChat(ChatBase):
         del self.oa.requests[:]
         r = self.send("draft a new paragraph")
         self.assertIn("Which part of the paper", r["messages"][1]["text"])
-        self.assertEqual(self.oa.requests, [])
+        self.assertEqual([x["body"]["instructions"][:17] for x in self.oa.requests], ["You decide WHERE "], "the only request was the one that asks the model for the place: no text was written or sent")
 
     def test_an_answer_to_the_models_question_writes_it_again_for_the_same_place(self):
         self.oa.script = [answer(questions=["How many farms were held out?"])]

@@ -10,9 +10,9 @@ from tests.test_v2_chat_api import ASK, ChatBase
 from writing_core import chat, config, intent, paper_index, scholar
 
 
-def reading(kind="edit", confidence=0.95, summary="You want me to improve the flow of that text.", target="the methods", question="", alternatives=(), library=False, online=False, outline=False):
+def reading(kind="edit", confidence=0.95, summary="You want me to improve the flow of that text.", target="the methods", question="", alternatives=(), library=False, online=False, outline=False, avoid=()):
     return {"intent": kind, "confidence": confidence, "summary": summary, "target": target, "uses": {"library": library, "online": online, "outline": outline},
-            "question": question, "alternatives": list(alternatives)}
+            "question": question, "alternatives": list(alternatives), "avoid": list(avoid)}
 
 
 class Rules(unittest.TestCase):

@@ -289,7 +289,7 @@ def _what(parts):
 
 
 def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_run=None, confirm=None, source="cli",
-        use_book=True, max_units=MAX_UNITS, guard_units=None, confirm_big=False, progress=None, use_files=None, facts="", use_library=None, use_analysis=None, online=None, web=None, steps=None):
+        use_book=True, max_units=MAX_UNITS, guard_units=None, confirm_big=False, progress=None, use_files=None, facts="", use_library=None, use_analysis=None, online=None, web=None, steps=None, avoid=None):
     """Build (and, unless dry-run, send) a revision. -> dict with status 'preview' | 'needs_confirm' | 'proposed' | 'failed' and the proposal.
 
     guard_units: above this many passages the call stops with status 'needs_confirm' (and an estimate) unless confirm_big is set.
@@ -359,7 +359,7 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
     lib_mode = use_library or settings.get("use_library") or "auto"
     bib_adds = []
     if lib_mode != "never" or online or web:
-        lib = library.relevant(proj, instruction, " ".join(u["text"][:600] for u in units[:3]), mode=lib_mode, facts=facts, online=online or (), web=web or (),
+        lib = library.relevant(proj, instruction, " ".join(u["text"][:600] for u in units[:3]), mode=lib_mode, facts=facts, online=online or (), web=web or (), avoid=avoid or (),
                                k=12 if library.requires_citations(instruction) else 4, budget=3500 if library.requires_citations(instruction) else 1600)
         if lib:
             lib_text, lib_tags, shown_library = library.request_block(lib)

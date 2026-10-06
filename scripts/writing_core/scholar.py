@@ -654,6 +654,7 @@ def search(queries, *, limit=8, use_web=True, use_index=True, steps=None, pages=
     qterms = terms(" ".join(qs))
     cands = []
     for c in found.values():
+        c["authors"] = [a for a in (c.get("authors") or []) if (a or "").strip(" ,;")]          # a record may list an empty name first
         c["score"] = _score(c, qterms)
         c["label"] = label(c)
         c["id"] = c["doi"]
@@ -661,6 +662,20 @@ def search(queries, *, limit=8, use_web=True, use_index=True, steps=None, pages=
     cands.sort(key=lambda c: -c["score"])
     cands = [c for c in cands if c["score"] > 0][:limit]
     return {"queries": qs, "candidates": cands, "others": [{"title": o["title"], "url": o["url"]} for o in others[:6]], "tried": tried}
+
+
+def _fold(s):
+    import unicodedata
+    return re.sub(r"[^a-z0-9 ]+", " ", unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower())
+
+
+def avoided(authors, avoid):
+    """Is one of these authors one the author said not to use? `authors`: a list of names or one string ("A; B and C"); `avoid`: names as the author wrote them ("Amaya Gomez", "Cabrales").
+    A name matches an author when every word of it is a word of that author's name, whatever the order, the accents or the case."""
+    names = [authors] if isinstance(authors, str) else list(authors or [])
+    people = [x for n in names for x in re.split(r";|\band\b|&", n or "") if x.strip()]
+    wanted = [set(_fold(a).split()) for a in avoid or [] if _fold(a).strip()]
+    return any(w and w <= set(_fold(p).split()) for p in people for w in wanted)
 
 
 def subject_stems(text, max_terms=40):
@@ -678,7 +693,7 @@ def on_subject(c, subject_text, need=2):
     return len(want & have) >= min(need, len(want))
 
 
-def auto_find(topics, *, per=3, total=10, subject_text="", exclude=(), steps=None):
+def auto_find(topics, *, per=3, total=10, subject_text="", exclude=(), steps=None, avoid=()):
     """References found for the writer, without asking: for each topic (a section of an outline, or the subject of the writing) the scholarly indexes are asked and the best records that
     have a DOI are kept, a few for each topic and `total` in all, the best of every topic first so that each point has a chance. No model is called: the search words are the subject
     words of each topic. Only a few words per topic leave this computer. -> {candidates: [...], note: ''} where `note` says what went wrong (nothing could be reached) or ''."""
@@ -704,7 +719,7 @@ def auto_find(topics, *, per=3, total=10, subject_text="", exclude=(), steps=Non
     for rank in range(per):
         for cands in lists:
             picked = [c for c in cands if c["doi"] not in seen and not bad_query(c["title"], subject_text) and c.get("title")
-                      and on_subject(c, f"{topic_of[id(cands)]} {subject_text}")]
+                      and not avoided(c.get("authors"), avoid) and on_subject(c, f"{topic_of[id(cands)]} {subject_text}")]
             if picked:
                 c = picked[0]
                 seen.add(c["doi"])

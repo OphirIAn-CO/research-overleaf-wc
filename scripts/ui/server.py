@@ -1095,17 +1095,17 @@ def _start_pass(app, n, p, cid, plan_mid):
     def work(progress, set_steps):
         steps = revise.Steps(set_steps)
         try:
-            again = chat.plan(n, p, plan["instruction"], plan["chunk_ids"], book_id=plan.get("book"), facts=plan.get("facts", ""), online=plan.get("online") or None)
+            again = chat.plan(n, p, plan["instruction"], plan["chunk_ids"], book_id=plan.get("book"), facts=plan.get("facts", ""), online=plan.get("online") or None, avoid=plan.get("avoid") or None)
             if again["payload_hash"] != plan["payload_hash"]:
                 raise ValueError("Your paper changed after I prepared this request (for example after getting the latest from Overleaf). Please ask again.")
             web, confirm = None, plan["payload_hash"]
             if plan.get("web"):                                           # the app looks for sources itself for the passage and cites the ones that fit
                 ctx = chat.refs_context(n, p, plan["instruction"], chunk_ids=plan["chunk_ids"], last_ids=[])
                 topics = [t for t in [*(plan["web"].get("ask") or []), plan.get("facts", ""), ctx["passage"] or ctx["topic"]] if t and t.strip()][:5]
-                web = scholar.auto_find(topics, subject_text=" ".join(x for x in (draft.paper_subject(n, p), ctx["passage"][:1200], plan.get("facts", "")) if x), steps=steps)["candidates"] or None
-                confirm = chat.plan(n, p, plan["instruction"], plan["chunk_ids"], book_id=plan.get("book"), facts=plan.get("facts", ""), online=plan.get("online") or None, web=web)["payload_hash"]
+                web = scholar.auto_find(topics, subject_text=" ".join(x for x in (draft.paper_subject(n, p), ctx["passage"][:1200], plan.get("facts", "")) if x), steps=steps, avoid=plan.get("avoid") or ())["candidates"] or None
+                confirm = chat.plan(n, p, plan["instruction"], plan["chunk_ids"], book_id=plan.get("book"), facts=plan.get("facts", ""), online=plan.get("online") or None, web=web, avoid=plan.get("avoid") or None)["payload_hash"]
             res = revise.run(n, p, plan["instruction"], chunk_ids=plan["chunk_ids"], book_id=plan.get("book"), dry_run=False,
-                             confirm=confirm, source="web", progress=set_steps, facts=plan.get("facts", ""), online=plan.get("online") or None, web=web, steps=steps)
+                             confirm=confirm, source="web", progress=set_steps, facts=plan.get("facts", ""), online=plan.get("online") or None, web=web, steps=steps, avoid=plan.get("avoid") or None)
             if res["status"] == "preview":
                 raise ValueError("Your paper changed after I prepared this request. Please ask again.")
         except Exception as e:  # noqa: BLE001
@@ -1173,13 +1173,14 @@ def _start_draft(app, n, p, cid, plan_mid):
         try:
             web, confirm = None, plan["payload_hash"]
             if plan.get("web"):                                           # the app looks for sources itself, for every point of the outline, and cites the ones that fit
-                if draft.plan(n, p, plan["instruction"], plan["anchor"], plan["part"], facts=plan.get("facts", ""), book_id=plan.get("book"), online=plan.get("online") or None)["payload_hash"] != confirm:
+                if draft.plan(n, p, plan["instruction"], plan["anchor"], plan["part"], facts=plan.get("facts", ""), book_id=plan.get("book"), online=plan.get("online") or None,
+                                avoid=plan.get("avoid") or None)["payload_hash"] != confirm:
                     raise ValueError("Your paper or your files changed after I prepared this request. Please ask again.")
                 topics, about = draft.web_topics(n, p, plan["instruction"], plan.get("facts", ""), ask=plan["web"].get("ask") or ())
-                web = scholar.auto_find(topics, subject_text=about, steps=steps)["candidates"] or None
-                confirm = draft.plan(n, p, plan["instruction"], plan["anchor"], plan["part"], facts=plan.get("facts", ""), book_id=plan.get("book"), online=plan.get("online") or None, web=web)["payload_hash"]
+                web = scholar.auto_find(topics, subject_text=about, steps=steps, avoid=plan.get("avoid") or ())["candidates"] or None
+                confirm = draft.plan(n, p, plan["instruction"], plan["anchor"], plan["part"], facts=plan.get("facts", ""), book_id=plan.get("book"), online=plan.get("online") or None, web=web, avoid=plan.get("avoid") or None)["payload_hash"]
             res = draft.run(n, p, plan["instruction"], plan["anchor"], plan["part"], facts=plan.get("facts", ""), confirm=confirm, source="web", progress=set_steps, book_id=plan.get("book"),
-                            online=plan.get("online") or None, web=web, steps=steps)
+                            online=plan.get("online") or None, web=web, steps=steps, avoid=plan.get("avoid") or None)
             if res["status"] == "preview":
                 raise ValueError("Your paper or your files changed after I prepared this request. Please ask again.")
         except Exception as e:  # noqa: BLE001
@@ -1300,7 +1301,7 @@ def api_chat_send(r):
             return {"messages": out, "job": None}
         if reading:
             kind, uses = reading["intent"], reading["uses"]
-            req["summary"] = reading["summary"]
+            req["summary"], req["target"], req["avoid"] = reading["summary"], reading.get("target", ""), reading.get("avoid") or []
             chat.update(p, cid, out[0]["id"], understood={"intent": reading["intent"], "summary": reading["summary"], "target": reading["target"], "confidence": reading["confidence"]})
             out[0] = chat.get_message(p, cid, out[0]["id"])
     return _dispatch(r.app, n, p, cid, kind, req, out, out[0]["id"], uses)
@@ -1326,6 +1327,39 @@ def _capabilities(n, p):
     return caps
 
 
+def _quote_of(p, m):
+    """The first words of the suggestion a chat message points to, so that "this part" and "my idea" can be found in it."""
+    try:
+        prop = revise.get_proposal(p, (m.get("data") or {}).get("proposal", ""))
+    except (revise.ReviseError, OSError, ValueError, KeyError, TypeError):
+        return ""
+    text = " ".join(" ".join(h.get("new", "") for h in u.get("hunks", [])) for u in prop.get("units", []))
+    return " ".join(text.split())[:200]
+
+
+def _pending_suggestions(p, cid, limit=3):
+    """The suggestions of new text in this chat that are not saved yet (newest first): {id, text, where, anchor, part}. A request about "this part" may mean one of them."""
+    out = []
+    for m in reversed(chat.get_thread(p, cid)["messages"]):
+        d = m.get("data") or {}
+        if m["kind"] != "result" or not d.get("draft") or not d.get("proposal"):
+            continue
+        try:
+            prop = revise.get_proposal(p, d["proposal"])
+        except (revise.ReviseError, OSError, ValueError, KeyError):
+            continue
+        where = (prop.get("draft") or {}).get("anchor")
+        if prop.get("status") != "proposed" or not where:
+            continue
+        text = "\n\n".join(h.get("new", "") for u in prop.get("units", []) for h in u.get("hunks", []))
+        if text.strip() and not any(x["id"] == prop["id"] for x in out):
+            out.append({"id": prop["id"], "text": text, "anchor": where, "part": (prop.get("draft") or {}).get("part", ""),
+                        "where": f"{where.get('mode', 'here')} (after line {where.get('after_line')} of {where.get('file')})"})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _understand_gate(n, p, cid, req, rules_kind, user_msg):
     """Read the request as a whole and decide whether to show the reading first. -> (card message or None, reading or None, usage). With no model, or with reading switched off,
     (None, None, None): the word-based guess is used, as before."""
@@ -1349,7 +1383,8 @@ def _read_request(n, p, cid, req, rules_kind, user_mid, correction=""):
         sections = []
     text = req["text"] + (f"\n\n[The author's correction of an earlier reading: {correction}]" if correction else "")
     material = intent.build(text, asked=req.get("asked"), selected=req.get("ticked"), sections=sections, capabilities=_capabilities(n, p),
-                            thread=chat.get_thread(p, cid)["messages"], current_id=user_mid, guess=rules_kind, examples=intent.examples(p, req["text"]))
+                            thread=chat.get_thread(p, cid)["messages"], current_id=user_mid, guess=rules_kind, examples=intent.examples(p, req["text"]),
+                            quote=lambda m: _quote_of(p, m))
     return intent.interpret(config.openai_cfg(), material)
 
 
@@ -1407,7 +1442,7 @@ def api_chat_understood(r):
         raise ApiError(400, "that kind of request is not one I know")
     uses = r.body.get("uses") if isinstance(r.body.get("uses"), dict) else reading["uses"]
     uses = {k: bool(uses.get(k)) for k in ("library", "online", "outline")}
-    req = dict(req, summary=reading.get("summary", ""))
+    req = dict(req, summary=reading.get("summary", ""), target=reading.get("target", ""), avoid=reading.get("avoid") or [])
     if note:
         req = dict(req, facts=(req["facts"] + "\nThe author adds: " + note).strip()[:3000])
     intent.remember(p, req["text"], guess, chosen, "corrected" if chosen != guess else "confirmed", note)
@@ -1416,6 +1451,8 @@ def api_chat_understood(r):
     return _dispatch(r.app, n, p, cid, chosen, req, out, data["source"], uses, explicit=True)
 
 
+_REFS_FROM_CHAT = re.compile(r"\b(?:references?|sources?|papers?|citations?|it|them)\b.{0,45}\b(?:just|already|previously|earlier|above|found|selected|picked|added|chosen)\b|"
+                             r"\b(?:just|already|previously|earlier|above)\b.{0,30}\b(?:found|added|picked|selected|chosen)\b", re.I)
 WEB_NOTE = "I will also look for sources on the internet for this (only a few search words leave this computer), and cite the ones that are about your subject."
 
 
@@ -1439,6 +1476,8 @@ def _dispatch(app, n, p, cid, kind, req, out, user_mid, uses=None, explicit=Fals
     text, asked, ticked, facts, online = req["text"], req["asked"], req["ticked"], req["facts"], req["online"]
     issue, redraft, revises, find_refs, words = req["issue"], req["redraft"], req["revises"], req["find_refs"], req["words"]
     uses = uses or {}
+    if uses.get("online") and kind in ("draft", "edit") and not online and not find_refs and _REFS_FROM_CHAT.search((req.get("summary") or "") + " " + chat.strip_pasted(n, p, text)[:600]):
+        online = [c["doi"] for c in scholar.recall(p, "", force=_recent_picks(p, cid))]        # "the references just found": the ones picked earlier in this chat (the reading of the request says that is what is meant)
     online_off = config.paper_settings(p).get("use_online") == "never" or (explicit and kind != "refsearch" and uses.get("online") is False)         # unticked on the card: no search of the internet for this request
     cite_nudge = False
     if kind == "cite":
@@ -1469,7 +1508,7 @@ def _dispatch(app, n, p, cid, kind, req, out, user_mid, uses=None, explicit=Fals
             out.append(chat.append(p, cid, "assistant", "text", "What should I look for? For example: find references on how armed conflict affects energy infrastructure in Colombia."))
         else:
             prior = [m for m in chat.get_thread(p, cid)["messages"] if m["id"] != user_mid]
-            job = _start_refsearch(app, n, p, cid, text, ticked, facts, revises or redraft, issue, words, chat.last_target({"messages": prior}), ask=req.get("ask") or None)
+            job = _start_refsearch(app, n, p, cid, text, ticked, facts, revises or redraft, issue, words, chat.last_target({"messages": prior}), ask=req.get("ask") or None, avoid=req.get("avoid") or ())
     elif kind == "draft":
         if config.openai_status()[0] != "ok":
             out.append(chat.append(p, cid, "assistant", "error", "ChatGPT is not set up yet. Open Settings and add your OpenAI key and model, then ask again."))
@@ -1481,15 +1520,24 @@ def _dispatch(app, n, p, cid, kind, req, out, user_mid, uses=None, explicit=Fals
                 loc = {"status": "ready", "anchor": where["anchor"], "part": where.get("part", ""), "where": "the same place as before", "notes": [], "label": taxonomy.label(where.get("part", "")).capitalize()}
             else:
                 loc = draft.locate(n, p, asked, chunk_ids=ticked)
+                if loc["status"] == "ask":                                 # the words alone did not say where: the model chooses, from what the author wrote, how it was read and what is in this chat
+                    thread = chat.get_thread(p, cid)["messages"]
+                    found = draft.find_place(n, p, text, summary=req.get("summary", ""), target=req.get("target", ""),
+                                             recent=intent.recent(thread, user_mid, limit=8, quote=lambda m: _quote_of(p, m)), pending=_pending_suggestions(p, cid))
+                    if found:
+                        loc = found
+                        if found.get("revises"):                           # it is the suggestion above that the author means: write it again, with the new passage, in its place
+                            redraft = found["revises"]
+                            facts = (facts + "\n\nThe suggestion I wrote earlier for this place (the new text replaces it: keep what is good and add what the author now asks):\n" + draft._plain(found["earlier"])).strip()[:3000]
             if loc["status"] != "ready":
                 tail = (" Sections I can see: " + ", ".join(loc["sections"]) + ".") if loc.get("sections") else ""
                 out.append(chat.append(p, cid, "assistant", "text", loc["why"] + tail))
                 return {"messages": out}
-            pl = draft.plan(n, p, text, loc["anchor"], loc["part"], facts=facts, online=online or None)
+            pl = draft.plan(n, p, text, loc["anchor"], loc["part"], facts=facts, online=online or None, avoid=req.get("avoid") or None)
         except (draft.DraftError, revise.ReviseError, config.ConfigError, openai_client.OpenAIError, ValueError, FileNotFoundError, KeyError, paper_index.IsolationError) as e:
             out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
             return {"messages": out}
-        web_mode = not online_off and (req.get("web") == "force" or _web_wanted(n, p, text, uses))
+        web_mode = not online_off and not online and (req.get("web") == "force" or _web_wanted(n, p, text, uses))
         if web_mode:
             pl["web"] = {"ask": req.get("ask") or []}
             pl["warnings"] = [w for w in (pl.get("warnings") or []) if not w.startswith("You required in-text citations")] + [WEB_NOTE]
@@ -1500,7 +1548,7 @@ def _dispatch(app, n, p, cid, kind, req, out, user_mid, uses=None, explicit=Fals
             why = "; ".join(f"{u['label']}: {u['why']}" for u in (pl.get("uncitable") or [])[:4])
             out.append(chat.append(p, cid, "assistant", "text", ("I could not cite anything from your literature library" + (f" ({why})" if why else " (nothing in it matches this subject)") +
                                                               ". I am looking for verified online reference records on the subject of your outline, so you can choose which ones to add and cite.")))
-            job = _start_refsearch(app, n, p, cid, text, ticked, facts, "", issue, "", chat.last_target({"messages": chat.get_thread(p, cid)["messages"]}), force_draft=True)
+            job = _start_refsearch(app, n, p, cid, text, ticked, facts, "", issue, "", chat.last_target({"messages": chat.get_thread(p, cid)["messages"]}), force_draft=True, avoid=req.get("avoid") or ())
             return {"messages": out, "job": job}
         ask = config.paper_settings(p)["confirm_before_send"] or (pl.get("require_citations", False) and not web_mode)
         m = chat.append(p, cid, "assistant", "draft_plan", "", plan=pl, where=loc["where"], notes=loc["notes"], state="waiting", confirm="citations" if (pl.get("require_citations") and not web_mode) else "setting" if ask else None,
@@ -1565,7 +1613,7 @@ def _dispatch(app, n, p, cid, kind, req, out, user_mid, uses=None, explicit=Fals
                                    in_part=u["in_part"], limit=u["limit"], notes=u["notes"]))
         else:
             try:
-                pl = chat.plan(n, p, chat.instruction_for(u.get("request") or text), u["chunk_ids"], facts=facts, online=online or None)
+                pl = chat.plan(n, p, chat.instruction_for(u.get("request") or text), u["chunk_ids"], facts=facts, online=online or None, avoid=req.get("avoid") or None)
             except (revise.ReviseError, config.ConfigError, openai_client.OpenAIError) as e:
                 out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
                 return {"messages": out}
@@ -1580,7 +1628,7 @@ def _dispatch(app, n, p, cid, kind, req, out, user_mid, uses=None, explicit=Fals
                 why = "; ".join(f"{x['label']}: {x['why']}" for x in (pl.get("uncitable") or [])[:4])
                 out.append(chat.append(p, cid, "assistant", "text", ("You asked for in-text citations, but I could not cite anything from your literature library" + (f" ({why})" if why else "") +
                                                                   ". I am looking for verified references on the subject of this text, so you can choose which ones to add and cite.")))
-                job = _start_refsearch(app, n, p, cid, text, u["chunk_ids"], facts, "", issue, "", [], auto_cite=True)
+                job = _start_refsearch(app, n, p, cid, text, u["chunk_ids"], facts, "", issue, "", [], auto_cite=True, avoid=req.get("avoid") or ())
                 return {"messages": out, "job": job}
             guard = config.ui_cfg()["guard_passages"]
             ask = config.paper_settings(p)["confirm_before_send"] or pl["units"] > guard
@@ -1715,7 +1763,7 @@ CITE_REQUEST = "Support the claims of this text with citations from the sources 
 _CITE_WORDS = re.compile(r"\b(?:citation|citations|cite|reference|references|source|sources|literature|evidence|studies|study|publication|publications|peer-reviewed)\b", re.I)
 
 
-def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words, last_ids, force_draft=False, auto_cite=False, ask=None):
+def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words, last_ids, force_draft=False, auto_cite=False, ask=None, avoid=()):
     """Look for references on the internet in the background; the candidates land in the chat as a card. The search words are chosen from what the author wrote, the passage it is
     about and the author's answers; nothing but those few words leaves this computer, and nothing is added to the bibliography until the author ticks it."""
     def work(progress, set_steps):
@@ -1764,10 +1812,13 @@ def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words,
             chat.append(p, cid, "assistant", "error", plain_error(e) if not isinstance(e, scholar.ScholarError) else str(e))
             raise
         bib = library.paper_bib(p)
-        cands, hidden = [], 0
+        cands, hidden, excluded = [], 0, 0
         gate = " ".join(x for x in (topic, about if pointing or is_draft else "", ctx["passage"][:1500], facts) if x)          # what a record has to be about
         for c in res["candidates"]:
             if scholar.bad_query(c["title"], f"{about} {topic} {' '.join(queries)}"):         # a guide to writing is not a reference for a paper about something else
+                continue
+            if scholar.avoided(c.get("authors"), avoid):                                       # "don't use references from X"
+                excluded += 1
                 continue
             if not scholar.on_subject(c, gate):                                                # shares no subject word with the paper or the topic: it matched the request's words only
                 hidden += 1
@@ -1778,7 +1829,7 @@ def _start_refsearch(app, n, p, cid, text, ticked, facts, revises, issue, words,
                           "in_bib": bool(have), "cite_key": have["key"] if have else ""})
         ctx_out = {"chunk_ids": ctx["chunk_ids"], "where": ctx["where"], "request": instruction or (CITE_REQUEST if ctx["chunk_ids"] else ""), "facts": facts, "revises": rev, "issue": issue or "", "draft": is_draft}
         chat.append(p, cid, "assistant", "refsearch", "", topic=topic, queries=res["queries"], how=how, candidates=cands, others=res["others"], tried=res["tried"], ctx=ctx_out, steps=steps.items,
-                    usage=usage or {}, command=library.cite_command(p), added={}, hidden=hidden)
+                    usage=usage or {}, command=library.cite_command(p), added={}, hidden=hidden, excluded=excluded, avoid=list(avoid or []))
         return {"found": len(cands)}
     return app.jobs.submit(f"Looking for references for {n}", work, with_steps=True, meta={"paper": n, "chat": cid})
 
@@ -1797,7 +1848,12 @@ def _start_refs_pick(app, n, p, cid, mid, dois):
     def work(progress, set_steps):
         common.set_active(n, "ui")
         todo = [d for d in picks if not cands[d]["cite_key"]]
-        res = add_references(n, p, todo, mirror="auto", progress=set_steps) if todo else {"results": [], "push": None, "steps": []}
+        def made_from_search(c):                                       # when doi.org's record cannot be read, the title, authors and year the search found make the entry (marked in its note)
+            def make(doi, text):
+                return library.local_entry({"title": c["title"], "authors": "; ".join(c.get("authors") or []), "year": str(c.get("year") or ""), "rel": ""}, text, doi=doi,
+                                           note="Entry made from an internet search result: doi.org's record could not be read, so the details are what the search found. Check them before submitting.")
+            return make
+        res = add_references(n, p, todo, mirror="auto", progress=set_steps, fallbacks={d: made_from_search(cands[d]) for d in todo}) if todo else {"results": [], "push": None, "steps": []}
         added = dict(chat.get_message(p, cid, mid)["data"].get("added") or {})
         for d in picks:
             if cands[d]["cite_key"]:
@@ -2564,14 +2620,14 @@ def _bib_push(n, p, message):
     return out
 
 
-def add_references(n, p, dois, source="web", mirror="auto", push=None, progress=None):
+def add_references(n, p, dois, source="web", mirror="auto", push=None, progress=None, fallbacks=None):
     """Every DOI through the one shared function, then one bibliography-only push. -> {results, messages, push}"""
     steps = revise.Steps(progress)
     bib = common.bib_path(p)
     results, msgs = [], []
     for i, d in enumerate(dois, 1):
         steps.start(f"doi{i}", f"Adding {d}")
-        res = doi_bot.add_reference(d, bib, source=source, mirror=mirror)
+        res = doi_bot.add_reference(d, bib, source=source, mirror=mirror, fallback=(fallbacks or {}).get(d))
         results.append(res)
         msgs.append(res["message"])
         mend = res.get("mendeley") or {}

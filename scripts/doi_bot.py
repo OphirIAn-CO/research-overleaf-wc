@@ -35,13 +35,23 @@ def fetch_bibtex(doi):
     return http("https://doi.org/" + urllib.parse.quote(doi), "application/x-bibtex").strip()
 
 
+def _clean_authors(bib):
+    """A record may list an empty author ("author = { and Smith, J. and Lee, K.}"): LaTeX rejects it and it has no surname for the key. The empty names are dropped."""
+    def fix(m):
+        people = [a for a in re.split(r"\s+and\s+", " " + m.group(2) + " ") if a.strip(" ,{}")]
+        return (m.group(1) + " and ".join(a.strip() for a in people) + m.group(3)) if people else ""          # no author at all: the field goes
+    return re.sub(r"(\bauthor\s*=\s*[{\"]+)(.+?)([}\"]+,?\s*(?:\n|$))", fix, bib, count=1, flags=re.S | re.I)
+
+
 def restyle(bib):
     """Rename key to Author2022FirstWord (matches the existing bib) and brace the title."""
+    bib = _clean_authors(bib)
     bib = re.sub(r"([}\"\w]),\s+(\w+)\s*=", r"\1,\n    \2 =", bib)  # one field per line
     bib = re.sub(r"\s*\}\s*$", "\n}", bib)
     author, year, title = (re.search(rf"\b{f}\s*=\s*[{{\"]+(.+?)[}}\"]+,?\s*(?:\n|$)", bib, re.S | re.I)
                            for f in ("author", "year", "title"))
-    first = author.group(1).split(" and ")[0] if author else "Anon"
+    first = next((a for a in author.group(1).split(" and ") if a.strip(" ,{}")), "") if author else ""
+    first = first.strip() or "Anon"
     surname = first.split(",")[0] if "," in first else first.split()[-1]
     word = next((w for w in re.findall(r"[A-Za-z]{4,}", title.group(1)) if w.lower() not in
                  {"the", "with", "from", "using", "based"}), "") if title else ""
@@ -188,7 +198,7 @@ def commit_entry(bib_path, bib, key, doi, source="cli", mirror="auto", push=Fals
     return out
 
 
-def add_reference(doi, bib_path, source="cli", mirror="auto", push=False, push_message=None):
+def add_reference(doi, bib_path, source="cli", mirror="auto", push=False, push_message=None, fallback=None):
     """DOI -> references.bib, and on to Mendeley when the paper is linked to a group. Never raises on user-level problems.
     mirror: 'auto' = the paper's linked Mendeley group (if the author wants it), a group name, or None/False = not this time.
     -> dict: status added|duplicate|error|invalid, message (one readable block), and for added/duplicate: doi, key, cite, title, authors, year,
@@ -204,8 +214,16 @@ def add_reference(doi, bib_path, source="cli", mirror="auto", push=False, push_m
         return {"status": "duplicate", "doi": doi, "key": key, "cite": f"\\cite{{{key}}}" if key else None, "message": f"Already in references.bib: {doi}"}
     try:
         bib, key = prepare_entry(doi, text)
-    except Exception as e:  # 404 = unknown DOI, else network
-        return {"status": "error", "doi": doi, "message": f"Could not resolve {doi}: {e}"}
+    except Exception as e:  # 404 = unknown DOI, else network, else a record that cannot be read
+        made = None
+        if fallback:                                    # the caller knows the paper from a search (title, authors, year): an entry made from that is better than none
+            try:
+                made = fallback(doi, text)
+            except Exception:  # noqa: BLE001
+                made = None
+        if not made:
+            return {"status": "error", "doi": doi, "message": f"Could not resolve {doi}: {e}"}
+        bib, key = made
     return commit_entry(bib_path, bib, key, doi, source=source, mirror=mirror, push=push, push_message=push_message)
 
 
