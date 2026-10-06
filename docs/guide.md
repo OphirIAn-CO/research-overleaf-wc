@@ -98,7 +98,18 @@ and reports what it cited and what it could not support. There is no card to ans
 
 - **The safeguards are where the work is saved, not in front of the work.** Every writing step is the same careful pipeline as before: citations, formulas and numbers are hidden behind tags, every answer is checked
   (numbers, names, dashes, LaTeX), a citation can only be one of the sources that were offered, and what a check refuses comes back to the model, which fixes the cause and tries once more, or tells you. **Nothing is
-  saved**: you read each suggestion, change it, and accept it. A few limits apply: at most twelve steps, a ceiling on how much it reads from ChatGPT for one request, and it never repeats a step.
+  saved**: you read each suggestion, change it, and accept it. A few limits apply: at most twenty steps, a ceiling on how much it reads from ChatGPT for one request, and it never repeats a step.
+- **A request about the whole paper** ("a complete review for this journal: shorter, less verbose, better flow and grammar") is done section by section: it takes the sections from the map in order, makes one editing
+  call per section (or a few short ones together, up to about twenty passages) with an instruction made for that section and for the journal, and leaves out what needs nothing. Each call is a suggestion card of
+  its own that you accept or set aside. A web address you give (the journal's page) is read when the publisher allows it; many refuse automated readers, and then it says so and uses what it knows of the journal.
+  It has up to twenty steps for a request and is told how many are left; if they run out it says what is done and what is left, and you say "continue".
+- **How it reads your paper.** It never sends the whole manuscript in one go (a peer review is the one place that does), and it is not limited to a few pieces either. It always has a **map of the whole
+  paper**: every section with the ids of its pieces, what kind of section it is (methods, results, abstract...), where it is and how long. It reads the text of what it needs, about five thousand
+  characters at a time, by piece id or range, by the kind of section (*"the methodology"* is the section called Materials and Methods, whatever its title), by title, or by a quoted sentence, and the step shows what it
+  read ("Read: Materials and Methods (C9-C12, 4 pieces)"). Citations and formulas show to it as `[ref]`. A writing step then gets only what it needs: the passages being edited, or the text around the place for
+  new text, with your library and the sources it chose. If the part you named is not the one it works on, say so in your next message: it stays in the part you name.
+- **"Required citations" is not guessed from a word.** It asks for a new citation to be required only when you ask to cite; a brief that says "keep the citations" is not a demand for one. If a result has no new
+  citation where you wanted one, it sees that and decides.
 - **What you see.** The steps appear while it works (and under *What I did* afterwards); each suggestion is the usual card; the last message says what was done. If you say "this part", it knows which suggestion you mean.
 - **What still has its own card** (because you choose or confirm there): a pasted DOI, help, "what do my articles say about ...", a search for references that you want to choose from, a peer review, bringing your library into the
   bibliography, counting, the buttons under a suggestion (answer its questions, change the request, polish in QuillBot), and "Fix this" on a review comment. Choosing a kind under the message box, or switching on

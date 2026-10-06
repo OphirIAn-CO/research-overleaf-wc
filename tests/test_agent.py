@@ -170,6 +170,120 @@ class Working(Base):
         self.assertTrue(err and "I could not plan this request" in err[0]["text"], err)
 
 
+class Reading(Base):
+    """How it reads the paper: it always sees the whole paper as a map, and reads the text of the parts it asks for, by id, range, kind of section or title."""
+
+    def ctx(self):
+        return agent.Ctx(self.name, self.proj, "t", "x")
+
+    def keys_of(self, hits):
+        return [k for k, _, _ in hits]
+
+    def test_a_kind_of_section_is_found_whatever_its_title(self):
+        c = self.ctx()
+        methods = [k for k, p in c.pieces.items() if "Materials and Methods" in (p.get("section_path") or "")]
+        self.assertTrue(methods)
+        self.assertEqual(self.keys_of(agent._find_pieces(c, "methodology")), methods, "'methodology' is the section called Materials and Methods")
+        both = self.keys_of(agent._find_pieces(c, "abstract and introduction"))
+        self.assertTrue(any("Introduction" in c.pieces[k]["section_path"] for k in both))
+
+    def test_ids_ranges_the_whole_paper_and_a_quoted_sentence_are_understood(self):
+        c = self.ctx()
+        keys = list(c.pieces)
+        self.assertEqual(self.keys_of(agent._find_pieces(c, f"{keys[0]}-{keys[2]}")), keys[:3])
+        self.assertEqual(self.keys_of(agent._find_pieces(c, f"{keys[1]} {keys[3]}")), [keys[1], keys[3]])
+        self.assertEqual(self.keys_of(agent._find_pieces(c, "full manuscript")), keys)
+        quoted = agent._find_pieces(c, "The second paragraph describes soils, slopes and the access roads that were used to reach every farm in the sample")
+        self.assertTrue(quoted and "access roads" in agent._plain_lines(c.proj, c.pieces[quoted[0][0]], quoted[0][1], quoted[0][2]), "a quoted sentence finds the part that holds it")
+
+    def test_reading_says_what_was_read_and_what_was_left_for_length(self):
+        c = self.ctx()
+        text, _ = agent.t_read_paper(c, {"query": "full manuscript"})
+        self.assertTrue(text.startswith("Read: "), text[:80])
+        self.assertIn("citations and formulas show as [ref]", text)
+        self.assertNotIn("\\cite{smith2020}", text, "citations stay behind when the model reads")
+        none, _ = agent.t_read_paper(c, {"query": "zebra migration patterns"})
+        self.assertIn("could not match", none)
+        self.assertIn("Materials and Methods", none, "and the map of the paper comes back, so it can choose")
+
+    def test_a_long_paper_is_still_shown_whole_in_the_map(self):
+        from pathlib import Path
+        long = "\\documentclass{article}\n\\begin{document}\n" + "".join(f"\\section{{Topic {i}}}\nSentence number {i} about the topic and its details for the reader.\n\n" for i in range(1, 160)) + "\\end{document}\n"
+        (Path(self.proj["path"]) / "main.tex").write_text(long)
+        c = agent.Ctx(self.name, self.proj, "t", "x")
+        m = c.sections_map()
+        self.assertIn("Topic 1 ", m + " ")
+        self.assertIn("Topic 159", m, "the last section of a long paper is in the map")
+        self.assertIn("<paper_map", c.context())
+        self.assertLess(len(m), 14001)
+
+    def test_a_brief_that_says_keep_the_citations_is_not_a_demand_for_a_new_one(self):
+        self.say(act("edit_text", "Shortening the study area", chunks=[self.study], instruction="Shorten this passage while keeping every citation and every number exactly as they are."),
+                 reply(("Each region has a distinct climate and soil.", "Each region has its own climate and soil.")), act("finish", message="Done."))
+        r = self.send("shorten the study area")
+        self.wait_job(r["job"])
+        res = [m for m in self.texts() if m["kind"] == "result"]
+        self.assertTrue(res, "the suggestion was made: the word 'citation' in the brief did not make a new citation required")
+        st, prop = self.c.get(f"/api/proposal?paper=alpha&id={res[0]['data']['proposal']}")
+        self.assertEqual(prop["status"], "proposed")
+        self.assertIn("Suggestion ready", self.bodies()[-1], "and the model is told so in one line")
+
+
+class Broad(Base):
+    """A request about the whole paper: it works section by section within its steps, can read a page the author linked, and when the steps run out it says what is done and what is left."""
+
+    def long_paper(self, n=12):
+        from pathlib import Path
+        text = "\\documentclass{article}\n\\begin{document}\n" + "".join(
+            f"\\section{{Part {i}}}\nIn this part we describe, in a rather long and roundabout way, the thing number {i} that we studied.\n\nIt should be said that part {i} was long.\n\n" for i in range(1, n + 1)) + "\\end{document}\n"
+        (Path(self.proj["path"]) / "main.tex").write_text(text)
+        paper_index.refresh(self.name, self.proj, trigger="test")
+        return agent.Ctx(self.name, self.proj, "t", "x")
+
+    def test_more_passages_than_the_old_soft_limit_go_in_one_call_and_the_map_names_them(self):
+        c = self.long_paper(14)
+        ids = list(c.pieces)[:12]
+        from tests.fake_openai import passage_of
+        calls = {"agent": 0}
+
+        def model(body):                     # the agent's turns, and the editing model's answers, from one script
+            if body["text"]["format"]["name"] == "agent":
+                calls["agent"] += 1
+                return act("edit_text", "Tightening the first parts", chunks=[f"{ids[0]}-{ids[-1]}"], instruction="Cut the roundabout wording; keep every fact.") if calls["agent"] == 1 else act("finish", message="Done.")
+            return {"approach": "Cut.", "revised_text": passage_of(body).replace("in a rather long and roundabout way, ", ""), "questions": [],
+                    "changes": [{"before": "in a rather long and roundabout way, ", "after": "", "reason": "cut", "rule": ""}]}
+        self.oa.script = [model] * 12
+        r = self.send("shorten the whole paper, it is too verbose")
+        self.assertEqual(self.wait_job(r["job"])["status"], "done")
+        self.assertNotIn("more than one call can take", " ".join(self.bodies()))
+        self.assertTrue([m for m in self.texts() if m["kind"] == "result"], "a suggestion for the sections together")
+        self.assertIn("Part 14", self.bodies()[0], "the map has every section")
+
+    def test_a_page_the_author_linked_can_be_read_and_no_other(self):
+        keep = scholar.fetch
+        self.addCleanup(setattr, scholar, "fetch", keep)
+        scholar.fetch = lambda url, *a, **k: ("<html><body><h1>Aims and scope</h1><p>" + "Reliability engineering and system safety of engineered systems. " * 12 + "</p></body></html>", url)
+        link = "https://www.example.org/journal/ress"
+        self.say(act("read_webpage", "Reading the journal page", query=link), act("read_webpage", "Reading another page", query="https://evil.example.com/x"),
+                 act("finish", message="I read the journal's page."))
+        r = self.send("improve the paper so that it fits this journal: " + link)
+        self.wait_job(r["job"])
+        self.assertIn("Aims and scope", self.bodies()[1])
+        self.assertIn("I only read web addresses the author gave", self.bodies()[2])
+
+    def test_when_the_steps_run_out_the_model_says_what_is_done_and_what_is_left(self):
+        keep = agent.MAX_ACTIONS
+        self.addCleanup(setattr, agent, "MAX_ACTIONS", keep)
+        agent.MAX_ACTIONS = 3
+        self.say(act("read_paper", "a", query="outline"), act("read_paper", "b", query="Study area"), act("read_paper", "c", query="results"),
+                 act("finish", message="I read three parts and made no suggestion yet. Left: the whole paper. Say continue."))
+        r = self.send("a complete review of the paper")
+        self.assertEqual(self.wait_job(r["job"])["status"], "done")
+        self.assertIn("Say continue", self.texts()[-1]["text"])
+        self.assertIn("<actions_left>0", self.bodies()[-1])
+        self.assertIn("LAST action", self.bodies()[2])
+
+
 class Routing(Base):
     def test_the_ways_that_have_a_card_or_a_choice_of_their_own_are_not_taken_by_the_agent(self):
         self.say(reply(("Each region has a distinct climate and soil.", "Each region has its own climate and soil.")))
@@ -199,7 +313,6 @@ class Routing(Base):
         st, res = self.c.post("/api/settings", {"paper": "alpha", "agent": "classic"})
         self.assertEqual(st, 200, res)
         self.assertEqual(config.paper_settings(self.proj)["agent"], "classic")
-        self.assertEqual(agent.MAX_ACTIONS, 12)
 
 
 if __name__ == "__main__":

@@ -289,7 +289,7 @@ def _what(parts):
 
 
 def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_run=None, confirm=None, source="cli",
-        use_book=True, max_units=MAX_UNITS, guard_units=None, confirm_big=False, progress=None, use_files=None, facts="", use_library=None, use_analysis=None, online=None, web=None, steps=None, avoid=None):
+        use_book=True, max_units=MAX_UNITS, guard_units=None, confirm_big=False, progress=None, use_files=None, facts="", use_library=None, use_analysis=None, online=None, web=None, steps=None, avoid=None, cites=None):
     """Build (and, unless dry-run, send) a revision. -> dict with status 'preview' | 'needs_confirm' | 'proposed' | 'failed' and the proposal.
 
     guard_units: above this many passages the call stops with status 'needs_confirm' (and an estimate) unless confirm_big is set.
@@ -299,6 +299,8 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
     use_library: "auto" | "always" | "never": whether parts of the author's literature library go with the request, and may be cited when the paper's bibliography has them
                  (default: the paper's setting, "auto": when the request asks for sources, citations or the author's reading).
     online:      DOIs of references found online that the author picked for this request (already in the bibliography): they go with it as abstracts the model may cite.
+    cites:       None = the words of the instruction decide whether a new in-text citation is required ("cite", "citation"); "required" = it is; "wanted" = sources are looked up in depth but a
+                 draft without a new citation is accepted; "no" = neither. (The agent says what it means: its brief often says "keep the citations", which is not a demand for a new one.)
     web:         references the app itself found on the internet for this request (search results with a DOI and an abstract); they may be cited, and their bibliography entries are written only when the saved text cites them.
     facts:       the author's answers to the model's earlier questions, and further instructions from the author (a revision of a suggestion). They go to the model
                  as <author_answers>, and the numbers, acronyms and names in them are not treated as invented.
@@ -358,9 +360,11 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
     lib, lib_text, lib_tags, shown_library, uncitable = None, "", {}, [], []
     lib_mode = use_library or settings.get("use_library") or "auto"
     bib_adds = []
+    require_citations = library.requires_citations(instruction) if cites is None else cites == "required"
+    deep = require_citations or cites == "wanted"
     if lib_mode != "never" or online or web:
         lib = library.relevant(proj, instruction, " ".join(u["text"][:600] for u in units[:3]), mode=lib_mode, facts=facts, online=online or (), web=web or (), avoid=avoid or (),
-                               k=12 if library.requires_citations(instruction) else 4, budget=3500 if library.requires_citations(instruction) else 1600)
+                               k=12 if deep else 4, budget=3500 if deep else 1600)
         if lib:
             lib_text, lib_tags, shown_library = library.request_block(lib)
             citable = sum(1 for x in shown_library if x["tag"])
@@ -375,7 +379,6 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
                                                    f"{n_on} found online" if n_on else "") if x)
                       + (f"; {citable} can be cited" if citable else "; none of them is in your bibliography yet, so none is cited")
                       + (f" ({len(bib_adds)} would be added to it when you save)" if bib_adds else ""))
-    require_citations = library.requires_citations(instruction)
     if require_citations and not lib_tags:
         why = "; ".join(f"{u['label']}: {u['why']}" for u in uncitable[:4])
         warnings.append("You required in-text citations, but none of the retrieved literature excerpts has a usable bibliography entry" + (f" ({why})" if why else "") + ". I will not make an uncited revision.")

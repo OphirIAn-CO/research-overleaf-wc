@@ -435,7 +435,7 @@ def _target_words(part, text):
     return {"abstract": 200, "results": 450, "discussion": 450, "methods": 350, "introduction": 400, "background": 450, "conclusion": 250, "limitations": 200}.get(part, 250)
 
 
-def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, use_analysis=None, use_library=None, book_id=None, online=None, web=None, avoid=None):
+def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, use_analysis=None, use_library=None, book_id=None, online=None, web=None, avoid=None, cites=None):
     """Everything the request is made of, without sending it. -> dict used by plan() and run()"""
     facts = (facts or "").strip()[:3000]
     if not instruction or not instruction.strip():
@@ -495,7 +495,7 @@ def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, 
             uncitable = lib.get("uncitable", [])
             if library.file_entry_warning(bib_adds):
                 warnings.append(library.file_entry_warning(bib_adds))
-    require_citations = library.requires_citations(instruction)
+    require_citations = library.requires_citations(instruction) if cites is None else cites == "required"        # an agent says what it means; a brief that says "keep the citations" is not a demand for a new one
     if require_citations and not lib_tags:
         why = "; ".join(f"{u['label']}: {u['why']}" for u in uncitable[:4])
         warnings.append("You required in-text citations, but none of the retrieved literature excerpts has a usable bibliography entry" + (f" ({why})" if why else "") +
@@ -521,9 +521,9 @@ def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, 
             "cites": sorted(lib_tags), "require_citations": require_citations, "floats": len(float_tags), "surround": before + "\n" + after}
 
 
-def plan(name, proj, instruction, anchor, part="", facts="", book_id=None, online=None, web=None, avoid=None, use_library=None):
+def plan(name, proj, instruction, anchor, part="", facts="", book_id=None, online=None, web=None, avoid=None, use_library=None, cites=None):
     """What would be sent, without sending it. -> the numbers the chat shows and the hash that confirms exactly this request"""
-    p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id, online=online, web=web, avoid=avoid, use_library=use_library)
+    p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id, online=online, web=web, avoid=avoid, use_library=use_library, cites=cites)
     return {"avoid": list(avoid or []), "instruction": instruction, "facts": p["facts"], "online": p["online"], "anchor": anchor, "part": part, "label": p["label"], "where": p["where"], "est_tokens_in": p["est_tokens_in"], "est_cost": p["est_cost"],
             "model": p["model"], "tips": len(p["rule_ids"]), "book": p["book"], "payload_hash": p["payload_hash"], "warnings": p["warnings"], "require_citations": p["require_citations"], "outline": p["outline"], "sources": p["sources"], "library": p["library"], "uncitable": p["uncitable"],
             "pictures": p["pictures"], "target_words": p["target_words"], "payload": openai_client.redact(p["body"])}
@@ -565,13 +565,13 @@ def _paragraph_hunks(unit_id, draft, mapping, basis, rule_ids, default_reason):
     return segs, hunks
 
 
-def run(name, proj, instruction, anchor, part="", facts="", confirm=None, source="web", progress=None, book_id=None, dry_run=False, online=None, web=None, steps=None, avoid=None, use_library=None):
+def run(name, proj, instruction, anchor, part="", facts="", confirm=None, source="web", progress=None, book_id=None, dry_run=False, online=None, web=None, steps=None, avoid=None, use_library=None, cites=None):
     """Draft the text and store it as a proposal. `confirm` must be the payload_hash of plan() for the same request (the author has seen what goes out).
     -> {"status": "proposed" | "failed" | "no_changes" | "preview", "proposal": {...}}"""
     steps = steps or revise.Steps(progress)
     t0 = time.time()
     steps.start("read", "Reading what comes before the new text")
-    p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id, online=online, web=web, avoid=avoid, use_library=use_library)
+    p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id, online=online, web=web, avoid=avoid, use_library=use_library, cites=cites)
     steps.finish("read", f"for {p['label'].lower()}, {p['where']}", label=f"Read the place for the {p['label'].lower()}")
     n_src = len([s for s in p["sources"] if not s["picture"]])
     steps.add("sources", "Looking at your analysis, notes and reading", detail=f"{n_src} part{'s' if n_src != 1 else ''} of your files, {len(p['pictures'])} picture{'s' if len(p['pictures']) != 1 else ''}, "

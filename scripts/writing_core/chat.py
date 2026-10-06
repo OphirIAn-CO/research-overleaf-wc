@@ -858,10 +858,10 @@ CHIPS = [("Make it clearer", "Make this clearer and easier to follow."), ("More 
 
 # ------------------------------------------------------------------------------------------- the request, ready to send
 
-def plan(name, proj, instruction, chunk_ids, book_id=None, facts="", online=None, web=None, avoid=None, use_library=None):
+def plan(name, proj, instruction, chunk_ids, book_id=None, facts="", online=None, web=None, avoid=None, use_library=None, cites=None):
     """Prepare the request without sending anything. -> what the chat shows ("2 passages, about 900 tokens") plus the hash that proves
     exactly this payload is what gets sent. online: DOIs of references found online that the author picked for this request."""
-    res = revise.run(name, proj, instruction, chunk_ids=chunk_ids, book_id=book_id, dry_run=True, source="web", facts=facts, online=online, web=web, avoid=avoid, use_library=use_library)
+    res = revise.run(name, proj, instruction, chunk_ids=chunk_ids, book_id=book_id, dry_run=True, source="web", facts=facts, online=online, web=web, avoid=avoid, use_library=use_library, cites=cites)
     return {"avoid": list(avoid or []), "instruction": instruction, "facts": (facts or "").strip()[:3000], "chunk_ids": chunk_ids, "online": list(online or []), "units": res["units"], "passages": res["passages"], "est_tokens_in": res["est_tokens_in"],
             "est_cost": res["est_cost"], "manuscript_tokens": res["manuscript_tokens"], "model": res["model"], "tips": len(res["rules"]),
             "payload_hash": res["payload_hash"], "warnings": res["warnings"], "book": res["book"], "parts": res["parts"], "sources": res.get("sources", []),
