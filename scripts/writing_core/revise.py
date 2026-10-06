@@ -76,7 +76,14 @@ RULE_OUTLINE = """<author_outline> holds the author's own plan for this text: th
 RULE_PICTURES = """Pictures attached to this request are figures of the author's analysis. You may describe what they show (a trend, an order, groups, outliers, a gap between curves), but never read an exact value off a picture and never state a number that is not in the text parts or the passage. A picture does not replace the numbers: if one is needed and is not in the text, ask for it in "questions"."""
 
 
-def system_for(sources=False, facts=False, with_library=False, pictures=False, outline=False):
+RULE_CONTEXT = """<manuscript_outline> (titles of the sections of the manuscript) and <rest_of_this_section> (the other passages the author chose for this request, shortened) show the manuscript around <passage>, so that you know what the rest of the paper contains. You revise ONLY <passage>. The other parts exist, are not shown in full, and are reviewed on their own: never ask the author to supply, show, send or confirm any part of the manuscript that appears there (another subsection, an overview, a figure, an appendix), never say that such a part is missing, and do not treat something the rest of the section already says as if it were missing from <passage>. Ask only about facts that are missing from <passage> itself and that only the author knows (a value, a setting, a reason), at most three. Never copy numbers, names or claims from the outline or the rest of the section into the passage. A part marked "already reviewed and saved" was settled by the author: do not ask about it."""
+
+RULE_PREVIOUS = """<previous_suggestion> is the revision of this passage that the author has already read. The author has since answered your questions or added instructions. Start from it: keep its wording wherever the answers and instructions do not require a change, so that the style does not change again from one round to the next, and apply what the answers and instructions require. "revised_text" is still the whole revised passage, and "changes" are still relative to <passage>."""
+
+RULE_REVIEWED = """When <passage> is marked as already reviewed and saved by the author, its style was settled: do not restyle it. Change only what the instruction and <author_answers> require beyond style, and leave every other word exactly as it is."""
+
+
+def system_for(sources=False, facts=False, with_library=False, pictures=False, outline=False, context=False, previous=False, reviewed=False):
     """The instructions for the model: the base ones, plus the rule about the author's own files when parts of them go along, the rule about the author's library when parts
     of it go along, and the rule about the author's answers."""
     s = SYSTEM_PROMPT_SOURCES if sources else SYSTEM_PROMPT
@@ -100,6 +107,16 @@ def system_for(sources=False, facts=False, with_library=False, pictures=False, o
         n += 1
     if outline:
         extra.append(f"{n}. {RULE_OUTLINE}")
+        n += 1
+    if context:
+        extra.append(f"{n}. {RULE_CONTEXT}")
+        n += 1
+    if previous:
+        extra.append(f"{n}. {RULE_PREVIOUS}")
+        n += 1
+    if reviewed:
+        extra.append(f"{n}. {RULE_REVIEWED}")
+        n += 1
     if extra:
         s = s.replace("\n\nAnswer with JSON only", "\n" + "\n".join(extra) + "\n\nAnswer with JSON only")
     return s
@@ -280,7 +297,8 @@ def _attr(text):
     return text.replace(">", "/").replace('"', "'").replace("<", "(")
 
 
-def build_user(instruction, card, rules_text, unit, masked, prefs="", sources="", facts="", library_text="", outline=""):
+def build_user(instruction, card, rules_text, unit, masked, prefs="", sources="", facts="", library_text="", outline="", context=None, previous="", reviewed=False):
+    context = context or ("", "")
     return "\n".join([
         f"<instruction>{instruction.strip()}</instruction>",
         f"<paper_card>\n{card}\n</paper_card>" if card else "",
@@ -290,8 +308,166 @@ def build_user(instruction, card, rules_text, unit, masked, prefs="", sources=""
         f"<source_material>\n{sources}\n</source_material>" if sources else "",
         f"<library_sources>\n{library_text}\n</library_sources>" if library_text else "",
         f"<author_answers>\n{facts}\n</author_answers>" if facts else "",
+        f"<manuscript_outline>\n{context[0]}\n</manuscript_outline>" if context[0] else "",
+        f"<rest_of_this_section>\n{context[1]}\n</rest_of_this_section>" if context[1] else "",
+        f"<previous_suggestion>\n{previous}\n</previous_suggestion>" if previous else "",
+        "<note>This passage was already reviewed and saved by the author in an earlier round.</note>" if reviewed else "",
         f'<passage part="{",".join(unit["parts"]) or "unknown"}" section="{_attr(unit["section_path"])}">\n{masked}\n</passage>',
     ]).strip()
+
+
+
+# ------------------------------------------------------------------------------------------- what the model needs to stay in context
+
+OUTLINE_LINES = 45
+REST_CHARS = 1400
+
+
+def _ledger_path(proj):
+    return config.paper_dir(proj) / "reviewed.json"
+
+
+def _read_json(path, default):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def mark_reviewed(name, proj, pid, chunk_ids):
+    """The author saved a suggestion for these pieces of the paper: remember what they now look like, so that a later round knows their style was settled (and a change since then is seen)."""
+    ids = [c for c in dict.fromkeys(chunk_ids or []) if c]
+    if not ids:
+        return
+    got = paper_index.get_chunks(name, proj, ids)
+    led = _read_json(_ledger_path(proj), {})
+    for c in got:
+        led[c["id"]] = {"hash": c["hash"], "section": c["section_path"], "ts": time.time(), "proposal": pid}
+    d = config.ensure_paper_dir(proj)
+    _atomic_json(d / "reviewed.json", led)
+
+
+def reviewed_ids(name, proj):
+    """{chunk id: section} of the pieces that were saved from a suggestion and have not changed since."""
+    led = _read_json(_ledger_path(proj), {})
+    if not led:
+        return {}
+    now = {c["id"]: c["hash"] for c in paper_index.get_chunks(name, proj, list(led))}
+    return {cid: v["section"] for cid, v in led.items() if now.get(cid) == v["hash"]}
+
+
+def _blocks(text):
+    return [b.strip() for b in re.split(r"\n\s*\n", text or "") if b.strip()]
+
+
+def remember_answers(proj, facts):
+    """What the author answered, and what they chose to skip, is kept for the paper (not only for one suggestion): a later request about another part does not ask it again.
+    facts: the text of "Question: ...\nAnswer: ..." blocks. Returns how many were kept."""
+    d = _read_json(_ledger_path(proj).with_name("answers.json"), [])
+    known = {x["q"]: x for x in d}
+    n = 0
+    for b in _blocks(facts):
+        m = re.match(r"Question:\s*(.+?)\s*\n\s*Answer:\s*(.*)\Z", b, re.S)
+        if not m:
+            continue
+        q, a = m.group(1).strip(), m.group(2).strip()
+        skipped = a.startswith("(skipped")
+        known[q] = {"q": q, "a": None if skipped else a, "ts": time.time()}
+        n += 1
+    if n:
+        items = sorted(known.values(), key=lambda x: x["ts"])[-60:]
+        _atomic_json(config.ensure_paper_dir(proj) / "answers.json", items)
+    return n
+
+
+def _words_of(text):
+    return {w for w in re.findall(r"[a-z][a-z-]{3,}", (text or "").lower()) if w not in _COMMON}
+
+
+_COMMON = {"that", "this", "with", "from", "were", "have", "which", "their", "there", "these", "those", "would", "could", "should", "about", "into", "than", "then", "when", "what", "does", "your",
+           "please", "supply", "provide", "text", "paper", "section", "passage", "data", "model", "method", "methods"}
+
+
+def answers_for(proj, text, limit=1500):
+    """The author's earlier answers (and skipped questions) that bear on this text: they share at least two words with it. -> text of Question/Answer blocks, newest last"""
+    d = _read_json(_ledger_path(proj).with_name("answers.json"), [])
+    want = _words_of(text)
+    out, used = [], 0
+    for x in reversed(d):
+        if len(want & _words_of(x["q"] + " " + (x["a"] or ""))) < 2:
+            continue
+        block = f"Question: {x['q']}\nAnswer: " + (x["a"] if x["a"] else "(skipped: the author chose not to answer. Do not ask it again; leave that point as it is in the passage and do not guess.)")
+        if used + len(block) > limit:
+            break
+        out.append(block)
+        used += len(block)
+    return "\n\n".join(reversed(out))
+
+
+def paper_context(name, proj, unit, done=None, others=()):
+    """What a model needs to know about the rest of the manuscript while it revises one passage: the outline of the whole paper, TITLES ONLY (this passage and the parts already reviewed are marked), and a short
+    version of the OTHER passages the author chose for this same request (they are being sent anyway, each on its own). Nothing of a part the author did not select goes out, only its title.
+    -> (outline text, the other selected passages shortened)"""
+    tex = [c for c in paper_index.list_chunks(name, proj)["chunks"] if c["kind"] == "tex"]
+    if len(tex) < 2:
+        return "", ""
+    done = done if done is not None else reviewed_ids(name, proj)
+    mine = set(unit.get("chunk_ids") or [])
+    order, seen = [], {}
+    for c in tex:
+        path = c["section_path"] or c["file"]
+        if path not in seen:
+            seen[path] = {"path": path, "file": c["file"], "lo": c["line_start"], "hi": c["line_end"], "mine": False, "done": True}
+            order.append(path)
+        e = seen[path]
+        e["hi"] = max(e["hi"], c["line_end"])
+        e["mine"] = e["mine"] or c["id"] in mine or (c["file"] == unit["file"] and unit["line_start"] <= c["line_start"] and c["line_end"] <= unit["line_end"])
+        e["done"] = e["done"] and c["id"] in done
+    lines = [f"- {e['path']} (lines {e['lo']} to {e['hi']})" + (" [THIS IS THE PASSAGE YOU REVISE]" if e["mine"] else "") + (" [already reviewed and saved]" if e["done"] and not e["mine"] else "")
+             for e in (seen[p] for p in order)][:OUTLINE_LINES]
+    rest, used = [], 0
+    peers = [o for o in others if o is not unit][:14]
+    if peers:
+        per = max(120, REST_CHARS // len(peers))
+        for o in peers:
+            body = " ".join((o.get("text") or "").split())
+            body = re.sub(r"\\[A-Za-z]+\*?(?:\[[^\]]*\])?(?:\{[^}]*\})?", " ", body)
+            body = " ".join(body.split())[:per]
+            row = f"[{o['section_path']} · lines {o['line_start']} to {o['line_end']}] {body}"
+            if used + len(row) > REST_CHARS + 400:
+                break
+            rest.append(row)
+            used += len(row)
+    return "\n".join(lines), "\n".join(rest)
+
+
+_SUPPLY = re.compile(r"\b(?:supply|provide|share|send|show|paste|attach|upload|give|include|confirm|clarify|describe)\b", re.I)
+_PARTS_OF_PAPER = re.compile(r"\b(?:sub-?sections?|sections?|passages?|paragraphs?|appendi(?:x|ces)|overview|the (?:rest|remainder) of the (?:text|section|manuscript)|the full (?:text|section|manuscript))\b", re.I)
+
+
+def _title_words(title):
+    return {w for w in re.findall(r"[a-z][a-z-]{3,}", (title or "").lower()) if w not in _COMMON}
+
+
+def drop_other_part_questions(questions, titles, own=""):
+    """A passage is reviewed alone, and a model that cannot see the rest of the paper asks the author to "supply" the subsections around it. A question that asks for a part of the manuscript, or that names
+    another section of this paper and asks for it, is not the author's to answer: the part is in the paper and is reviewed on its own. -> (questions that stay, [{question, where}] that went)"""
+    keep, dropped = [], []
+    own_words = _title_words(own)
+    for q in questions:
+        hit = None
+        for t in titles:
+            tw = _title_words(t)
+            if len(tw) >= 2 and len(tw & _words_of(q)) >= max(2, int(len(tw) * 0.6 + 0.5)) and tw != own_words and _SUPPLY.search(q):
+                hit = t
+                break
+        if hit is None and _SUPPLY.search(q) and _PARTS_OF_PAPER.search(q) and re.search(r"\b(?:supply|provide|share|send|show|paste|attach|upload)\b", q, re.I):
+            hit = ""
+        if hit is None:
+            keep.append(q)
+        else:
+            dropped.append({"question": q, "where": hit})
+    return keep, dropped
 
 
 # ------------------------------------------------------------------------------------------- run
@@ -312,7 +488,7 @@ def _what(parts):
 
 
 def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_run=None, confirm=None, source="cli",
-        use_book=True, max_units=MAX_UNITS, guard_units=None, confirm_big=False, progress=None, use_files=None, facts="", use_library=None, use_analysis=None, online=None, web=None, steps=None, avoid=None, cites=None):
+        use_book=True, max_units=MAX_UNITS, guard_units=None, confirm_big=False, progress=None, use_files=None, facts="", use_library=None, use_analysis=None, online=None, web=None, steps=None, avoid=None, cites=None, previous=None):
     """Build (and, unless dry-run, send) a revision. -> dict with status 'preview' | 'needs_confirm' | 'proposed' | 'failed' and the proposal.
 
     guard_units: above this many passages the call stops with status 'needs_confirm' (and an estimate) unless confirm_big is set.
@@ -327,6 +503,7 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
     web:         references the app itself found on the internet for this request (search results with a DOI and an abstract); they may be cited, and their bibliography entries are written only when the saved text cites them.
     facts:       the author's answers to the model's earlier questions, and further instructions from the author (a revision of a suggestion). They go to the model
                  as <author_answers>, and the numbers, acronyms and names in them are not treated as invented.
+    previous:    id of the suggestion this one writes again (after the author's answers): its wording is the starting point, so that the style does not change again from round to round.
     progress:    callable(list_of_steps), see Steps."""
     facts = (facts or "").strip()[:3000]
     if not instruction or not instruction.strip():
@@ -345,6 +522,9 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
                           "Pick a smaller part (for example one section, or the paragraphs before a figure) and ask again for the rest.")
     steps.finish("read", f"{len(units)} passage{'s' if len(units) != 1 else ''}, about {_words(sum(c['tokens'] for c in chunks))} words",
                  label=f"Read your {_what(parts)}")
+    earlier = answers_for(proj, instruction + " " + " ".join(u["text"][:1500] for u in units))     # what the author answered or skipped before, about anything like this: not asked again
+    if earlier:
+        facts = merge_facts(earlier, facts)[:3000]
     card = read_card(proj)
     prefs = preferences.digest(proj)
 
@@ -407,17 +587,37 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
         warnings.append("You required in-text citations, but none of the retrieved literature excerpts has a usable bibliography entry" + (f" ({why})" if why else "") + ". I will not make an uncited revision.")
     outline_text, shown_outline, outline_notes = files.outline_select(name, proj, instruction)
     warnings.extend(outline_notes)
-    system = system_for(bool(sources_text), bool(facts), bool(lib), bool(pictures), bool(outline_text))
+    done = reviewed_ids(name, proj)
+    contexts = [paper_context(name, proj, u, done, units) if len(units) > 1 else ("", "") for u in units]          # a single passage goes alone, as the author chose; several passages of one request know about each other
+    section_titles = [t for t in dict.fromkeys((c["section_path"] or "").split(" > ")[-1] for c in paper_index.list_chunks(name, proj)["chunks"] if c["kind"] == "tex") if t]
+    before = {}
+    if previous:
+        try:
+            before = {(x["file"], x["line_start"], x["original_hash"]): x for x in get_proposal(proj, previous)["units"] if x.get("status") == "ok" and x.get("hunks")}
+        except ReviseError:
+            before = {}
+    already = [bool(u.get("chunk_ids")) and all(c in done for c in u["chunk_ids"]) for u in units]
+    baselines = []
+    for u in units:
+        ox = before.get((u["file"], u["line_start"], u["hash"]))
+        prev_text = ""
+        if ox:
+            masked0, _ = latex_mask.mask(u["text"])
+            candidate = latex_mask.split_frame(unit_views(ox)["suggested_masked"])[1]
+            if set(latex_mask.placeholders(candidate)) <= set(latex_mask.placeholders(masked0)) | set(lib_tags):
+                prev_text = candidate
+        baselines.append(prev_text)
+    system = system_for(bool(sources_text), bool(facts), bool(lib), bool(pictures), bool(outline_text), context=any(c[0] for c in contexts), previous=any(baselines), reviewed=any(already))
 
     prepared = []
-    for u in units:
+    for u, ctx, base_text, rev in zip(units, contexts, baselines, already):
         masked, mapping = latex_mask.mask(u["text"])
         head, send, tail = latex_mask.split_frame(masked)  # headings at the top or bottom are not sent: nothing to edit there, and they cannot be lost
-        user = build_user(instruction, card, rules_text, u, send, prefs, sources_text, facts, lib_text, outline_text)
+        user = build_user(instruction, card, rules_text, u, send, prefs, sources_text, facts, lib_text, outline_text, context=ctx, previous=base_text, reviewed=rev)
         max_out = out_budget(cfg, masked)
         _, body = openai_client.build_request(cfg, system, user, images=pictures, max_output=max_out)
         prepared.append({"unit": u, "masked": masked, "mapping": {**mapping, **lib_tags}, "frame": (head, tail), "user": user, "body": body, "system": system, "source_text": sources_text, "facts": facts,
-                         "max_output": max_out, "bounds": length_bounds(instruction, facts),
+                         "max_output": max_out, "bounds": length_bounds(instruction, facts), "titles": section_titles, "reviewed": rev,
                          "library_text": lib_text, "outline_text": outline_text, "new_tags": sorted(lib_tags), "require_citations": require_citations, "images": pictures})
     shown_sources = [{"id": c["id"], "file": c["file"], "where": c["where"], "tokens": c["tokens"], "picture": bool(c.get("picture"))} for c in (src["chunks"] if src else [])]
     shown_pictures = [{"name": x["name"], "kb": max(1, x["bytes"] // 1024)} for x in pictures]
@@ -444,6 +644,7 @@ def run(name, proj, instruction, part=None, chunk_ids=None, book_id=None, dry_ru
                 "endpoint": cfg["base_url"], "rules": rule_ids, "warnings": warnings, "units": len(prepared), "passages": passages,
                 "parts": parts, "chunk_ids": [c["id"] for c in chunks], "book": book_id, "sources": shown_sources, "library": shown_library, "uncitable": uncitable, "outline": shown_outline, "pictures": shown_pictures,
                 "require_citations": require_citations, "requires_confirmation": settings["dry_run"],
+                "context": {"titles": len(section_titles), "other_passages": (len(units) - 1) if len(units) > 1 and any(c[1] for c in contexts) else 0} if any(c[0] for c in contexts) else None,
                 "payloads": [{"unit": p["unit"]["unit_id"], "file": p["unit"]["file"], "lines": [p["unit"]["line_start"], p["unit"]["line_end"]],
                               "request": openai_client.redact(p["body"])} for p in prepared],
                 "note": ("Nothing has been sent. Show this to the author. To send, call again with dry_run=false and confirm=payload_hash."
@@ -540,7 +741,7 @@ def _run_unit(cfg, p, rule_ids, totals):
     u, masked, mapping = p["unit"], p["masked"], p["mapping"]
     unit = {"unit_id": u["unit_id"], "file": u["file"], "line_start": u["line_start"], "line_end": u["line_end"], "chunk_ids": u.get("chunk_ids", []),
             "section_path": u["section_path"], "original_hash": u["hash"], "original_text": u["text"], "masked_original": masked,
-            "mapping": mapping, "status": "ok", "hunks": [], "segments": [], "questions": [], "validators": [], "retries": 0, "approach": ""}
+            "mapping": mapping, "status": "ok", "hunks": [], "segments": [], "questions": [], "validators": [], "retries": 0, "approach": "", "reviewed": bool(p.get("reviewed"))}
     user, last_fail = p["user"], ""
     pictures = p.get("images") or []
     out_tokens = p.get("max_output") or cfg["max_output_tokens"]
@@ -621,7 +822,8 @@ def _run_unit(cfg, p, rule_ids, totals):
         segs, hunks = _hunks(u["unit_id"], masked, revised, mapping, obj.get("changes"), rule_ids)
         unit["segments"] = segs
         unit["hunks"] = hunks
-        unit["questions"], unit["source_questions"] = library.drop_source_questions([str(q) for q in (obj.get("questions") or [])])
+        asked, unit["source_questions"] = library.drop_source_questions([str(q) for q in (obj.get("questions") or [])])
+        unit["questions"], unit["dropped_questions"] = drop_other_part_questions(asked, p.get("titles") or [], own=u["section_path"].split(" > ")[-1])
         unit["approach"] = latex_mask.PH.sub("", str(obj.get("approach") or "")).strip()[:900]
         unit["usage"] = r["usage"]
         if p.get("source_text") or p.get("library_text"):          # numbers that are new to the passage but stand in the author's files or library: allowed, and pointed out so they get checked
@@ -887,6 +1089,7 @@ def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source=
         proposal["bib_added"] = bibliography["added"]
     _atomic_json(proposals_dir(proj) / f"{pid}.json", proposal)
     rf = paper_index.refresh(name, proj, trigger="after_edit", source=source)
+    mark_reviewed(name, proj, pid, [c for rel, items in plan.items() for u, _, _ in items if not u.get("insert") for c in (u.get("chunk_ids") or [])])
     _log_decisions(name, proj, proposal, applied=True, synced=False, source=source, note=note)
     return {"status": "applied", "written": written, "accepted": sorted(chosen), "index": {k: rf[k] for k in ("added", "changed", "removed", "unchanged")}, "bibliography": bibliography}
 

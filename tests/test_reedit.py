@@ -180,6 +180,128 @@ class Dead_ends(Base):
         self.assertEqual(revise.length_bounds("expand the explanation", "")[1], 2.5)
 
 
+def doc2():
+    out = ["\\documentclass{article}", "\\begin{document}", "", "\\section{Methods}"]
+    for title, marker in (("Overview and Georeferenced Network Reconstruction", "The overview marker sentence says how the network was rebuilt from public records."),
+                          ("Data collection and feature extraction", "The sampling marker sentence is very wordy and long indeed."),
+                          ("Failure events classification", "The classification marker sentence says how events were sorted into causes.")):
+        out += [f"\\subsection{{{title}}}", f"{marker} {FILLER}", ""]
+    out.append("\\end{document}")
+    return "\n".join(out)
+
+
+@needs_pdf
+class Context(ReviseBase):
+    """A passage is revised alone, but the model is told what the rest of the paper holds, so it does not ask the author for parts that are in the paper, and what was settled is not opened again."""
+
+    def setUp(self):
+        super().setUp()
+        config.set_paper_setting(self.proj, "dry_run", False)
+        (Path(self.proj["path"]) / "main.tex").write_text(doc2())
+        pi.refresh(self.name, self.proj, trigger="test")
+        got = [c for c in pi.list_chunks(self.name, self.proj)["chunks"] if c["kind"] == "tex" and c["file"] == "main.tex"]
+        self.ids = {n: next(c["id"] for c in got if n in (c.get("section_path") or "")) for n in ("Overview", "Data collection", "Failure events")}
+        self.mid = self.ids["Data collection"]
+
+    def user(self, n=-1):
+        return user_of([q for q in self.srv.requests if q.get("body")][n]["body"])
+
+    def system(self, n=-1):
+        return [q for q in self.srv.requests if q.get("body")][n]["body"].get("instructions") or ""
+
+    def test_a_single_passage_goes_alone_with_nothing_of_the_rest_of_the_paper_not_even_its_titles(self):
+        self.srv.script = [reply(("very wordy and long indeed", "wordy"))]
+        self.go("review the methodology", chunk_ids=[self.mid])
+        u = self.user()
+        self.assertNotIn("<manuscript_outline>", u)
+        self.assertNotIn("<rest_of_this_section>", u)
+        self.assertNotIn("Failure events classification", u)
+        self.assertNotIn("never ask the author to supply", self.system())
+
+    def test_a_review_of_several_passages_tells_each_what_the_others_are(self):
+        self.srv.script = [reply(("very wordy and long indeed", "wordy"))] * 3
+        r = self.go("review the methodology", chunk_ids=list(self.ids.values()), dry_run=True)
+        self.assertEqual(r["context"], {"titles": 3, "other_passages": 2}, "the plan card can say what goes out")
+        self.go("review the methodology", chunk_ids=list(self.ids.values()))
+        u = self.user(-2)                                                 # the request for the middle passage
+        self.assertIn("<manuscript_outline>", u)
+        self.assertIn("Methods > Overview and Georeferenced Network Reconstruction", u)
+        self.assertIn("Methods > Failure events classification", u)
+        self.assertRegex(u, r"Data collection and feature extraction \(lines \d+ to \d+\) \[THIS IS THE PASSAGE YOU REVISE\]")
+        rest = u.split("<rest_of_this_section>")[1].split("</rest_of_this_section>")[0]
+        self.assertIn("overview marker sentence", rest, "what the neighbouring subsections say")
+        self.assertIn("classification marker sentence", rest)
+        self.assertNotIn("sampling marker sentence", rest, "the passage itself is not repeated there")
+        self.assertNotIn("The step number 40", rest, "only a short version of the others")
+        self.assertIn("never ask the author to supply, show, send or confirm any part of the manuscript", self.system())
+
+    def test_a_question_that_asks_for_a_part_of_the_paper_is_not_put_to_the_author_and_says_where_the_part_is(self):
+        qs = ["Overview and Georeferenced Network Reconstruction: Please supply the underlying overview and detailed reconstruction subsection so duplication can be checked.",
+              "Please supply these passages, including the figure, so I can complete the requested review.",
+              "What was the response rate of the farmers?",
+              "Which software and version were used for the routing?",
+              "Does the Data collection and feature extraction passage say how many points were sampled?"]
+        self.srv.script = [reply(("very wordy and long indeed", "wordy"), questions=qs)]
+        unit = self.go("review the methodology", chunk_ids=[self.mid])["proposal"]["units"][0]
+        self.assertEqual(unit["questions"], qs[2:], "only what the author alone can answer is asked")
+        self.assertEqual(len(unit["dropped_questions"]), 2)
+        self.assertEqual(unit["dropped_questions"][0]["where"], "Overview and Georeferenced Network Reconstruction")
+
+    def test_what_the_author_answered_or_skipped_is_remembered_for_the_whole_paper(self):
+        facts = ("Question: What was the response rate of the farmers?\nAnswer: 62 percent.\n\n"
+                 "Question: Which software and version were used for the routing?\nAnswer: (skipped: the author chose not to answer. Do not ask it again; leave that point as it is in the passage and do not guess.)")
+        self.assertEqual(revise.remember_answers(self.proj, facts), 2)
+        self.srv.script = [reply(("very wordy and long indeed", "wordy"))]
+        self.go("review the methodology", chunk_ids=[self.ids["Overview"]])          # another part of the paper, no facts given
+        self.assertNotIn("62 percent", self.user(), "an answer about farmers is not offered to a passage that has nothing to do with it")
+        (Path(self.proj["path"]) / "main.tex").write_text(doc2().replace("The sampling marker sentence", "The sampling of the farmers, their response rate and the routing software marker sentence"))
+        pi.refresh(self.name, self.proj, trigger="test")
+        self.srv.script = [reply(("very wordy and long indeed", "wordy"))]
+        self.go("review the methodology", chunk_ids=[self.mid])
+        u = self.user()
+        self.assertIn("62 percent", u, "a passage that is about it is told")
+        self.assertIn("Do not ask it again", u, "and told what was skipped")
+
+    def test_after_the_style_is_saved_a_later_round_is_told_it_was_settled_and_other_parts_see_that(self):
+        self.srv.script = [reply(("very wordy and long indeed", "wordy"))]
+        prop = self.go("tighten", chunk_ids=[self.mid])["proposal"]
+        self.assertFalse(prop["units"][0]["reviewed"])
+        revise.apply(self.name, self.proj, prop["id"], accept="all", unclean_ok=True)
+        self.assertEqual(list(revise.reviewed_ids(self.name, self.proj)), [self.mid])
+        self.srv.script = [reply(("The sampling marker sentence is wordy.", "The sampling marker sentence is wordy and plain."))]
+        again = self.go("review the methodology and add what the author answered", chunk_ids=[self.mid])["proposal"]["units"][0]
+        self.assertTrue(again["reviewed"])
+        self.assertIn("<note>This passage was already reviewed and saved by the author in an earlier round.</note>", self.user())
+        self.assertIn("do not restyle it", self.system())
+        self.srv.script = [reply(("very wordy and long indeed", "wordy"))] * 2
+        self.go("review", chunk_ids=[self.ids["Overview"], self.ids["Failure events"]])
+        self.assertRegex(self.user(), r"Data collection and feature extraction \(lines \d+ to \d+\) \[already reviewed and saved\]", "the part that was settled is marked, so the model does not ask about it")
+
+    def test_a_change_after_the_save_means_it_is_no_longer_settled(self):
+        self.srv.script = [reply(("very wordy and long indeed", "wordy"))]
+        prop = self.go("tighten", chunk_ids=[self.mid])["proposal"]
+        revise.apply(self.name, self.proj, prop["id"], accept="all", unclean_ok=True)
+        path = Path(self.proj["path"]) / "main.tex"
+        path.write_text(path.read_text().replace("The sampling marker sentence is wordy.", "The sampling marker sentence was edited by hand."))
+        pi.refresh(self.name, self.proj, trigger="test")
+        self.assertEqual(revise.reviewed_ids(self.name, self.proj), {})
+
+    def test_the_second_round_starts_from_the_suggestion_the_author_read(self):
+        self.srv.script = [reply(("very wordy and long indeed", "short and plain"))]
+        first = self.go("review the methodology", chunk_ids=[self.mid])["proposal"]
+        self.srv.script = [reply(("very wordy and long indeed", "short and plain"))]
+        self.go("review the methodology", chunk_ids=[self.mid], facts="Question: x?\nAnswer: y", previous=first["id"])
+        self.assertIn("<previous_suggestion>", self.user())
+        self.assertIn("short and plain", self.user().split("<previous_suggestion>")[1].split("</previous_suggestion>")[0])
+        self.assertIn("so that the style does not change again from one round to the next", self.system())
+
+    def test_without_a_previous_suggestion_nothing_of_the_kind_is_sent(self):
+        self.srv.script = [reply(("very wordy and long indeed", "wordy"))]
+        self.go("review the methodology", chunk_ids=[self.mid])
+        self.assertNotIn("<previous_suggestion>", self.user())
+        self.assertNotIn("<previous_suggestion> is the revision", self.system())
+
+
 @needs_pdf
 class Api(ChatBase):
     """The same through the chat: the part is written again from the card, the answers of every round come along, and what was not asked again stays in the one suggestion."""
@@ -244,6 +366,26 @@ class Api(ChatBase):
         self.assertEqual(self.wait_job(r["job"])["status"], "done")
         new = self.prop(self.last("result")["data"]["proposal"])
         self.assertEqual([bool(u.get("carried")) for u in new["units"]], [False, False, False])
+
+    def test_the_style_can_be_saved_while_the_questions_stay_open_and_answering_them_later_changes_nothing_else(self):
+        units = self.prop(self.pid)["units"]
+        st, res = self.c.post("/api/proposal/approve", {"paper": "alpha", "id": self.pid, "accept": "all", "unclean_ok": True})
+        self.assertEqual(st, 200, res)
+        self.assertEqual(self.prop(self.pid)["status"], "applied")
+        self.assertIn("The alpha marker sentence is wordy.", self.main.read_text(), "the style changes are in the file")
+        self.assertEqual(len(revise.reviewed_ids(self.name, self.proj)), 3, "the three passages are now settled")
+        self.oa.script = [reply(("The beta marker sentence is wordy", "The beta marker sentence is wordy and states the software"))]
+        r = self.send("tighten these", chunk_ids=units[1]["chunk_ids"], facts=f"Question: {self.Q}\nAnswer: R 4.3", revises=self.pid)
+        self.assertEqual(self.wait_job(r["job"])["status"], "done")
+        sent = user_of([q for q in self.oa.requests if q.get("body")][-1]["body"])
+        self.assertIn("already reviewed and saved by the author", sent, "the model is told the style of this passage was settled")
+        self.assertIn("R 4.3", sent)
+        self.assertEqual(self.prop(self.pid)["status"], "applied", "the saved suggestion is not replaced: it stays what it is")
+        self.assertTrue(self.prop(self.pid).get("questions_handled"), "and it knows its questions were answered")
+        new = self.prop(self.last("result")["data"]["proposal"])
+        self.assertEqual(len(new["units"]), 1, "only the passage that was answered is written again")
+        self.assertTrue(new["units"][0]["reviewed"])
+        self.assertEqual(new["status"], "proposed")
 
     def test_a_keep_list_that_is_not_ids_is_ignored(self):
         msg, calls = self.again(self.pid, self.prop(self.pid)["units"][1]["chunk_ids"], ["../../etc", "u1;rm", {"x": 1}], f"Question: {self.Q}\nAnswer: R")

@@ -191,6 +191,20 @@ re-edit**. Nothing is sent while you answer. A line at the top of the card tells
 - **It remembers.** What you answered in earlier rounds about this part goes along with every new round, and **a question you skipped is recorded as skipped**: the model is told not to ask it again and not to guess.
   A question you answer later replaces the skip. The model is also asked to put at most three questions, only what stops it from doing the work, and none that the passage or your answers already settle. So you do not meet
   the same questions again in new boxes after each round.
+- **The style changes are accepted on their own.** When a suggestion has questions, the accept buttons say so: **Accept the style changes and save in my files (the questions stay open)**. Saving does not close the
+  questions: they stay under the saved suggestion, with the same box, and when you answer them only what your answers need is written, **on the text as it is now**, with the style left as you saved it (the model is
+  told that passage was already reviewed and saved, and the answers are the only reason to change it). So you can save the style first, answer later, and never see the same style rewritten again. The saved
+  suggestion says "Your answers went into a newer suggestion" once you do.
+- **The model knows what the rest of the paper holds, when you review several passages together.** A review of a whole section (the methodology, say) is several passages sent one at a time, and each used to be
+  revised blind to the others. Now each goes with the **titles of the sections of your paper** (the passage being revised is marked, and so are the parts you already reviewed and saved) and a **short version of the
+  other passages you chose for the same request** (they are being sent anyway). The model is told that those parts exist and are reviewed separately, never to ask you to supply them, and not to treat what they
+  already say as missing. The plan card says what goes out ("the model also gets the titles of your 12 sections (their text stays here) and a short version of the 3 other passages"). **A single paragraph you select
+  still goes alone**, with no titles and no neighbours, as before: nothing of the rest of the paper leaves your computer. If a question asks you to supply a part of your paper anyway ("please supply the Overview
+  subsection"), it is **not put to you**: it is listed under the passage as *N questions I did not ask you: they ask for other parts of your paper*, with where the part is. To review another part, ask for it on its own.
+  Questions about something the passage itself leaves out (a setting, a value, a reason) are still asked.
+- **Nothing is asked twice, whatever part you move to.** Your answers, and the questions you skipped, are kept for the whole paper, not only for one suggestion: a later request about anything that shares their words
+  (a passage about the same sampling, the same software) is told them. A passage you saved is remembered as reviewed until you change it by hand. The second round of a suggestion that was not saved yet starts from the
+  suggestion you read ("keep its wording wherever the answers do not require a change"), so the style does not change again from one round to the next.
 - **One suggestion, not a stack.** The new suggestion replaces the old one when it is ready, and the old one shrinks to one line (*An earlier suggestion for this part, replaced by the one below*) that you can open; it can
   no longer be saved by mistake, and the reviewer's comment it belongs to follows the new one. It costs about as much as the first request, for the passages you ticked. If the new try fails or finds nothing to change, the
   first suggestion stays open.

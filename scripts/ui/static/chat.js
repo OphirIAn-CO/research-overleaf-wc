@@ -399,6 +399,7 @@
           (cites ? `${plural(cites, 'source')} can be cited when an excerpt directly supports the claim, because ${cites === 1 ? 'it is' : 'they are'} in your bibliography.` : 'None of them is in your bibliography yet, so none will be cited.') }));
       }
       if (outline.length) lines.push(h('p', { class: 'small secondary', text: `Following your outline: ${outline.map((x) => x.file.split('/').pop() + (x.where && x.where !== 'all of it' ? ' (' + x.where + ')' : '')).join(', ')}. It is an instruction, not a source and will not be cited.` }));
+      if (pl.context) lines.push(h('p', { class: 'small secondary', text: `So that it knows what the rest of your paper holds, the model also gets the titles of your ${plural(pl.context.titles, 'section')} (their text stays here)` + (pl.context.other_passages ? ` and a short version of the ${plural(pl.context.other_passages, 'other passage')} you chose for this request.` : '.') }));
       (pl.warnings || []).forEach((x) => lines.push(notice('warn', x)));
       const exact = h('div');
       const details = h('details', null, h('summary', { text: 'What goes out' }),
@@ -885,8 +886,9 @@
         holder = body;
       }
       const locked = p.status === 'applied' || p.status === 'rejected' || p.status === 'superseded';
+      const live = !locked || (p.status === 'applied' && !p.questions_handled);          // the questions of a suggestion whose style changes are saved can still be answered: that writes only what the answers need, from the saved text
       const forgetDrafts = () => ['answer', 'req', 'more', 'final'].forEach((k) => drafts.clearPrefix(`${k}:${paper}:${p.id}`));       // a suggestion that is closed has nothing left to answer
-      if (locked) forgetDrafts();
+      if (locked && !live) forgetDrafts();
       const sel = new Set(p.units.flatMap((u) => u.hunks.map((x) => x.uid)));
       const nHunks = sel.size;
       const usage = p.usage || {};
@@ -984,11 +986,12 @@
         const redo = redoIds();
         if (!redo.size) throw new Error('Tick at least one passage to write again.');
         const partial = canPartial && redo.size < p.units.length;       // only the passages that were answered or ticked are written again; the others stay as they are
-        await send(req, partial ? { chunk_ids: p.units.filter((u) => redo.has(u.unit_id)).flatMap((u) => u.chunk_ids), keep: p.units.filter((u) => !redo.has(u.unit_id)).map((u) => u.unit_id), facts, revises: p.id, issue: m.data.issue }
+        const went = await send(req, partial ? { chunk_ids: p.units.filter((u) => redo.has(u.unit_id)).flatMap((u) => u.chunk_ids), keep: p.status === 'proposed' ? p.units.filter((u) => !redo.has(u.unit_id)).map((u) => u.unit_id) : undefined, facts, revises: p.id, issue: m.data.issue }
           : { chunk_ids: m.data.chunk_ids, facts, revises: p.id, issue: m.data.issue });
+        if (went && p.status === 'applied') await redraw().catch(() => {});             // a saved suggestion whose questions were answered says so
       };
-      const nQuestions = locked ? 0 : p.units.reduce((n, u) => n + (u.questions || []).length, 0);
-      if (nQuestions) holder.append(notice('warn', h('strong', { text: `${plural(nQuestions, 'question')} for you. ` }), 'Answer what you can in the box below the changes, then send everything in one go.'));
+      const nQuestions = live ? p.units.reduce((n, u) => n + (u.questions || []).length, 0) : 0;
+      if (nQuestions) holder.append(notice('warn', h('strong', { text: `${plural(nQuestions, 'question')} for you. ` }), p.status === 'applied' ? 'The style changes are saved. Answer what you can in the box below, then send everything in one go: only what your answers need is written, on the text as it is now.' : 'You can accept the style changes now (the questions stay open), or answer what you can in the box below the changes and send everything in one go.'));
       p.units.forEach((u) => {
         if (u.status === 'failed') { holder.append(notice('bad', `${u.section_path}: ${u.error_plain || u.error || 'failed'}`)); return; }
         // on a wide screen the explanation sits beside the changes instead of above them (see .unit in the stylesheet)
@@ -1000,7 +1003,7 @@
         const back = (u.restored || []).filter((x) => !x.own_line);
         if (back.length) why.append(notice('warn', `OpenAI left out ${plural(back.length, 'citation or formula', 'citations or formulas')} (${back.map((x) => x.latex).join(', ')}). I put ${back.length === 1 ? 'it' : 'them'} back where ${back.length === 1 ? 'it' : 'they'} stood; check ${back.length === 1 ? 'it still sits' : 'they still sit'} next to the claim ${back.length === 1 ? 'it supports' : 'they support'}.`));
         const open = u.questions || [];
-        if (locked) open.forEach((q) => why.append(notice('warn', h('strong', { text: 'A question for you: ' }), q)));
+        if (!live) open.forEach((q) => why.append(notice('warn', h('strong', { text: 'A question for you: ' }), q)));
         else if (open.length) {
           why.append(h('p', { class: 'small muted', text: `${plural(open.length, 'question')} about this passage ${open.length === 1 ? 'is' : 'are'} in the box below the changes, together with the other questions of this part.` }));
           open.forEach((q, qi) => {
@@ -1014,6 +1017,12 @@
           });
         }
         if (u.carried) why.append(h('p', { class: 'small muted', text: 'Kept as it was: you did not ask for this passage again.' }));
+        if ((u.dropped_questions || []).length) {
+          const dq = u.dropped_questions;
+          why.append(h('details', { class: 'small' }, h('summary', { text: `${plural(dq.length, 'question')} I did not ask you: ${dq.length === 1 ? 'it asks' : 'they ask'} for other parts of your paper` }),
+            h('ul', { class: 'small' }, dq.map((d) => h('li', { text: d.question + (d.where ? ` (Your paper has it: “${d.where}”.)` : ' (Those parts are in your paper.)') }))),
+            h('p', { class: 'small muted', text: 'I review one part at a time. To review another part, ask for it on its own.' })));
+        }
         const bad = (u.validators || []).filter((v) => !v.ok);
         if (bad.length) why.append(notice('warn', 'Heads up: ', bad.map((v) => v.detail || v.name).join('; ')));
         if ((u.added_cites || []).length) {
@@ -1061,21 +1070,6 @@
         copyBtn('the new text', 'The improved text with your citations and formulas back in place, ready to paste into Overleaf or anywhere', async () => (await textOf()).latex, 'The new text'),
         copyBtn('for QuillBot', 'Copies the text with citations and formulas as tags like [[LX001]] (so QuillBot cannot damage them) and opens the panel where you bring QuillBot\'s result back', async () => (await textOf()).masked, 'The text for QuillBot', () => openBanner(p, 2)),
         copyBtn('everything', 'The explanation, each change with its reason, and the new text', everything, 'The whole answer'));
-      if (locked) {
-        if (p.status === 'superseded') holder.append(notice('ok', h('strong', { text: 'Replaced. ' }), 'You asked for a revised suggestion with your answers; it is further down the conversation, and this one can no longer be saved.'));
-        if (p.status === 'applied' && p.sent_at) {
-          holder.append(notice('ok', h('strong', { text: 'Saved and sent to Overleaf.' })));
-        } else if (p.status === 'applied') {
-          holder.append(h('div', { class: 'stack' }, notice('ok', h('strong', { text: 'Saved in your files. ' }), 'It is not in Overleaf until you send it.'),
-            h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Send to Overleaf' }), async () => {
-              const r = await api.post('/api/papers/sync', { name: paper, message: 'Writing assistant: ' + (p.instruction || '').slice(0, 60) });
-              showGit(notices, r);
-              if (r.sent && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend(r);
-              await reload().catch(() => {});
-            }))));
-        }
-        return;
-      }
       // The one place where everything about this part is gathered: the questions of every passage, what to add or change, which passages to write again, and the single button that sends it all.
       // The answer is a new suggestion that replaces this one; passages that were not written again are carried over as they are.
       const isComment = !!(m.data.issue);
@@ -1127,12 +1121,29 @@
         updateStatus();
       };
       let built = false;                                      // a suggestion with no question builds its panel only when the author opens it
-      const ensurePanel = () => { if (!built && !locked) { built = true; buildPanel(); } };
+      const ensurePanel = () => { if (!built && live) { built = true; buildPanel(); } };
       const wasWriting = drafts.has(`req:${paper}:${p.id}`) || drafts.has(`more:${paper}:${p.id}`);          // what was being written there is still there: show it
       if (answers.length || wasWriting) { ensurePanel(); panel.hidden = false; }
       const openDiscuss = () => { ensurePanel(); panel.hidden = answers.length ? false : !panel.hidden; if (!panel.hidden && moreBox) moreBox.focus(); };
       const discussBtn = h('button', { type: 'button', text: answers.length ? 'Add instructions or change the request' : (isDraft ? 'Discuss and draft again' : 'Discuss and revise'),
         title: isDraft ? 'Refine what to add, add instructions, or tick that references are looked for first. You get a new insertion suggestion for the same place, and this one is replaced.' : 'Change what was asked, say what to add, or tick that references are looked for first. You get a new suggestion for the same place that replaces this one.', onclick: openDiscuss });
+      if (locked) {
+        if (p.status === 'superseded') holder.append(notice('ok', h('strong', { text: 'Replaced. ' }), 'You asked for a revised suggestion with your answers; it is further down the conversation, and this one can no longer be saved.'));
+        if (p.status === 'applied' && p.sent_at) {
+          holder.append(notice('ok', h('strong', { text: 'Saved and sent to Overleaf.' })));
+        } else if (p.status === 'applied') {
+          holder.append(h('div', { class: 'stack' }, notice('ok', h('strong', { text: 'Saved in your files. ' }), 'It is not in Overleaf until you send it.'),
+            h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Send to Overleaf' }), async () => {
+              const r = await api.post('/api/papers/sync', { name: paper, message: 'Writing assistant: ' + (p.instruction || '').slice(0, 60) });
+              showGit(notices, r);
+              if (r.sent && window.OLS.panes && window.OLS.panes.afterSend) window.OLS.panes.afterSend(r);
+              await reload().catch(() => {});
+            }))));
+        }
+        if (p.status === 'applied' && p.questions_handled) holder.append(notice('ok', 'Your answers went into a newer suggestion, further down.'));
+        if (live && answers.length) holder.append(panel);
+        return;
+      }
       if (!nHunks) {
         if (p.status === 'proposed' || p.status === 'no_changes') {
           holder.append(panel, h('div', { class: 'row actions' }, discussBtn));
@@ -1150,11 +1161,12 @@
       });
       handoff.title = 'For when you work in Claude Code: it saves the ticked changes itself, after your text-cleaning step. You do not need this to save from here.';
       const actions = h('div', { class: 'row actions' },
-        guarded(h('button', { type: 'button', class: 'primary', text: isDraft ? 'Accept all and insert in my files' : 'Accept all and save in my files' }), async () => {
+        guarded(h('button', { type: 'button', class: 'primary', text: isDraft ? 'Accept all and insert in my files' : answers.length ? 'Accept the style changes and save in my files (the questions stay open)' : 'Accept all and save in my files',
+          title: answers.length ? 'Saves every change shown here. The questions stay open under the saved suggestion; when you answer them, only what the answers need is written, on the text as it is then, and the style is not redone.' : undefined }), async () => {
           const all = p.units.flatMap((u) => u.hunks.map((hk) => hk.uid));
           await doApprove(notices, p, { accept: all, push: false, unclean_ok: unclean }, redraw);
         }),
-        guarded(h('button', { type: 'button', text: isDraft ? 'Accept all, insert and send to Overleaf' : 'Accept all, save and send to Overleaf' }), async () => {
+        guarded(h('button', { type: 'button', text: isDraft ? 'Accept all, insert and send to Overleaf' : answers.length ? 'Accept the style changes, save and send to Overleaf' : 'Accept all, save and send to Overleaf' }), async () => {
           const all = p.units.flatMap((u) => u.hunks.map((hk) => hk.uid));
           await doApprove(notices, p, { accept: all, push: true, unclean_ok: unclean }, redraw);
         }),

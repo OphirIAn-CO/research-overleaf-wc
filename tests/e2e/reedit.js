@@ -71,11 +71,25 @@ const file = `${home}/papers/traffic-gnn/main.tex`;
   ok(fs.readFileSync(file, 'utf8') === before, 'nothing was saved by itself');
   await page.screenshot({ path: `${out}/reedit-after.png`, fullPage: true });
 
-  // ---- accept all: the three passages are saved together
-  await page.click('.thread .actions button:has-text("Accept all and save in my files")');
+  // ---- the style changes are accepted on their own: the question stays open and can still be answered, on the saved text
+  const acceptLabel = await page.locator('.thread .actions .primary').last().textContent();
+  ok(/style changes/.test(acceptLabel) && /questions stay open/.test(acceptLabel), 'with a question waiting, the accept button says it accepts the style changes and the questions stay open: ' + acceptLabel);
+  await page.locator('.thread .actions .primary').last().click();
   await page.waitForSelector('.thread .notice:has-text("Saved in your files")', { timeout: 30000 });
   const after = fs.readFileSync(file, 'utf8');
   ok(/We drew a stratified random sample of 40 farms\./.test(after) && /We estimated a model/.test(after) && /Each region has its own climate and soil\./.test(after), 'saving the one suggestion changes all three passages');
+  const stillAsking = page.locator('.thread .ask-panel:not([hidden]) textarea.answer');
+  await stillAsking.first().waitFor({ timeout: 20000 });
+  ok((await stillAsking.count()) === 1, 'the question is still there to answer, under the saved suggestion');
+  ok(/style changes are saved/.test(await page.$eval('.thread .notice.warn', (e) => e.textContent).catch(() => '')) || (await page.isVisible('.thread .notice:has-text("The style changes are saved")')), 'and the card says the style changes are saved');
+  await page.screenshot({ path: `${out}/reedit-saved.png`, fullPage: true });
+  await stillAsking.first().fill('Eighty percent answered, after two reminders.');
+  const saved = fs.readFileSync(file, 'utf8');
+  await page.locator('.thread .ask-panel:not([hidden]) .primary').click();
+  await page.waitForSelector('.thread .notice:has-text("Your answers went into a newer suggestion")', { timeout: 60000 });
+  ok(true, 'answering writes a new suggestion, and the saved one says its answers went there');
+  ok(fs.readFileSync(file, 'utf8') === saved, 'the file does not change until that new suggestion is accepted');
+  ok((await page.$$eval('.thread .ask-panel:not([hidden]) textarea.answer', (a) => a.length)) <= 1, 'only the newest suggestion asks');
   await browser.close();
   const real = errors.filter((e) => !/Failed to load resource/i.test(e));
   ok(real.length === 0, 'no console errors' + (real.length ? ': ' + real.join(' | ') : ''));

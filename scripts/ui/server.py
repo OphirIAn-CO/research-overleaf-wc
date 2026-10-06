@@ -1101,7 +1101,8 @@ def _start_pass(app, n, p, cid, plan_mid):
     def work(progress, set_steps):
         steps = revise.Steps(set_steps)
         try:
-            again = chat.plan(n, p, plan["instruction"], plan["chunk_ids"], book_id=plan.get("book"), facts=plan.get("facts", ""), online=plan.get("online") or None, avoid=plan.get("avoid") or None)
+            again = chat.plan(n, p, plan["instruction"], plan["chunk_ids"], book_id=plan.get("book"), facts=plan.get("facts", ""), online=plan.get("online") or None, avoid=plan.get("avoid") or None,
+                              previous=msg["data"].get("revises") or None)
             if again["payload_hash"] != plan["payload_hash"]:
                 raise ValueError("Your paper changed after I prepared this request (for example after getting the latest from Overleaf). Please ask again.")
             web, confirm = None, plan["payload_hash"]
@@ -1109,9 +1110,11 @@ def _start_pass(app, n, p, cid, plan_mid):
                 ctx = chat.refs_context(n, p, plan["instruction"], chunk_ids=plan["chunk_ids"], last_ids=[])
                 topics = [t for t in [*(plan["web"].get("ask") or []), plan.get("facts", ""), plan.get("understood", "") or plan.get("author_request", ""), ctx["passage"] or ctx["topic"]] if t and t.strip()][:6]
                 web = scholar.auto_find(topics, subject_text=" ".join(x for x in (draft.paper_subject(n, p), ctx["passage"][:1200], plan.get("facts", "")) if x), steps=steps, avoid=plan.get("avoid") or ())["candidates"] or None
-                confirm = chat.plan(n, p, plan["instruction"], plan["chunk_ids"], book_id=plan.get("book"), facts=plan.get("facts", ""), online=plan.get("online") or None, web=web, avoid=plan.get("avoid") or None)["payload_hash"]
+                confirm = chat.plan(n, p, plan["instruction"], plan["chunk_ids"], book_id=plan.get("book"), facts=plan.get("facts", ""), online=plan.get("online") or None, web=web, avoid=plan.get("avoid") or None,
+                                    previous=msg["data"].get("revises") or None)["payload_hash"]
             res = revise.run(n, p, plan["instruction"], chunk_ids=plan["chunk_ids"], book_id=plan.get("book"), dry_run=False,
-                             confirm=confirm, source="web", progress=set_steps, facts=plan.get("facts", ""), online=plan.get("online") or None, web=web, steps=steps, avoid=plan.get("avoid") or None)
+                             confirm=confirm, source="web", progress=set_steps, facts=plan.get("facts", ""), online=plan.get("online") or None, web=web, steps=steps, avoid=plan.get("avoid") or None,
+                             previous=msg["data"].get("revises") or None)
             if res["status"] == "preview":
                 raise ValueError("Your paper changed after I prepared this request. Please ask again.")
         except Exception as e:  # noqa: BLE001
@@ -1131,6 +1134,12 @@ def _start_pass(app, n, p, cid, plan_mid):
             try:
                 prop = revise.carry_over(p, old, prop["id"], keep)
             except (revise.ReviseError, KeyError, OSError, ValueError):
+                pass
+        if old and not keep:                                           # the author answered the questions of a suggestion that was already saved: they went into this one
+            try:
+                if revise.get_proposal(p, old).get("status") == "applied":
+                    revise.annotate(p, old, questions_handled=prop["id"])
+            except revise.ReviseError:
                 pass
         all_ids = [c for u in prop["units"] for c in (u.get("chunk_ids") or [])] if keep else []
         replaced = bool(old) and prop["status"] == "proposed" and revise.supersede(p, old, prop["id"])      # the suggestion this one revises can no longer be saved by mistake
@@ -1292,6 +1301,8 @@ def api_chat_send(r):
         revises = ""
     if not ((facts or online or find_refs) and PID_RE.match(redraft)):
         redraft = ""
+    if facts:
+        revise.remember_answers(p, facts)                               # what the author answers or skips is kept for the whole paper, not only for this suggestion
     out = [chat.append(p, cid, "user", "text", text, **({"chunk_ids": ticked} if ticked else {}), **({"issue": issue} if issue else {}), **({"facts": facts} if facts else {}))]
     if cut:                                                  # never silently: a long outline pasted into the message is read up to a limit
         out.append(chat.append(p, cid, "assistant", "text", f"Your message is longer than {chat.MAX_TEXT:,} characters, so I read only the first {chat.MAX_TEXT:,}. "
@@ -1649,7 +1660,7 @@ def _dispatch(app, n, p, cid, kind, req, out, user_mid, uses=None, explicit=Fals
         else:
             try:
                 pl = chat.plan(n, p, chat.instruction_for(u.get("request") or text, summary=summary, kind="cite" if cite_nudge or from_kind == "cite" else kind), u["chunk_ids"], facts=facts, online=online or None,
-                               avoid=req.get("avoid") or None)
+                               avoid=req.get("avoid") or None, previous=revises or None)
                 pl["author_request"], pl["understood"] = author_text, summary
             except (revise.ReviseError, config.ConfigError, openai_client.OpenAIError) as e:
                 out.append(chat.append(p, cid, "assistant", "error", plain_error(e)))
