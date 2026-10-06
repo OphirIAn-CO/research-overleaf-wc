@@ -251,6 +251,7 @@ class InTheApp(UiBase):
         self.assertIn("alpha", reg, "the GitHub copy stays as it is")
         st, again = self.c.post("/api/papers/clone", {"paper": "alpha"})
         self.assertEqual(again["name"], "alpha-overleaf-2", "a second copy gets a new name instead of overwriting")
+        self.assertEqual(self.wait_job(again["job"])["status"], "done")        # the clone is still being written otherwise when the test folder is removed
 
     def test_a_failed_clone_says_why_and_leaves_no_folder(self):
         self.github_paper()

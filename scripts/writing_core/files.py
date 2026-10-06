@@ -249,6 +249,22 @@ def folders(proj, role=None):
     return out
 
 
+def short_name(proj, shown):
+    """How a file is named to a model (and in what it sees): its path inside the project, or the linked folder's name and the path inside it; never the path on the author's computer."""
+    if not shown.startswith("/"):
+        return shown
+    for f in folders(proj):
+        base = f["path"].rstrip("/")
+        if f["ok"] and shown.startswith(base + "/"):
+            return base.rsplit("/", 1)[-1] + shown[len(base):]
+    return "/".join(shown.split("/")[-2:])
+
+
+def _where(proj, row):
+    sp = row["section_path"]
+    return short_name(proj, row["file"]) + sp[len(row["file"]):] if sp.startswith(row["file"]) else sp
+
+
 def _walk(base, exts, limit_files, rel_to=None, skip_top=(), big=None):
     """Files under `base` of the wanted kinds, without hidden or build folders, secrets or links. -> (paths, stopped_early)"""
     found, seen = [], 0
@@ -890,7 +906,7 @@ def relevant(name, proj, instruction, passage="", mode="auto", budget=1800, limi
             return
         seen.add(row["id"])
         used += row["tokens"]
-        chosen.append({"id": row["id"], "file": row["file"], "where": row["section_path"], "tokens": row["tokens"], "text": row["text"], "kind": row["kind"], "ord": row["ord"]})
+        chosen.append({"id": row["id"], "file": row["file"], "where": _where(proj, row), "tokens": row["tokens"], "text": row["text"], "kind": row["kind"], "ord": row["ord"]})
 
     try:
         for rel in [n for n in named if n in allowed and ext_of(n) not in IMAGE_EXT][:3]:        # a named file: all of it when it fits, otherwise its summary and the parts that match
@@ -926,7 +942,7 @@ def relevant(name, proj, instruction, passage="", mode="auto", budget=1800, limi
         for f in pics:                                              # a picture that goes out is announced in the text, so the answer can say which one it looked at
             row = con.execute("SELECT * FROM chunks WHERE kind IN ('source','project') AND file=? ORDER BY ord LIMIT 1", (f["file"],)).fetchone()
             if row:
-                chosen.append({"id": row["id"], "file": row["file"], "where": row["section_path"], "tokens": row["tokens"],
+                chosen.append({"id": row["id"], "file": row["file"], "where": _where(proj, row), "tokens": row["tokens"],
                                "text": row["text"] + " The picture itself is attached to this request.", "kind": row["kind"], "ord": row["ord"], "picture": True})
     finally:
         con.close()

@@ -36,6 +36,22 @@ const main = () => fs.readFileSync(`${home}/papers/soil-yield/main.tex`, 'utf8')
   ok(await page.isVisible('button:has-text("insert in my files"), button:has-text("save in my files")'), 'and the suggestion is the usual one to read and accept');
   ok(main() === before, 'nothing was saved by itself');
   await page.screenshot({ path: `${out}/agent.png` });
+
+  // ---- the author's own files: the agent looks in them (read-only) when the paper does not say enough, and says which it read
+  ok((await post('/api/files/folders', { paper: 'soil-yield', folders: [`${home}-library/Analysis`], role: 'analysis' })) === 200, 'the folder with the code and results is linked to the paper');
+  await page.reload();
+  await page.waitForSelector('.chat-page');
+  await page.fill('#composer', 'the methods do not say how the validation was done, check my files and tell me what is missing');
+  await page.press('#composer', 'Enter');
+  await page.waitForSelector('.msg.assistant:has-text("I read metrics.csv")', { timeout: 60000 });
+  const bubble = page.locator('.msg.assistant:has-text("I read metrics.csv")').last();
+  await bubble.locator('summary:has-text("What I did")').click();
+  const did = await bubble.innerText();
+  ok(/Looking in your files for how the models were compared/.test(did) && /Reading your results table/.test(did), 'the steps show that it searched and read the files');
+  ok(/Read: file Analysis\/results\/metrics\.csv/.test(did), 'and which file it read, by a short name (not a path on this computer)');
+  ok(!did.includes(home), 'no path of the computer appears in it');
+  ok(main() === before, 'reading the files changed nothing');
+  await page.screenshot({ path: `${out}/agent-files.png` });
   await browser.close();
   const real = errors.filter((e) => !/Failed to load resource/i.test(e));
   ok(real.length === 0, 'no console errors' + (real.length ? ': ' + real.join(' | ') : ''));

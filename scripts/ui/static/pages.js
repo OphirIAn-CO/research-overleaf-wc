@@ -188,7 +188,7 @@
         h('label', { class: 'row tight small' }, autoSend, ' Send added files to Overleaf at once')),
       out, list,
       h('h3', { text: 'When a request may use them' }),
-      h('div', { class: 'row' }, modeSel, h('span', { class: 'small secondary', text: 'Nothing goes to OpenAI unless a request uses it, and the request shows which parts.' })),
+      h('div', { class: 'row' }, modeSel, h('span', { class: 'small secondary', text: 'Nothing goes to OpenAI unless a request uses it, and the request shows which parts. The assistant may read them to check your methods; Never stops that.' })),
       h('h3', { text: 'Folders with material for writing' }),
       h('p', { class: 'small secondary', text: 'Point to a folder (its subfolders are read too) that holds what the text should draw on: interview notes, tables of results, reports and articles (PDF or Word), analysis code. The files stay where they are and are only read. A request can use the parts it needs, and new text can be drafted from them, following the advice of your writing book. Passwords, keys and hidden folders are never read.' }),
       folderPick.el);
@@ -244,6 +244,7 @@
     const card = h('section', { class: 'card', 'aria-label': 'Code and results' },
       h('div', { class: 'row' }, h('h2', { text: 'Code and results' }), badgeBox),
       h('p', { class: 'small secondary', text: 'Point to the folder where your analysis lives: scripts and notebooks (Python, R, MATLAB, Julia), the tables and numbers they write (CSV, TSV, JSON, LaTeX tables), logs, and your figures (PNG, JPG). The files stay where they are and are only read, never changed. When you ask for help with the Results or the Discussion, to explain a result, or to check a number, the app reads the code that produced it, the table it is in and the figures.' }),
+      h('p', { class: 'small secondary', text: 'The assistant can also look through these files itself. When you ask it to check or strengthen your methods or results and the paper does not say enough (a setting, a split, a metric, a version, how a number was obtained), it searches and reads them, compares them with what the paper says, and tells you where they differ. It only reads: it never runs your code or changes a file. What it reads is listed under "What I did" and goes to OpenAI as part of the request; choose Never below to stop it. Anything it writes is a suggestion that you accept or not.' }),
       h('p', { class: 'small secondary', text: 'Numbers in your text must come from the code outputs, tables and logs. Figures go to OpenAI as pictures (at most 4 per request, shrunk to 1024 pixels, and only when the request needs them; the request lists them). They are used to describe what the plot shows, never to read values off it. Passwords, keys and hidden folders are never read.' }),
       pick.el, sizeLine, h('div', { class: 'row' }, h('label', { class: 'row tight small' }, 'Use them:', modeSel)), out, listBox);
     show().catch((e) => clear(listBox).append(notice('bad', e.message)));

@@ -124,6 +124,12 @@ def main():
                 return {**{"note": note, "action": action, "what": "", "query": "", "queries": [], "chunks": [], "place": "", "position": "after", "instruction": "", "notes": "", "sources": [], "dois": [],
                            "avoid": [], "question": "", "message": ""}, **kw}
             done = len(re.findall(r"^STEP \d+:", user, re.M))
+            if "validation" in (re.search(r"<request>(.*?)</request>", user, re.S) or [None, ""])[1]:          # the methods do not say how the models were compared: look in the author's files
+                if done == 0:
+                    return act("search_files", "Looking in your files for how the models were compared", query="rmse")
+                if done == 1:
+                    return act("read_file", "Reading your results table", query="metrics.csv")
+                return act("finish", message="The methods do not say how the models were compared. Your metrics.csv compares gnn and lstm by RMSE (0.412 and 0.588), so the validation can say so. I read metrics.csv. Nothing was changed.")
             piece = next(iter(re.findall(r"^(C\d+) \| [^|]*Study area", user, re.M)), "C1")
             if done == 0:
                 return act("read_paper", "Reading the study area", query="Study area")

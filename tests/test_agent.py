@@ -13,7 +13,7 @@ from writing_core import agent, config, paper_index, revise, scholar
 
 
 def act(action, note="", **kw):
-    base = {"note": note, "action": action, "what": "", "query": "", "queries": [], "chunks": [], "place": "", "position": "after", "instruction": "", "notes": "", "sources": [], "dois": [],
+    base = {"note": note, "action": action, "what": "", "query": "", "queries": [], "chunks": [], "place": "", "position": "after", "instruction": "", "notes": "", "sources": [], "files": [], "dois": [],
             "avoid": [], "question": "", "message": ""}
     base.update(kw)
     return base
@@ -355,15 +355,121 @@ class Memory(Base):
         self.assertIn(f"[{ids[0]}] ", again)
 
     def test_a_request_that_only_reads_is_told_to_do_the_work(self):
-        c = self.big_paper(6, 600)
+        c = self.big_paper(8, 600)
         ids = list(c.pieces)
-        self.say(*[act("read_paper", f"Reading {i}", query=ids[i]) for i in range(5)], act("finish", message="Done."))
+        self.say(*[act("read_paper", f"Reading {i}", query=ids[i]) for i in range(7)], act("finish", message="Done."))
         r = self.send("revise the style of the methods, but also look for missing information that would make the methodology more robust")
         self.wait_job(r["job"])
         b = self.bodies()
-        self.assertNotIn("have not written anything yet", b[3], "three steps of reading are not too many")
-        self.assertIn("you have spent 4 steps reading and have not written anything yet", b[4])
-        self.assertIn("<paper_read_so_far>", b[4])
+        self.assertNotIn("have not written anything yet", b[4], "five steps of reading are not too many")
+        self.assertIn("you have spent 6 steps reading and have not written anything yet", b[6])
+        self.assertIn("<paper_read_so_far>", b[6])
+
+
+class Files(Base):
+    """The author's own code, results and documents: listed to the agent, searched and read (read-only, part by part, kept in front of it), and named to the writing tools so that what
+    they write rests on them. Nothing outside the paper's project and the folders the author linked, nothing the author switched off, no path of the author's computer."""
+
+    def setUp(self):
+        super().setUp()
+        from pathlib import Path
+        from tests.test_analysis import make_analysis
+        self.dir = make_analysis(Path(self.tmp) / "work" / "analysis")
+        from writing_core import files
+        files.set_folders(self.proj, [str(self.dir)], "analysis")
+        paper_index.refresh(self.name, self.proj, trigger="files")
+        self.ctx = agent.Ctx(self.name, self.proj, "t", "x")
+
+    def test_the_agent_is_shown_which_files_it_may_read_by_short_names(self):
+        ctx = self.ctx
+        labels = [f["label"] for f in ctx.file_list()]
+        self.assertIn("analysis/train.py", labels)
+        self.assertIn("analysis/results/metrics.csv", labels)
+        self.assertFalse([l for l in labels if "secret" in l or "config.py" in l], "secrets and hidden folders are not there")
+        block = ctx.context()
+        self.assertIn("<files", block)
+        self.assertIn("analysis/results/summary.json | code and results", block)
+        self.assertNotIn(str(self.dir), block, "the folder of the author's computer never goes out: only its name")
+        self.assertNotIn(str(self.tmp), block)
+
+    def test_a_term_is_found_in_the_files_with_its_file_and_part(self):
+        out, _ = agent.t_search_files(self.ctx, {"query": "folds"})
+        self.assertIn("analysis/results/summary.json #1", out)
+        self.assertIn("folds", out)
+        out, _ = agent.t_search_files(self.ctx, {"query": "zebra migration"})
+        self.assertIn("Nothing in the author's files matches", out)
+        out, _ = agent.t_search_files(self.ctx, {"query": "the of"})
+        self.assertIn("Say what to look for", out)
+
+    def test_a_file_is_read_by_name_and_stays_in_front_of_the_model(self):
+        ctx = self.ctx
+        out, _ = agent.t_read_file(ctx, {"query": "train.py"})
+        self.assertTrue(out.startswith("Read: file analysis/train.py"), out[:80])
+        self.assertIn("def fit(x)", out)
+        self.assertIn("<paper_read_so_far>", ctx.read_block())
+        self.assertIn("def fit(x)", ctx.read_block())
+        again, _ = agent.t_read_file(ctx, {"query": "analysis/train.py"})
+        self.assertTrue(again.startswith("You already have"), again)
+        self.assertNotIn("def fit(x)", again)
+
+    def test_parts_can_be_asked_for_and_are_listed_in_order(self):
+        ctx = self.ctx
+        part, _ = agent.t_read_file(ctx, {"query": "run.log #1"})
+        self.assertIn("Read: file analysis/results/run.log (part 1 of", part)
+        ctx.remember("F:b.py#10", "[b.py #10] ten")
+        ctx.remember("F:b.py#2", "[b.py #2] two")
+        block = ctx.read_block()
+        self.assertLess(block.index("[b.py #2]"), block.index("[b.py #10]"), "parts are in numeric order, not as text")
+        self.assertLess(block.index("[analysis/results/run.log #1]"), block.index("[b.py #2]"))
+
+    def test_a_name_that_matches_nothing_or_many_files_is_answered_with_the_list_and_never_a_path(self):
+        ctx = self.ctx
+        none, _ = agent.t_read_file(ctx, {"query": "../../etc/passwd"})
+        self.assertIn("None of the author's files is called", none)
+        self.assertIn("analysis/train.py", none)
+        many, _ = agent.t_read_file(ctx, {"query": "results/"})
+        self.assertIn("More than one file fits", many)
+        some, _ = agent.t_read_file(ctx, {"query": "metrics"})
+        self.assertIn("Read: file analysis/results/metrics.csv", some)
+        listing, _ = agent.t_read_file(ctx, {"query": "list"})
+        self.assertIn("analysis/notebooks/explore.ipynb", listing)
+
+    def test_what_the_author_switched_off_is_not_read(self):
+        config.set_paper_setting(self.proj, "use_analysis", "never")
+        ctx = agent.Ctx(self.name, self.proj, "t", "x")
+        self.assertEqual(ctx.file_list(), [])
+        self.assertNotIn("<files", ctx.context())
+        out, _ = agent.t_read_file(ctx, {"query": "train.py"})
+        self.assertIn("switched off in Settings", out)
+        out, _ = agent.t_search_files(ctx, {"query": "folds"})
+        self.assertIn("switched off in Settings", out)
+
+    def test_it_looks_in_the_files_then_writes_a_passage_that_rests_on_them_and_says_what_it_read(self):
+        self.say(act("search_files", "Looking for the number of folds", query="folds"),
+                 act("read_file", "Reading the results summary", query="summary.json"),
+                 act("edit_text", "Adding the validation detail", chunks=[self.study], files=["summary.json"], instruction="Add one sentence saying how many folds the validation used."),
+                 reply(("Each region has a distinct climate and soil.", "Each region has a distinct climate and soil, and the model was validated with 5 folds.")),
+                 act("finish", message="The methods did not say how the model was validated. summary.json shows 5 folds; I suggested one sentence saying so. I read summary.json."))
+        r = self.send("add anything missing about the validation to the methods")
+        self.assertEqual(self.wait_job(r["job"])["status"], "done")
+        b = self.bodies()
+        self.assertIn("<files", b[0])
+        self.assertIn("analysis/results/summary.json", b[0])
+        from tests.test_revise import user_of
+        writing = user_of([r["body"] for r in self.oa.requests if r.get("body")][3])
+        self.assertIn("<source_material>", writing, "the writing tool is given the author's file as its source")
+        self.assertIn('"folds": 5', writing, "with the numbers of the file")
+        self.assertIn("[analysis/results/summary.json", writing, "named by the folder's name and the path inside it")
+        self.assertNotIn(str(self.dir), writing, "the writing tool does not see the path on the author's computer either")
+        self.assertNotIn(str(self.tmp), " ".join(self.bodies()), "and nothing that goes to the model holds it")
+        self.assertIn("The passage must rest on these files of the author", writing)
+        self.assertIn("summary.json", writing)
+        res = [m for m in self.texts() if m["kind"] == "result"]
+        self.assertTrue(res, "a suggestion was made")
+        self.assertIn("5 folds", self.texts()[-1]["text"])
+        self.assertIn("I read summary.json", self.texts()[-1]["text"])
+        steps = [x["label"] for x in self.texts()[-1]["data"]["steps"]]
+        self.assertIn("Looking for the number of folds", steps)
 
 
 class Routing(Base):
