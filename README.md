@@ -29,7 +29,7 @@ and never saves or sends anything you have not approved.
   and add the reference"*, *"adjust the position of the figure and its labels"*: your paper is compiled on your computer, what LaTeX says goes to the model with the request, and it fixes the cause with exact edits or answers
   your question in words. Every change is checked (labels and references still match, citations and words unchanged, the paper still compiles, errors before and after) and applied whole or not at all. ([Details](docs/guide.md#changing-the-latex-tables-figures-graphs-the-appendix-the-bibliography-the-documents-setup))
 - **Peer review.** *"Peer review my paper"* scores it against a rubric and lists the problems; **Fix this** turns a comment into an ordinary suggestion. Nothing changes by itself.
-- **References.** Paste a DOI: it goes into your `.bib`, your Mendeley group and Overleaf, and you get the `\cite{...}` to use. (Also from your phone, through a Telegram bot.)
+- **References.** Paste a DOI: it goes into your `.bib`, your Mendeley group and Overleaf, and you get the `\cite{...}` to use. (Also from your phone, through a Telegram bot, which can also tell you when a long request is ready.)
 - **See your paper.** Your LaTeX source and the compiled PDF side by side, on your computer; QuillBot and Overleaf in panes next to the chat for the tone pass.
 - **From Claude Code too.** The same tools are available to [Claude Code](https://claude.com/claude-code) in your terminal: sync with Overleaf, edit exact passages, manage references, search the library.
 

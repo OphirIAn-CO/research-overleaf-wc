@@ -353,14 +353,23 @@
       renderThread();
       updateWorking(st.working.steps);
       setBusy(true);
+      let last = null, res = null, failed = false;
       try {
-        await waitJob(jobId, (j) => { if (j.steps && alive()) { st.working.steps = j.steps; updateWorking(j.steps); } });
-      } catch (e) { /* the failure is already in the chat as a message */ }
+        res = await waitJob(jobId, (j) => { last = j; if (j.steps && alive()) { st.working.steps = j.steps; updateWorking(j.steps); } });
+      } catch (e) { failed = true; /* the failure is already in the chat as a message */ }
       finally {
         st.working = null; st.workEl = null; st.work = null; setBusy(false);
         await reload().catch(() => {});
         if (window.OLS.panes && window.OLS.panes.setTargetFromThread) window.OLS.panes.setTargetFromThread(st.messages);
+        announceReady(last, res, failed);
       }
+    }
+    // a long request is done: a chime, and a notification when this tab is out of sight (Settings can switch them off)
+    function announceReady(job, res, failed) {
+      if (!job || !job.finished || !job.started) return;
+      const made = res && typeof res.made === 'number' ? res.made : 0;
+      window.OLS.Ready.announce({ seconds: job.finished - job.started, title: failed ? 'Stopped: ' + paper : 'Ready: ' + paper,
+        body: failed ? 'Your request could not be completed. Open the chat to see why.' : made ? plural(made, 'suggestion') + ' to review. Nothing is saved until you accept it.' : 'Your request is done. Open the chat to see the answer.' });
     }
 
     // ---- bubbles

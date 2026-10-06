@@ -23,7 +23,11 @@ UI_DEFAULTS = {"port": 8765, "idle_minutes": 60, "watermark_url": None,
                "pane_mode": "auto",   # QuillBot / Overleaf beside the chat: auto (the built-in browser if there, else a frame when the site allows it, else a window) | browser | window | inside
                "quillbot_url": None,
                "builtin_quillbot": True,   # False: QuillBot opens in a window of the author's own browser instead of the built-in one
-               "builtin_overleaf": True}
+               "builtin_overleaf": True,
+               "notify_telegram": True,    # a Telegram message (through the DOI bot's own bot) when a long request is ready
+               "notify_sound": True,       # a short chime in the browser
+               "notify_browser": True,     # a browser notification when the tab is out of sight (only once the browser has been allowed to)
+               "notify_min_seconds": 20}   # requests quicker than this are not announced
 
 
 class ConfigError(Exception):

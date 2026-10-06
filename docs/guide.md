@@ -84,7 +84,20 @@ Pushed to Overleaf.
 If you haven't touched that paper for a while, the bot asks which paper first.
 `/paper` switches papers, `/status` shows the current target.
 
+**Ready messages:** the same bot also tells you when a long request in the app is done (see [Knowing when a long request is ready](#knowing-when-a-long-request-is-ready)). The app sends them to the chats in `allowed_chat_ids`; turn them off in Settings.
+
 ## Everyday use
+
+### Knowing when a long request is ready
+
+A request that reads a whole section, or the whole paper, can take a few minutes. You do not have to watch it. In **Settings, When a request is ready** you choose how to hear that it is done:
+
+- **A short sound** (two soft notes) in the browser tab.
+- **A notification** when the tab is in the background, plus a tick in the tab's title (**✓ Ready · Overleaf assistant**) that goes away when you come back. The browser asks once for permission.
+- **A message on Telegram**, through the same bot that adds your DOIs (it uses the bot's existing `telegram.json`, nothing new to set up). It reaches your phone even when the tab is closed. It says only the paper's name and one sentence ("Ready: 3 suggestions to review in my_paper"), never any text of your paper or of the answer.
+
+All three are on by default (Telegram only if the bot is set up), and only for requests that took longer than 20 seconds (you can change that number). **Test** plays the sound, shows a notification and sends the Telegram message so you can see that each works. The sound and the notification come from the open tab, so keep the tab open (it can be in the background); some browsers also need you to have clicked in the page once since you opened it, which you will have done by sending the request. If Telegram does not answer, the app does not retry and nothing else is affected: the answer is in the chat as always.
+
 
 ### The assistant plans the work (the default)
 

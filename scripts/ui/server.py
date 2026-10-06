@@ -33,7 +33,7 @@ sys.path.insert(0, str(SCRIPTS))
 import common  # noqa: E402
 import doi_bot  # noqa: E402  (DOI -> BibTeX, shared with the Telegram bot)
 import overleaf_mcp  # noqa: E402  (git pull/status/sync with the build-file filter, reused as is)
-from writing_core import (activity, agent, book_index, chat, chunk_book, config, draft, events, files, gitmerge, health, intent, latex_mask, latexbuild, layout, library, openai_client, overleaf_auth, panes, paper_index,  # noqa: E402
+from writing_core import (activity, agent, book_index, chat, chunk_book, config, draft, events, files, gitmerge, health, intent, latex_mask, latexbuild, layout, library, notify, openai_client, overleaf_auth, panes, paper_index,  # noqa: E402
                           preferences, retrieve, review, revise, rule_cards, scholar, stats, subject, taxonomy, watermark, webview)
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -62,9 +62,10 @@ class ApiError(Exception):
 class Jobs:
     """Slow operations (book import, ChatGPT calls) run in a thread; the page polls /api/jobs/<id>."""
 
-    def __init__(self):
+    def __init__(self, on_finish=None):
         self.lock = threading.Lock()
         self.items = {}
+        self.on_finish = on_finish   # called with a copy of the job when it ends, on the job's own thread; whatever it does must never break the job
 
     def submit(self, label, fn, with_progress=False, with_steps=False, meta=None):
         jid = secrets.token_hex(6)
@@ -93,6 +94,11 @@ class Jobs:
                     msg = "internal error (see the container log)"
                 with self.lock:
                     self.items[jid].update(status="error", error=msg, finished=time.time())
+            if self.on_finish:
+                try:
+                    self.on_finish(self.get(jid))
+                except Exception:  # noqa: BLE001
+                    traceback.print_exc(file=sys.stderr)
 
         threading.Thread(target=run, daemon=True).start()
         return jid
@@ -125,7 +131,7 @@ class App:
         self.port = port
         self.public_port = public_port or port
         self.sessions = set()
-        self.jobs = Jobs()
+        self.jobs = Jobs(on_finish=notify.job_finished)
         self.last_activity = time.time()
         self.idle_seconds = (idle_minutes if idle_minutes is not None else config.ui_cfg()["idle_minutes"]) * 60
         self._browser, self._browser_lock = None, threading.Lock()
@@ -206,7 +212,7 @@ def api_state(r):
     token_present = (config.data_dir() / "overleaf_git.json").exists()
     return {"papers": papers, "active": active, "active_source": source, "active_age": age, "books": books, "parts": sorted(taxonomy.PARTS),
             "inbox": sorted(p.name for p in config.inbox_dir().glob("*.pdf")) if config.inbox_dir().is_dir() else [],
-            "settings": {"ui": {"idle_minutes": ui["idle_minutes"], "watermark_url": ui["watermark_url"]},
+            "settings": {"ui": {"idle_minutes": ui["idle_minutes"], "watermark_url": ui["watermark_url"], **notify.settings()},
                          "openai": {"state": ostate, "detail": omsg if ostate == "ok" else omsg.split(". ")[0][:120]},
                          "git_token": token_present, "in_docker": os.environ.get("OVERLEAF_UI_IN_DOCKER") == "1"},
             "idle_seconds_left": max(0, int(r.app.last_activity + r.app.idle_seconds - time.time()))}
@@ -2352,6 +2358,7 @@ def api_connections(r):
             "mendeley": {"state": "connected" if mend_creds and mend_tokens else "needs_sign_in" if mend_creds else "not_set_up",
                          "command": f'python3 "{here}/scripts/mendeley_sync.py" authorize'},
             "telegram": {"state": "set_up" if tg.get("token") else "not_set_up", "allowed": len(tg.get("allowed_chat_ids") or [])},
+            "notify": {**notify.settings(), "telegram_ready": notify.telegram_state()[0] == "set_up"},
             "limits": {k: config.ui_cfg()[k] for k in ("guard_passages", "max_passages", "idle_minutes")},
             "panes": _panes_settings(r), "in_docker": os.environ.get("OVERLEAF_UI_IN_DOCKER") == "1",
             "sites": _logins(), "browser": {k: v for k, v in r.app.browser().status().items() if k in ("available", "reason", "kind")}}
@@ -2444,6 +2451,11 @@ def api_clean_address(r):
         reg["projects"][n]["remote"] = new
         common.save("projects.json", reg)
     return {"ok": True, "message": f"The address is now {new}. Press Test again.", "address": new}
+
+
+def api_test_notify(r):
+    ok, message = notify.test_message()
+    return {"ok": ok, "message": message}
 
 
 def api_test_cleaner(r):
@@ -2540,9 +2552,14 @@ def api_settings(r):
             if v and not panes.valid_quillbot(v):
                 raise ApiError(400, "the QuillBot address must be an https address on quillbot.com")
             cur["quillbot_url"] = v or None
-        for key in ("builtin_quillbot", "builtin_overleaf"):
+        for key in ("builtin_quillbot", "builtin_overleaf", "notify_telegram", "notify_sound", "notify_browser"):
             if key in ui:
                 cur[key] = bool(ui[key])
+        if "notify_min_seconds" in ui:
+            try:
+                cur["notify_min_seconds"] = max(0, min(int(ui["notify_min_seconds"]), 3600))
+            except (TypeError, ValueError):
+                raise ApiError(400, "notify_min_seconds must be a number") from None
         if "pane_mode" in ui:
             if ui["pane_mode"] not in PANE_MODES:
                 raise ApiError(400, "pane_mode must be auto, browser, window or inside")
@@ -2910,7 +2927,7 @@ ROUTES = [
     ("GET", r"^/api/library$", api_library), ("POST", r"^/api/library/folders$", api_library_folders), ("POST", r"^/api/library/index$", api_library_index),
     ("GET", r"^/api/library/parts$", api_library_parts), ("GET", r"^/api/library/search$", api_library_search), ("POST", r"^/api/library/cite$", api_library_cite),
     ("GET", r"^/api/overview$", api_overview), ("GET", r"^/api/connections$", api_connections), ("POST", r"^/api/test/openai$", api_test_openai),
-    ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/papers/clean-address$", api_clean_address), ("POST", r"^/api/papers/clone$", api_clone_overleaf), ("POST", r"^/api/test/cleaner$", api_test_cleaner),
+    ("POST", r"^/api/test/git$", api_test_git), ("POST", r"^/api/papers/clean-address$", api_clean_address), ("POST", r"^/api/papers/clone$", api_clone_overleaf), ("POST", r"^/api/test/cleaner$", api_test_cleaner), ("POST", r"^/api/test/notify$", api_test_notify),
     ("GET", r"^/api/papers/discover$", api_discover), ("POST", r"^/api/papers/add$", api_add_paper),
     ("GET", r"^/api/chat/threads$", api_chat_threads), ("POST", r"^/api/chat/new$", api_chat_new), ("POST", r"^/api/chat/rename$", api_chat_rename),
     ("POST", r"^/api/chat/delete$", api_chat_delete), ("POST", r"^/api/chat/clear$", api_chat_clear), ("POST", r"^/api/chat/issue$", api_chat_issue), ("GET", r"^/api/chat$", api_chat_get), ("POST", r"^/api/chat/send$", api_chat_send), ("POST", r"^/api/chat/understood$", api_chat_understood), ("POST", r"^/api/library/bring$", api_library_bring),

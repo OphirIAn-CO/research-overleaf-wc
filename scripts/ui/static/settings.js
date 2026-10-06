@@ -171,8 +171,41 @@
         'Mendeley asks you to sign in in a browser, which cannot happen inside this app. Run this once in a terminal on your computer:' }),
       c.mendeley.state === 'connected' ? null : cmd(c.mendeley.command));
     const tg = h('section', { class: 'card', 'aria-label': 'Telegram' }, h('div', { class: 'row' }, h('h2', { text: 'Telegram (phone)' }), badge(c.telegram.state === 'set_up', 'set up', 'not set up')),
-      h('p', { class: 'small secondary', text: c.telegram.state === 'set_up' ? `Send a DOI to your bot from your phone and it is added to the active paper (${c.telegram.allowed} chat allowed).` :
-        'Optional. A Telegram bot lets you add a DOI from your phone. See the README for the one-time setup.' }));
+      h('p', { class: 'small secondary', text: c.telegram.state === 'set_up' ? `Send a DOI to your bot from your phone and it is added to the active paper (${c.telegram.allowed} chat allowed). The same bot can tell you when a long request is ready: see "When a request is ready".` :
+        'Optional. A Telegram bot lets you add a DOI from your phone and tells you when a long request is ready. See the README for the one-time setup.' }));
+    // ---- "it is ready": a chime and a notification in this browser, and a message through the Telegram bot
+    const nt = c.notify, Ready = window.OLS.Ready;
+    const tick = (on, label) => { const b = h('input', { type: 'checkbox', checked: !!on }); return [b, h('label', { class: 'check' }, b, label)]; };
+    const [soundBox, soundRow] = tick(nt.notify_sound, 'Play a short sound');
+    const [popBox, popRow] = tick(nt.notify_browser, 'Show a notification when this tab is in the background');
+    const [tgBox, tgRow] = tick(nt.notify_telegram && nt.telegram_ready, 'Send me a message on Telegram');
+    tgBox.disabled = !nt.telegram_ready;
+    const secs = h('input', { type: 'number', min: '0', max: '3600', value: String(nt.notify_min_seconds), 'aria-label': 'Seconds before a request is announced' });
+    const permNote = h('p', { class: 'small secondary' });
+    const showPerm = () => {
+      const st = Ready.permission();
+      permNote.textContent = st === 'granted' ? 'This browser lets the app show notifications.' : st === 'denied' ? 'This browser is blocking notifications for this page. Allow them in the browser\'s site settings, or keep using the sound and the title in the tab.' :
+        st === 'unsupported' ? 'This browser cannot show notifications; the sound and the tick in the tab title still work.' : 'The browser will ask once before it shows a notification.';
+    };
+    showPerm();
+    const notOut = h('div');
+    const ready = h('section', { class: 'card', 'aria-label': 'When a request is ready' }, h('div', { class: 'row' }, h('h2', { text: 'When a request is ready' }), badge(nt.telegram_ready, 'Telegram ready', 'Telegram not set up')),
+      h('p', { class: 'small secondary', text: 'A long request can take a few minutes. Say how you want to hear that it is done, so you can work elsewhere meanwhile. The sound and the notification come from this browser tab, so they need the tab to stay open. The Telegram message comes from the bot you already use for DOIs, so it reaches your phone even if you close the tab. It says only the paper\'s name and that something is ready, never any text of your paper.' }),
+      h('div', { class: 'stack tight' }, soundRow, popRow, tgRow, h('label', { class: 'row tight' }, 'Only tell me when a request took longer than', secs, 'seconds')), permNote,
+      h('div', { class: 'row' }, guarded(h('button', { type: 'button', class: 'primary', text: 'Save' }), async () => {
+        if (popBox.checked && Ready.permission() === 'default') { await Ready.allow(); showPerm(); }
+        await api.post('/api/settings', { ui: { notify_sound: soundBox.checked, notify_browser: popBox.checked, notify_telegram: tgBox.checked && nt.telegram_ready, notify_min_seconds: Number(secs.value) } });
+        await window.OLS.loadState(); toast('Saved');
+      }), guarded(h('button', { type: 'button', text: 'Test' }), async () => {
+        if (popBox.checked && Ready.permission() === 'default') { await Ready.allow(); showPerm(); }
+        const played = Ready.chime();
+        let shown = false;
+        if (popBox.checked && Ready.permission() === 'granted') { try { new Notification('Ready: this is a test', { body: 'You will see this when a long request is done and this tab is in the background.', tag: 'ols-ready' }); shown = true; } catch (e) { /* not allowed here */ } }
+        clear(notOut).append(busy('Sending the test...'));
+        const r = tgBox.checked && nt.telegram_ready ? await api.post('/api/test/notify', {}) : null;
+        clear(notOut).append(notice(r && !r.ok ? 'warn' : 'ok', (soundBox.checked ? (played ? 'You should have heard a chime (if not, check the volume of this computer). ' : 'This browser would not play a sound. ') : '') + (r ? r.message : 'Telegram is off for this test.') +
+          (popBox.checked && shown ? ' You should also see a notification.' : '')));
+      })), notOut);
     // ---- QuillBot and Overleaf inside the app: the built-in browser, the addresses, and the sign-in details
     const pn = c.panes;
     const bi = c.browser || {};
@@ -225,7 +258,7 @@
       h('p', { class: 'small secondary', text: 'Optional. Save the email and password you use on each site, and the "Fill my sign-in" button in the side pane types them into the sign-in form. You still press the site\'s own Sign in button, so a code or a "not a robot" check stays in your hands.' }),
       h('p', { class: 'small muted', text: 'They are saved on this computer only, in a file that only you can read (sites.json in the data folder). The file is not encrypted, and the app never shows a saved password again. Signing in with Google, Apple or your university login cannot be filled this way: for these two sites use an email and a password instead (Overleaf: Account settings, then set a password; QuillBot: "Forgot password" lets you set one).' }),
       h('div', { class: 'grid two' }, siteForm('quillbot', 'QuillBot', ''), siteForm('overleaf', 'Overleaf', 'Not the Git token above: that one is for getting and sending your files.')));
-    box.append(h('h2', { class: 'section-h', text: 'Connections' }), h('div', { class: 'grid two' }, openai, overleaf, cleaner, mend, tg, sitesCard), signCard);
+    box.append(h('h2', { class: 'section-h', text: 'Connections' }), h('div', { class: 'grid two' }, openai, overleaf, cleaner, mend, tg, ready, sitesCard), signCard);
 
     // ---- preferences
     const p = paper && window.OLS.paperObj(paper);

@@ -92,6 +92,59 @@
     }
   }
 
+  /* "It is ready": a short chime, a browser notification when the tab is out of sight, and a tick in the tab title. The sound needs the browser's permission
+     to play, which it gives once the person has clicked or typed anywhere in the page, so the sound system is woken on the first click or key. */
+  const Ready = (() => {
+    let ctx = null, flagged = null;
+    const wake = () => {
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!ctx && AC) ctx = new AC();
+        if (ctx && ctx.state === 'suspended') ctx.resume();
+      } catch (e) { /* no sound system: the notification and the title still work */ }
+    };
+    ['pointerdown', 'keydown'].forEach((ev) => document.addEventListener(ev, wake, { capture: true, passive: true }));
+    function chime() {
+      wake();
+      if (!ctx) return false;
+      try {
+        const t0 = ctx.currentTime + 0.02;
+        [[880, 0], [1320, 0.2]].forEach(([hz, at]) => {        // two soft notes going up: "done"
+          const o = ctx.createOscillator(), g = ctx.createGain();
+          o.type = 'sine'; o.frequency.value = hz;
+          g.gain.setValueAtTime(0.0001, t0 + at);
+          g.gain.exponentialRampToValueAtTime(0.18, t0 + at + 0.03);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + 0.45);
+          o.connect(g); g.connect(ctx.destination);
+          o.start(t0 + at); o.stop(t0 + at + 0.5);
+        });
+        return true;
+      } catch (e) { return false; }
+    }
+    const away = () => document.hidden || !document.hasFocus();
+    function unflag() { if (flagged !== null) { document.title = flagged; flagged = null; } }
+    window.addEventListener('focus', unflag);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) unflag(); });
+    function permission() { return ('Notification' in window) ? Notification.permission : 'unsupported'; }
+    async function allow() {   // must be called from a click
+      if (!('Notification' in window)) return 'unsupported';
+      try { return await Notification.requestPermission(); } catch (e) { return Notification.permission; }
+    }
+    /* what: { title, body, seconds, force }. A request quicker than the person's minimum is not announced (force: the Test button). */
+    function announce(what) {
+      const cfg = (S.st && S.st.settings && S.st.settings.ui) || {};
+      if (!what.force && (what.seconds || 0) < (cfg.notify_min_seconds == null ? 20 : cfg.notify_min_seconds)) return;
+      if (what.force || cfg.notify_sound !== false) chime();
+      if (away()) {
+        if (flagged === null) { flagged = document.title; document.title = '\u2713 Ready \u00b7 ' + flagged; }
+        if ((what.force || cfg.notify_browser !== false) && permission() === 'granted') {
+          try { const n = new Notification(what.title, { body: what.body || '', tag: 'ols-ready' }); n.onclick = () => { window.focus(); n.close(); }; } catch (e) { /* some browsers only allow it from a service worker */ }
+        }
+      }
+    }
+    return { announce, chime, allow, permission };
+  })();
+
   let toastTimer = null;
   function toast(msg) {
     const old = document.querySelector('.toast');
@@ -372,7 +425,7 @@
     route();
   }
 
-  window.OLS = { h, clear, api, waitJob, toast, notice, busy, guarded, tile, fmtTok, ago, registerPage, S, route, loadState, loadThreads, renderThreads, paperObj, setPaper, store, drafts };
+  window.OLS = { h, clear, api, waitJob, toast, notice, busy, guarded, tile, fmtTok, ago, registerPage, S, route, loadState, Ready, loadThreads, renderThreads, paperObj, setPaper, store, drafts };
   /* The frame of the chat page (the page itself, the main area, the side area) is never meant to scroll; only the conversation, the source and the PDF do. Something
      that scrolls it anyway (a focus, a link to an anchor, a browser quirk) would slide the buttons at the top out of sight, so it is put back at once. */
   document.addEventListener('scroll', (e) => {
