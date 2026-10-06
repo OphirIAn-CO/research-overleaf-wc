@@ -15,13 +15,14 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) failed+
   const page = await (await browser.newContext({ viewport: { width: 1400, height: 1000 } })).newPage();
   page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`console ${m.type()}: ${m.text()}`); });
   page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
-  const goTo = async (name) => { await page.click(`#nav a:has-text("${name}")`); await page.waitForSelector(name === 'Chat' ? '.chat-page' : 'h1'); };
+  const goTo = async (name) => { await page.click(`#nav a:has-text("${name}")`); await page.waitForSelector(name === 'Chat' ? '.chat-page' : 'h1'); await page.waitForLoadState('networkidle').catch(() => {}); await page.waitForTimeout(300); };   // the page draws itself again once its data has come: wait for that
+  const fill = async (sel, text) => { for (let i = 0; i < 4; i++) { try { await page.fill(sel, text, { timeout: 6000 }); return; } catch (e) { await page.waitForTimeout(400); } } await page.fill(sel, text); };         // a box that is replaced while it is being filled is tried again
   await page.goto(url);
   await page.waitForSelector('.chat-page');
 
   // ---- the message box
   const draft = 'improve the flow of the text before figure 1 but keep the numbers';
-  await page.fill('#composer', draft);
+  await fill('#composer', draft);
   await goTo('Settings');
   await goTo('Chat');
   ok((await page.inputValue('#composer')) === draft, 'text typed in the message box is still there after a visit to Settings');
@@ -36,7 +37,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) failed+
   await page.click('#paper-list .side-item:has-text("traffic-gnn")');
   await onPaper('traffic-gnn');
   ok((await page.inputValue('#composer')) === '', 'another paper has its own, empty box');
-  await page.fill('#composer', 'second paper note');
+  await fill('#composer', 'second paper note');
   await page.click('#paper-list .side-item:has-text("soil-yield")');
   await onPaper('soil-yield');
   ok((await page.inputValue('#composer')) === draft, 'the first paper gets its text back');
@@ -50,7 +51,7 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) failed+
   await page.unroute('**/api/chat/send');
 
   // ---- a send that goes through empties it for good
-  await page.fill('#composer', 'improve the flow of the text before figure 1 inside methods');
+  await fill('#composer', 'improve the flow of the text before figure 1 inside methods');
   await page.press('#composer', 'Enter');
   await page.waitForSelector('.msg.assistant .approach', { timeout: 30000 });
   ok((await page.inputValue('#composer')) === '', 'a sent message empties the box');
@@ -59,15 +60,15 @@ const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) failed+
   ok((await page.inputValue('#composer')) === '', 'and it does not come back');
 
   // ---- an answer to a question, and the "anything to add" box of a suggestion
-  await page.fill('#composer', 'Address this reviewer comment: the description of the wells is insufficient. For the text after figure 1 in methods.');
+  await fill('#composer', 'Address this reviewer comment: the description of the wells is insufficient. For the text after figure 1 in methods.');
   await page.press('#composer', 'Enter');
   await page.waitForSelector('textarea.answer', { timeout: 40000 });
   const answer = 'Wells with at least six months of production were kept.';
-  await page.fill('textarea.answer >> nth=0', answer);
+  await fill('textarea.answer >> nth=0', answer);
   await page.click('button:has-text("Add instructions or change the request")');
   await page.waitForSelector('textarea[aria-label="Anything to add or change"]');
   const more = 'Keep it to two sentences.';
-  await page.fill('textarea[aria-label="Anything to add or change"]', more);
+  await fill('textarea[aria-label="Anything to add or change"]', more);
   await page.screenshot({ path: `${out}/typing-before.png` });
   await goTo('Settings');
   await goTo('Chat');

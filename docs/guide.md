@@ -180,21 +180,35 @@ only when it truly cannot tell, and then with a question that names what it need
 
 ### Answering the model's questions and changing a suggestion
 
- When OpenAI asks questions ("What specific criteria were used?", "Which sources support this?"), **answer all of them first**: each question has a box for your reply (leave it empty to skip it). Nothing is sent
-while you answer; one button, **Send my responses and re-edit** (under the questions and in the row of buttons), sends everything together and asks OpenAI again for the same place. It uses your replies as
-given: it adds nothing beyond them, and the numbers and names in them are not treated as invented (everything else is checked as before). A line next to the button counts the questions you have answered.
+Everything about the part you are working on is gathered **in one box under the changes**, whatever the number of passages: when OpenAI has questions ("What specific criteria were used?", "Which software?"), the box lists
+**every question of every passage** (each under the title of its passage), with a place for your reply (leave it empty to skip it), one box for "anything to add or change", and one button, **Send my responses and
+re-edit**. Nothing is sent while you answer. A line at the top of the card tells you how many questions are waiting, and a line under each passage says its question is in the box.
 
+- **Only the passages that need it are written again.** When the suggestion has several passages, the box lists them under **Passages to write again**. A passage you answer a question about is ticked for you; tick others
+  to include them. The passages you do not tick are **carried over exactly as they are**, with their changes and the ticks you had, into the new suggestion (they say *Kept as it was*), and OpenAI is asked only
+  about the others: the button says how many ("Send my responses and re-edit (1 passage of 3)"). A passage that failed is tried again. If a passage you asked for again fails, you keep the suggestion you had for it,
+  with a note. Pick every passage to write the whole part again.
+- **It remembers.** What you answered in earlier rounds about this part goes along with every new round, and **a question you skipped is recorded as skipped**: the model is told not to ask it again and not to guess.
+  A question you answer later replaces the skip. The model is also asked to put at most three questions, only what stops it from doing the work, and none that the passage or your answers already settle. So you do not meet
+  the same questions again in new boxes after each round.
+- **One suggestion, not a stack.** The new suggestion replaces the old one when it is ready, and the old one shrinks to one line (*An earlier suggestion for this part, replaced by the one below*) that you can open; it can
+  no longer be saved by mistake, and the reviewer's comment it belongs to follows the new one. It costs about as much as the first request, for the passages you ticked. If the new try fails or finds nothing to change, the
+  first suggestion stays open.
 - **The model does not ask you to choose sources.** When it would ask "Which sources should replace the placeholders?", the app answers that itself: it reads your library for every point of your outline, looks
   on the internet for the points your library does not cover, and cites what fits. If nothing supports a claim, the suggestion says so ("I looked in your library and the internet and found nothing that supports
   one claim") and writes the claim without a citation; it never hands the choice back to you.
 - **If you want references looked for on the internet for one of the remaining questions,** tick **I do not have the references: look for them on the internet for this question**. It is a tick, not a button:
   nothing is searched when you tick it. When you press **Send my responses and re-edit**, the app searches (the words come from the ticked questions, your answers and the text), keeps the records that are about your
-  subject, writes the suggestion again with every answer and cites them. You are not asked to choose; their entries are written to your bibliography only if the text you save cites them.
-- **To change what was asked, or to add something not covered by a question,** press **Add instructions or change the request** (**Discuss and revise** when there was no question). It opens a small panel with the request
-  as it was understood (for a reviewer's comment: the comment itself, which you can reword), a box for anything to add or change ("keep it to two sentences") and a tick to look for references first. **Send and make a new
-  suggestion** sends everything together, as above.
-- The new suggestion replaces the old one only when it is ready, and the old one can then no longer be saved by mistake; the reviewer's comment it belongs to follows the new one in the panel. It costs about as much as the first
-  request. If the new try fails or finds nothing to change, the first suggestion stays open.
+  subject, writes the suggestion again with every answer and cites them. You are not asked to choose; their entries are written to your bibliography only if the text you save cites them. (This path writes the whole part
+  again.)
+- **To change what was asked, or to add something not covered by a question,** use the same box: **Add instructions or change the request** (**Discuss and revise** when there was no question) opens it. It has the request
+  as it was understood (for a reviewer's comment: the comment itself, which you can reword, under *Change what I was asked to do*), the box for anything to add or change ("keep it to two sentences") and the tick to look
+  for references first.
+- **A request for a shorter or longer text is not refused for being shorter or longer.** The app checks that an answer is not much shorter or longer than the passage (50% to 160% of its words), which protects against
+  lost or invented content. When you ask to shorten, cut, condense or remove verbosity the lower limit is 20%; when you ask to expand, the upper limit is 250%. An answer that is still too far off says so in plain words
+  and what to say ("cut it to half").
+- **An answer that does not fit is asked for again with more room.** A long passage needs a long answer (the whole revised text, the list of changes and the explanation). The app asks for more room from the start for a long
+  passage and, when an answer is cut off, asks again with twice as much (up to 16,000 tokens) before it gives up; if it still does not fit it says to ask for a smaller part.
 
 ### Going through a peer review
 

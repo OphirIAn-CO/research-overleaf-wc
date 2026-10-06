@@ -876,8 +876,14 @@
     function renderSuggestion(holder, prop, m) {
       if (prop.kind === 'layout') return renderLayout(holder, prop, m);
       clear(holder);
+      const outer = holder;
       let p = prop;
-      st.cards.set(p.id, { holder, m, status: p.status, sent: !!p.sent_at });
+      st.cards.set(p.id, { holder: outer, m, status: p.status, sent: !!p.sent_at });
+      if (p.status === 'superseded') {                      // a suggestion that was written again is one line: the newer one below is the one to work on
+        const body = h('div', { class: 'stack' });
+        outer.append(h('details', { class: 'earlier' }, h('summary', { class: 'small muted', text: 'An earlier suggestion for this part, replaced by the one below (show it)' }), body));
+        holder = body;
+      }
       const locked = p.status === 'applied' || p.status === 'rejected' || p.status === 'superseded';
       const forgetDrafts = () => ['answer', 'req', 'more', 'final'].forEach((k) => drafts.clearPrefix(`${k}:${paper}:${p.id}`));       // a suggestion that is closed has nothing left to answer
       if (locked) forgetDrafts();
@@ -889,7 +895,7 @@
       (p.sources || []).forEach((x) => { if (x.ref) srcLabels[x.ref] = `${x.file.split('/').pop()} · ${(x.where || '').split(' · ').slice(1).join(' · ') || x.where}`; });
       (p.library || []).forEach((x) => { if (x.ref) srcLabels[x.ref] = `${x.label} · ${x.where}`; });
       srcLabels.commentary = 'connecting comment, adds no new fact';
-      const redraw = async () => { const fresh = await api.get(`/api/proposal?paper=${enc(paper)}&id=${enc(p.id)}`); renderSuggestion(clear(holder), fresh, m); };
+      const redraw = async () => { const fresh = await api.get(`/api/proposal?paper=${enc(paper)}&id=${enc(p.id)}`); renderSuggestion(clear(outer), fresh, m); };
 
       holder.append(h('div', { class: 'row small secondary' }, h('span', { text: `${p.model} · ${fmtTok(usage.input_tokens)} in / ${fmtTok(usage.output_tokens)} out${usage.cost != null ? ' · cost ' + usage.cost : ''}` }),
         p.status === 'applied' ? h('span', { class: 'badge ok', text: 'saved in your files' }) : p.status === 'rejected' ? h('span', { class: 'badge', text: 'set aside' }) : p.status === 'superseded' ? h('span', { class: 'badge', text: 'replaced' }) : null,
@@ -929,25 +935,38 @@
             h('p', { class: 'small secondary', text: 'Source support is shown separately below each paragraph; it is not part of the manuscript text.' })));
         }
       }
-      const answers = [];                                   // [{q, box}]: what the author replies to the model's questions
-      let moreBox = null;                                   // the "anything to add or change" box of the discuss panel, once it has been opened
+      const answers = [];                                   // [{q, box, unit, title, find}]: what the author replies to the model's questions, from every passage of this suggestion
+      const redoBoxes = new Map();                          // unit_id -> tick: the passages to write again (the others stay exactly as they are)
+      let moreBox = null, reqBox = null, wholeFind = null;  // "anything to add or change", "what I was asked", "look for references": all in the one panel below the changes
+      const canPartial = !isDraft && p.units.length > 1 && p.units.every((u) => (u.chunk_ids || []).length);
+      const redoIds = () => new Set(canPartial ? p.units.filter((u) => u.status === 'failed' || (redoBoxes.get(u.unit_id) || { checked: true }).checked).map((u) => u.unit_id) : p.units.map((u) => u.unit_id));
       const composeFacts = () => {
-        const parts = [];
-        answers.forEach(({ q, box }) => { const a = box.value.trim(); if (a) parts.push(`Question: ${q}\nAnswer: ${a}`); });
+        const parts = [], redo = redoIds();
+        answers.forEach(({ q, box, unit }) => {
+          const a = box.value.trim();
+          if (a) parts.push(`Question: ${q}\nAnswer: ${a}`);
+          else if (redo.has(unit)) parts.push(`Question: ${q}\nAnswer: (skipped: the author chose not to answer. Do not ask it again; leave that point as it is in the passage and do not guess.)`);
+        });
         const extra = moreBox ? moreBox.value.trim() : '';
         if (extra) parts.push('Further instructions from the author: ' + extra);
         return parts.join('\n\n');
       };
+      const hasInput = () => answers.some(({ box }) => box.value.trim()) || !!(moreBox && moreBox.value.trim());
       const CITE_Q = /\b(citations?|cite|references?|sources?|literature|evidence|stud(?:y|ies)|publications?)\b/i;
-      // Everything the author wants to tell the model goes in one go: the answers to ALL its questions, what to add, and (ticked) which questions are to be answered by looking for references on the
-      // internet. Nothing is asked of OpenAI or of the internet until the author presses "Send my responses and re-edit".
-      let wholeFind = null;                                 // "look for references online for the whole suggestion", in the panel
+      // Everything the author wants to tell the model goes in one go, from one place: the answers to ALL its questions (of every passage), what to add, which passages to write again, and (ticked) which
+      // questions are to be answered by looking for references on the internet. Nothing is asked of OpenAI or of the internet until the author presses "Send my responses and re-edit".
       const statusEls = [];
       const asking = () => answers.filter((a) => a.find && a.find.checked).map((a) => a.q);
       const updateStatus = () => {
         const done = answers.filter((a) => a.box.value.trim()).length, look = asking().length + (wholeFind && wholeFind.checked ? 1 : 0);
-        const txt = `${done} of ${answers.length} answered` + (look ? ` · references will be looked for on the internet first (${look})` : '') + (done < answers.length - asking().length ? ' · an empty answer is skipped' : '');
+        const txt = answers.length ? `${done} of ${answers.length} answered` + (look ? ` · references will be looked for on the internet first (${look})` : '') + (done < answers.length - asking().length ? ' · an empty answer is skipped' : '') : '';
         statusEls.forEach((e) => { e.textContent = txt; });
+      };
+      let sendBtn = null;
+      const refreshSend = () => {
+        if (!sendBtn) return;
+        const n = redoIds().size, base = answers.length ? (isDraft ? 'Send my responses and draft again' : 'Send my responses and re-edit') : (isDraft ? 'Send and draft again' : 'Send and make a new suggestion');
+        sendBtn.textContent = canPartial && n < p.units.length ? `${base} (${plural(n, 'passage')} of ${p.units.length})` : base;
       };
       const submitAll = async (request) => {
         if (st.busy) throw new Error('A request is still running. Wait for it to finish, then press the button again.');
@@ -960,11 +979,16 @@
         const asked = (p.author_request || p.instruction || '').trim();           // what the author asked, in their own words, not the text the app added to it
         const req = (request || asked).trim();
         if (!req) throw new Error('Say what the suggestion should do.');
-        if (!facts && req === asked) throw new Error('Answer a question, or write what to add or change, first.');
-        await send(req, p.kind === 'draft' ? { redraft: p.id, facts } : { chunk_ids: m.data.chunk_ids, facts, revises: p.id, issue: m.data.issue });
+        if (!hasInput() && req === asked) throw new Error('Answer a question, or write what to add or change, first.');
+        if (isDraft) { await send(req, { redraft: p.id, facts }); return; }
+        const redo = redoIds();
+        if (!redo.size) throw new Error('Tick at least one passage to write again.');
+        const partial = canPartial && redo.size < p.units.length;       // only the passages that were answered or ticked are written again; the others stay as they are
+        await send(req, partial ? { chunk_ids: p.units.filter((u) => redo.has(u.unit_id)).flatMap((u) => u.chunk_ids), keep: p.units.filter((u) => !redo.has(u.unit_id)).map((u) => u.unit_id), facts, revises: p.id, issue: m.data.issue }
+          : { chunk_ids: m.data.chunk_ids, facts, revises: p.id, issue: m.data.issue });
       };
-      const sendAllButton = (cls) => guarded(h('button', { type: 'button', class: cls || 'primary', text: isDraft ? 'Send my responses and draft again' : 'Send my responses and re-edit',
-        title: 'Sends all your answers together, and asks OpenAI again for this place. If you ticked "look for references", the references are searched first and you choose which to add; this suggestion is replaced only when the new one is ready.' }), () => submitAll());
+      const nQuestions = locked ? 0 : p.units.reduce((n, u) => n + (u.questions || []).length, 0);
+      if (nQuestions) holder.append(notice('warn', h('strong', { text: `${plural(nQuestions, 'question')} for you. ` }), 'Answer what you can in the box below the changes, then send everything in one go.'));
       p.units.forEach((u) => {
         if (u.status === 'failed') { holder.append(notice('bad', `${u.section_path}: ${u.error_plain || u.error || 'failed'}`)); return; }
         // on a wide screen the explanation sits beside the changes instead of above them (see .unit in the stylesheet)
@@ -975,28 +999,21 @@
         if (u.heading) why.append(notice('ok', h('strong', { text: 'A new section is added: ' }), h('code', { text: u.heading }), ' goes above this text, ' + ((u.anchor && u.anchor.mode) || '').replace(/^as a new \w+ section /, '') + '. Your paper has no such section yet.'));
         const back = (u.restored || []).filter((x) => !x.own_line);
         if (back.length) why.append(notice('warn', `OpenAI left out ${plural(back.length, 'citation or formula', 'citations or formulas')} (${back.map((x) => x.latex).join(', ')}). I put ${back.length === 1 ? 'it' : 'them'} back where ${back.length === 1 ? 'it' : 'they'} stood; check ${back.length === 1 ? 'it still sits' : 'they still sit'} next to the claim ${back.length === 1 ? 'it supports' : 'they support'}.`));
-        (u.questions || []).forEach((q, qi) => {
-          const nq = notice('warn', h('strong', { text: 'A question for you: ' }), q);
-          if (!locked) {
-            const box = h('textarea', { rows: '2', class: 'answer', 'aria-label': 'Your answer to: ' + q, placeholder: 'Your answer (leave it empty to skip this question). Answer all the questions, then press "Send my responses and re-edit".' });
+        const open = u.questions || [];
+        if (locked) open.forEach((q) => why.append(notice('warn', h('strong', { text: 'A question for you: ' }), q)));
+        else if (open.length) {
+          why.append(h('p', { class: 'small muted', text: `${plural(open.length, 'question')} about this passage ${open.length === 1 ? 'is' : 'are'} in the box below the changes, together with the other questions of this part.` }));
+          open.forEach((q, qi) => {
+            const box = h('textarea', { rows: '2', class: 'answer', 'aria-label': 'Your answer to: ' + q, placeholder: 'Your answer (leave it empty to skip this question)' });
             drafts.bind(box, `answer:${paper}:${p.id}:${u.unit_id}:${qi}`);
-            const entry = { q, box, find: null };
-            if (CITE_Q.test(q)) {
-              entry.find = h('input', { type: 'checkbox', id: `find-${p.id}-${u.unit_id}-${qi}` });
-              nq.append(box, h('label', { class: 'use-box small', for: entry.find.id }, entry.find, ' I do not have the references: look for them on the internet for this question (I choose the best ones and cite them)'));
-            } else nq.append(box);
+            const entry = { q, box, unit: u.unit_id, title: unitTitle(u), find: null };
+            if (CITE_Q.test(q)) entry.find = h('input', { type: 'checkbox', id: `find-${p.id}-${u.unit_id}-${qi}` });
             answers.push(entry);
-            box.addEventListener('input', updateStatus);
+            box.addEventListener('input', () => { updateStatus(); const tick = redoBoxes.get(u.unit_id); if (tick && box.value.trim() && !tick.checked) { tick.checked = true; refreshSend(); } });
             if (entry.find) entry.find.addEventListener('change', updateStatus);
-          }
-          why.append(nq);
-        });
-        if (!locked && (u.questions || []).length) {
-          const st1 = h('span', { class: 'small muted', role: 'status', 'aria-live': 'polite' });
-          statusEls.push(st1);
-          why.append(h('div', { class: 'row' }, sendAllButton(), st1));
-          updateStatus();
+          });
         }
+        if (u.carried) why.append(h('p', { class: 'small muted', text: 'Kept as it was: you did not ask for this passage again.' }));
         const bad = (u.validators || []).filter((v) => !v.ok);
         if (bad.length) why.append(notice('warn', 'Heads up: ', bad.map((v) => v.detail || v.name).join('; ')));
         if ((u.added_cites || []).length) {
@@ -1059,37 +1076,66 @@
         }
         return;
       }
-      // Discuss and revise: answer the model's questions, change what was asked (the reviewer's comment, if this is one), say what to add. The answer is a new suggestion
-      // for the same place, built with those answers; it replaces this one, and the reviewer's comment follows the new one.
+      // The one place where everything about this part is gathered: the questions of every passage, what to add or change, which passages to write again, and the single button that sends it all.
+      // The answer is a new suggestion that replaces this one; passages that were not written again are carried over as they are.
       const isComment = !!(m.data.issue);
-      const discuss = h('div', { class: 'discuss', hidden: true });
-      const openDiscuss = () => {
-        discuss.hidden = !discuss.hidden;
-        if (discuss.hidden || discuss.childNodes.length) return;
-        const req = h('textarea', { rows: '3', 'aria-label': isComment ? 'The reviewer\'s comment' : 'What I was asked to do' });
-        req.value = p.author_request || p.instruction || '';
-        drafts.bind(req, `req:${paper}:${p.id}`);
-        const more = h('textarea', { rows: '3', 'aria-label': 'Anything to add or change', placeholder: 'For example: the criteria were wells with at least six months of production; keep it to two sentences; do not mention the vendor.' });
-        drafts.bind(more, `more:${paper}:${p.id}`);
-        moreBox = more;
-        const compose = composeFacts;
+      const panel = h('section', { class: 'ask-panel stack', 'aria-label': 'To finish this part', hidden: !answers.length });
+      const buildPanel = () => {
+        panel.append(h('h3', { text: answers.length ? `To finish this part: ${plural(answers.length, 'question')} for you` : (isDraft ? 'Discuss and draft again' : 'Discuss and revise') }));
+        if (answers.length) {
+          const groups = new Map();
+          answers.forEach((a) => { if (!groups.has(a.unit)) groups.set(a.unit, []); groups.get(a.unit).push(a); });
+          groups.forEach((list) => {
+            const grp = h('div', { class: 'ask-group stack' }, p.units.length > 1 ? h('h4', { class: 'small', text: list[0].title }) : null);
+            list.forEach((a) => grp.append(h('div', { class: 'ask-q stack' }, notice('warn', h('strong', { text: 'A question for you: ' }), a.q), a.box,
+              a.find ? h('label', { class: 'use-box small', for: a.find.id }, a.find, ' I do not have the references: look for them on the internet for this question (I choose the best ones and cite them)') : null)));
+            panel.append(grp);
+          });
+        }
+        reqBox = h('textarea', { rows: '3', 'aria-label': isComment ? 'The reviewer\'s comment' : 'What I was asked to do' });
+        reqBox.value = p.author_request || p.instruction || '';
+        drafts.bind(reqBox, `req:${paper}:${p.id}`);
+        moreBox = h('textarea', { rows: '3', 'aria-label': 'Anything to add or change', placeholder: 'For example: the criteria were wells with at least six months of production; keep it to two sentences; do not mention the vendor.' });
+        drafts.bind(moreBox, `more:${paper}:${p.id}`);
+        moreBox.addEventListener('input', updateStatus);
         wholeFind = h('input', { type: 'checkbox', id: `find-all-${p.id}` });
         wholeFind.addEventListener('change', updateStatus);
-        const go = guarded(h('button', { type: 'button', class: 'primary', text: 'Send and make a new suggestion' }), async () => { await submitAll(req.value); });
-        discuss.append(h('p', { class: 'small secondary', text: answers.length ? 'Your answers to the questions above go with it. Everything you write here is used as given: I add nothing beyond it, and the numbers and names in it are allowed in the new text.' : 'Everything you write here is used as given: I add nothing beyond it, and the numbers and names in it are allowed in the new text.' }),
-          h('label', { class: 'small secondary', text: isComment ? 'The reviewer\'s comment (change it if you read it differently)' : 'What I was asked to do (change it if you want it understood differently)' }), req,
-          h('label', { class: 'small secondary', text: 'Anything to add or change?' }), more,
-          h('label', { class: 'use-box small', for: wholeFind.id }, wholeFind, ' I do not have the references: look for them on the internet (I choose the best ones and cite them)'),
-          h('div', { class: 'row' }, go, h('button', { type: 'button', class: 'ghost', text: 'Cancel', onclick: () => { discuss.hidden = true; } }),
-            h('span', { class: 'small muted', text: 'This asks OpenAI again for this place and costs about as much as the first time.' })));
+        panel.append(h('p', { class: 'small secondary', text: answers.length ? 'Your answers are sent together, in one request. Everything you write here is used as given: I add nothing beyond it, and the numbers and names in it are allowed in the new text. What you said in earlier rounds about this part is remembered, and a question you skip is not asked again.' :
+          'Everything you write here is used as given: I add nothing beyond it, and the numbers and names in it are allowed in the new text. What you said in earlier rounds about this part is remembered.' }),
+          h('label', { class: 'small secondary', text: 'Anything to add or change?' }), moreBox,
+          h('details', null, h('summary', { class: 'small', text: isComment ? 'Change the reviewer\'s comment (if you read it differently)' : 'Change what I was asked to do (if you want it understood differently)' }), reqBox),
+          h('label', { class: 'use-box small', for: wholeFind.id }, wholeFind, ' I do not have the references: look for them on the internet (I choose the best ones and cite them)'));
+        if (canPartial) {
+          const anyQ = p.units.some((u) => (u.questions || []).length);
+          const list = h('div', { class: 'redo stack' }, h('strong', { class: 'small', text: 'Passages to write again' }),
+            h('p', { class: 'small secondary', text: 'The passages you do not tick stay exactly as they are now, with their changes, in the new suggestion. A passage you answer a question about is ticked for you.' }));
+          p.units.forEach((u) => {
+            const failed = u.status === 'failed';
+            const tick = h('input', { type: 'checkbox', id: `redo-${p.id}-${u.unit_id}`, checked: failed || !anyQ || (u.questions || []).length > 0, disabled: failed });
+            tick.addEventListener('change', refreshSend);
+            redoBoxes.set(u.unit_id, tick);
+            list.append(h('label', { class: 'check small', for: tick.id }, tick, ' ' + unitTitle(u) + (failed ? ' (it failed: I will try it again)' : '')));
+          });
+          panel.append(list);
+        }
+        sendBtn = guarded(h('button', { type: 'button', class: 'primary', title: 'Sends all your answers together, and asks OpenAI again for the passages you ticked. If you ticked "look for references", the references are searched first and you choose which to add; this suggestion is replaced only when the new one is ready.' }), () => submitAll(reqBox.value));
+        const st1 = h('span', { class: 'small muted', role: 'status', 'aria-live': 'polite' });
+        statusEls.push(st1);
+        panel.append(h('div', { class: 'row' }, sendBtn, answers.length ? null : h('button', { type: 'button', class: 'ghost', text: 'Cancel', onclick: () => { panel.hidden = true; } }), st1,
+          h('span', { class: 'small muted', text: 'This asks OpenAI again and costs about as much as the first time, for the passages you ticked.' })));
+        refreshSend();
+        updateStatus();
       };
+      let built = false;                                      // a suggestion with no question builds its panel only when the author opens it
+      const ensurePanel = () => { if (!built && !locked) { built = true; buildPanel(); } };
+      const wasWriting = drafts.has(`req:${paper}:${p.id}`) || drafts.has(`more:${paper}:${p.id}`);          // what was being written there is still there: show it
+      if (answers.length || wasWriting) { ensurePanel(); panel.hidden = false; }
+      const openDiscuss = () => { ensurePanel(); panel.hidden = answers.length ? false : !panel.hidden; if (!panel.hidden && moreBox) moreBox.focus(); };
       const discussBtn = h('button', { type: 'button', text: answers.length ? 'Add instructions or change the request' : (isDraft ? 'Discuss and draft again' : 'Discuss and revise'),
         title: isDraft ? 'Refine what to add, add instructions, or tick that references are looked for first. You get a new insertion suggestion for the same place, and this one is replaced.' : 'Change what was asked, say what to add, or tick that references are looked for first. You get a new suggestion for the same place that replaces this one.', onclick: openDiscuss });
-      const sendAllBtn = answers.length ? sendAllButton() : null;
       if (!nHunks) {
         if (p.status === 'proposed' || p.status === 'no_changes') {
-          holder.append(h('div', { class: 'row actions' }, sendAllBtn, discussBtn), discuss);
-          if (drafts.has(`req:${paper}:${p.id}`) || drafts.has(`more:${paper}:${p.id}`)) openDiscuss();          // what was being written there is still there: show it
+          holder.append(panel, h('div', { class: 'row actions' }, discussBtn));
         }
         return;
       }
@@ -1113,11 +1159,10 @@
           await doApprove(notices, p, { accept: all, push: true, unclean_ok: unclean }, redraw);
         }),
         h('button', { type: 'button', text: 'Polish in QuillBot or by hand', title: 'Opens a panel above the message box: take the text to QuillBot, bring the result back, check it and save', onclick: () => openBanner(p, 1) }),
-        sendAllBtn, discussBtn,
+        discussBtn,
         guarded(h('button', { type: 'button', class: 'ghost', text: 'Not now' }), async () => { await api.post('/api/proposal/record', { paper, id: p.id, accepted: [], rejected: 'all', chat: st.cid }); await redraw(); await reload(); }),
         h('span', { class: 'grow' }), count);
-      holder.append(copies, actions, discuss);
-      if (drafts.has(`req:${paper}:${p.id}`) || drafts.has(`more:${paper}:${p.id}`)) openDiscuss();
+      holder.append(panel, copies, actions);
       if (drafts.has(`final:${paper}:${p.id}`)) openBanner(p, 3);                                                 // the author's own version was being written: bring the panel back
       holder.append(h('p', { class: 'small muted' }, unclean ? 'Saved exactly as written: no text-cleaning service is set up. ' : '', isDraft ? 'Inserting puts the ticked new paragraphs at the chosen place in your files; "send" then puts them in Overleaf. ' : 'Saving puts the ticked changes into your files here; "send" then puts them in Overleaf. ', handoff));
     }

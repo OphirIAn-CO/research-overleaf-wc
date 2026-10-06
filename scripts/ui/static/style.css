@@ -397,6 +397,14 @@ button.link { background: none; border: 0; padding: 0; color: var(--accent); cur
 .notice textarea.answer { display: block; width: 100%; margin-top: 8px; min-height: 52px; background: var(--surface-1); }
 .discuss { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; background: color-mix(in srgb, var(--accent) 6%, var(--surface-1)); margin-top: 8px; }
 .discuss[hidden] { display: none; } .discuss textarea { width: 100%; resize: vertical; } .discuss p { margin: 0; }
+.ask-panel { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--accent); border-radius: 10px; padding: 12px 14px; background: color-mix(in srgb, var(--accent) 6%, var(--surface-1)); margin-top: 8px; }
+.ask-panel[hidden] { display: none; }
+.ask-panel h3, .ask-panel h4, .ask-panel p { margin: 0; }
+.ask-panel textarea { width: 100%; resize: vertical; min-height: 52px; background: var(--surface-1); }
+.ask-panel .ask-q > .notice { margin: 0; }
+.ask-panel .ask-group { padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.ask-panel .redo { display: flex; flex-direction: column; gap: 4px; }
+details.earlier { border: 1px dashed var(--axis); border-radius: 8px; padding: 4px 10px; margin: 6px 0; }
 .msg.user .bubble .facts { margin-top: 6px; font-size: 13px; opacity: 0.95; } .msg.user .bubble .facts summary { cursor: pointer; } .msg.user .bubble .facts div { white-space: pre-wrap; margin-top: 4px; }
 
 /* literature library and folder choosers */

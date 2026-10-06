@@ -51,7 +51,7 @@ class Static(unittest.TestCase):
         chat = (STATIC / "chat.js").read_text()
         self.assertIn("sessionStorage", app)
         self.assertIn("drafts", app)
-        for needed in ("drafts.bind(ta, `composer:", "drafts.bind(box, `answer:", "drafts.bind(req, `req:", "drafts.bind(more, `more:", "drafts.bind(mine, `final:"):
+        for needed in ("drafts.bind(ta, `composer:", "drafts.bind(box, `answer:", "drafts.bind(reqBox, `req:", "drafts.bind(moreBox, `more:", "drafts.bind(mine, `final:"):
             self.assertIn(needed, chat, needed)
         self.assertRegex(chat, r"drafts\.clear\(`composer:", "a sent message empties its draft")
         # a text box a program fills in must tell the saver, and no secret field may ever be bound

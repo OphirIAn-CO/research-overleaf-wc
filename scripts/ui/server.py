@@ -1126,8 +1126,15 @@ def _start_pass(app, n, p, cid, plan_mid):
             return {"proposal": prop["id"], "failed": api_kind}
         old = msg["data"].get("revises")
         revise.annotate(p, prop["id"], author_request=plan.get("author_request"), understood=plan.get("understood"))
+        keep = msg["data"].get("keep") or []
+        if old and keep and prop["status"] != "failed":               # only some passages were written again: the others stay as they were, in the same suggestion
+            try:
+                prop = revise.carry_over(p, old, prop["id"], keep)
+            except (revise.ReviseError, KeyError, OSError, ValueError):
+                pass
+        all_ids = [c for u in prop["units"] for c in (u.get("chunk_ids") or [])] if keep else []
         replaced = bool(old) and prop["status"] == "proposed" and revise.supersede(p, old, prop["id"])      # the suggestion this one revises can no longer be saved by mistake
-        chat.append(p, cid, "assistant", "result", "", proposal=prop["id"], chunk_ids=plan["chunk_ids"], plan=plan_mid, status=prop["status"],
+        chat.append(p, cid, "assistant", "result", "", proposal=prop["id"], chunk_ids=all_ids or plan["chunk_ids"], plan=plan_mid, status=prop["status"],
                     usage=prop["usage"], steps=prop.get("steps", []), **({"issue": msg["data"]["issue"]} if msg["data"].get("issue") else {}),
                     **({"revises": old, "replaced": replaced} if old else {}))
         chat.close_reviews(p, cid)                      # a comment OpenAI would change nothing for can be the last one open
@@ -1273,6 +1280,7 @@ def api_chat_send(r):
     facts = str(r.body.get("facts") or "").strip()[:3000] if (ticked or redraft) else ""          # the author's answers to the model's questions; only for a revision of a chosen place
     revises = str(r.body.get("revises") or "")
     understood = " ".join(str(r.body.get("understood") or "").split())[:500]          # how the request this one continues was understood (a button of a card sends it back)
+    keep = [k for k in (r.body.get("keep") or []) if isinstance(k, str) and re.fullmatch(r"[a-z]{1,2}\d{1,3}", k)][:40]          # the passages of a suggestion that stay as they are when the others are written again
     find_refs = bool(r.body.get("find_refs"))
     words = str(r.body.get("words") or "").strip()[:200]
     ask_qs = [str(q).strip()[:500] for q in (r.body.get("ask") or []) if isinstance(q, str) and q.strip()][:6]          # the questions the author ticked to have references looked up for
@@ -1297,7 +1305,7 @@ def api_chat_send(r):
     forced_web = find_refs and bool(redraft or revises) and not words                  # the author ticked "look for them on the internet" while answering: the app looks, picks and cites, and writes again
     if forced_web:
         kind = "draft" if redraft else "edit"
-    req = {"text": text, "asked": asked, "ticked": ticked, "facts": facts, "online": online, "issue": issue, "redraft": redraft, "revises": revises, "find_refs": find_refs, "words": words,
+    req = {"text": text, "asked": asked, "ticked": ticked, "facts": facts, "online": online, "issue": issue, "redraft": redraft, "revises": revises, "find_refs": find_refs, "words": words, "keep": keep if revises and not find_refs else [],
            "ask": ask_qs if find_refs else [], "web": "force" if forced_web else "", "summary": understood}
     uses = None
     flag = str(r.body.get("flag") or "")
@@ -1498,6 +1506,8 @@ def _dispatch(app, n, p, cid, kind, req, out, user_mid, uses=None, explicit=Fals
             old = None
     if old and (req.get("web") == "force" or text.startswith(SYNTHETIC)):
         text = asked = old.get("author_request") or old.get("instruction") or text
+    if old and (facts or old.get("facts")):                             # what was answered in the rounds before comes along: the model is not asked again what it was already told (or what was skipped)
+        facts = revise.merge_facts(old.get("facts", ""), facts)
     summary = req.get("summary") or (old or {}).get("understood") or ""
     author_text, from_kind = text, kind
     online_off = config.paper_settings(p).get("use_online") == "never" or (explicit and kind != "refsearch" and uses.get("online") is False)         # unticked on the card: no search of the internet for this request
@@ -1661,7 +1671,7 @@ def _dispatch(app, n, p, cid, kind, req, out, user_mid, uses=None, explicit=Fals
             ask = config.paper_settings(p)["confirm_before_send"] or pl["units"] > guard
             reason = ("big" if pl["units"] > guard else "setting") if ask else None
             m = chat.append(p, cid, "assistant", "plan", "", plan=pl, title=u["title"], notes=u["notes"], chunk_ids=u["chunk_ids"], state="waiting", confirm=reason,
-                            **({"issue": issue} if issue else {}), **({"revises": revises} if revises else {}))
+                            **({"issue": issue} if issue else {}), **({"revises": revises} if revises else {}), **({"keep": req["keep"]} if revises and req.get("keep") else {}))
             out.append(m)
             if not ask:
                 job = _start_pass(app, n, p, cid, m["id"])

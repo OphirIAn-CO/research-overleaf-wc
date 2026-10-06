@@ -112,18 +112,19 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   const frame = await page.evaluate(() => ({ main: document.querySelector('#main').scrollTop, doc: document.scrollingElement.scrollTop, head: document.querySelector('.chat-head').getBoundingClientRect().top, strip: (document.querySelector('#panes-area .pane-strip') || document.body).getBoundingClientRect().top }));
   ok(frame.main === 0 && frame.doc === 0 && frame.head >= 0 && frame.strip >= 0, 'Show it moves the conversation only: the buttons at the top of the page stay where they are ' + JSON.stringify(frame));
   // the suggestion asks a question: answer it and ask for a new suggestion, which replaces this one
-  ok(await page.isVisible('.thread textarea.answer') && await page.isVisible('.thread .actions button:has-text("Send my responses and re-edit")'), 'a question from the model has a box for the answer and a Send my responses and re-edit button');
+  ok(await page.isVisible('.thread textarea.answer') && await page.isVisible('.thread .ask-panel button:has-text("Send my responses and re-edit")'), 'the question from the model has a box for the answer, in one panel with the Send my responses and re-edit button');
   await page.click('.thread .actions button:has-text("Add instructions or change the request")');
-  await page.waitForSelector('.discuss:not([hidden])');
-  ok(/reviewer.s comment/.test(await text(page, '.discuss')) && /No uncertainty|uncertainty/.test(await page.$eval('.discuss textarea', (t) => t.value)), 'the panel shows the reviewer\'s comment so it can be changed');
-  await page.click('.discuss button:has-text("Send and make a new suggestion")');
+  await page.waitForSelector('.ask-panel:not([hidden])');
+  ok(/reviewer.s comment/.test(await text(page, '.ask-panel')) && /No uncertainty|uncertainty/.test(await page.$eval('.ask-panel details textarea', (t) => t.value)), 'the panel shows the reviewer\'s comment so it can be changed');
+  await page.click('.ask-panel button:has-text("Send my responses and re-edit")');
   await page.waitForSelector('.toast:has-text("Answer a question")');
   ok(true, 'it asks for an answer or a change before it spends anything');
   await page.fill('.thread textarea.answer', 'Wells with at least 6 months of data.');
-  await page.fill('.discuss textarea >> nth=1', 'Keep it to one sentence.');
-  await page.click('.discuss button:has-text("Send and make a new suggestion")');
-  await page.waitForSelector('.thread .badge:has-text("replaced")', { timeout: 30000 });
-  ok(/Replaced/.test(await text(page, '.thread')), 'the old suggestion says it was replaced and cannot be saved any more');
+  await page.fill('.ask-panel textarea[aria-label="Anything to add or change"]', 'Keep it to one sentence.');
+  await page.click('.ask-panel button:has-text("Send my responses and re-edit")');
+  await page.waitForSelector('.thread details.earlier', { timeout: 30000 });
+  ok(/replaced by the one below/.test(await text(page, '.thread details.earlier')), 'the old suggestion is one line that says it was replaced (and it cannot be saved any more)');
+  ok((await page.$$eval('.thread .ask-panel:not([hidden])', (a) => a.length)) <= 1, 'only one panel of questions is open: the one of the suggestion to work on');
   await page.waitForSelector('.thread .msg.user .facts');
   ok(/6 months/.test(await page.$eval('.thread .msg.user .facts', (e) => e.textContent)), 'the answer that went with the request is shown in the conversation');
   await page.waitForFunction(() => /6 months/.test(document.querySelector('.thread').innerText) && document.querySelectorAll('.thread .actions').length === 1, null, { timeout: 30000 });
@@ -331,7 +332,8 @@ const JARGON = /\b(chunks?|RAG|proposals?|payload|dry[- ]run|monitor|embeddings?
   const sentBefore = await page.$$eval('.msg.assistant .approach', (a) => a.length);
   await page.press('#composer', 'Enter');
   await page.waitForSelector('.msg.assistant:has-text("go with it")', { timeout: 20000 });
-  ok(/results\.csv/.test(await text(page, '.msg.assistant:has-text("go with it")')), 'a request that names a file says which of the files go with it');
+  const goWith = await text(page, '.msg.assistant:has-text("go with it")');
+  ok(/results\.csv/.test(goWith), 'a request that names a file says which of the files go with it' + (process.env.E2E_DEBUG ? ': ' + goWith.slice(0, 500) : ''));
   await page.waitForFunction((n) => document.querySelectorAll('.msg.assistant .approach').length > n, sentBefore, { timeout: 25000 });
   ok(/Used parts of your files/.test(await text(page, '.thread')), 'and the answer says which parts it used');
   await shot(page, '06b-files-in-chat');
