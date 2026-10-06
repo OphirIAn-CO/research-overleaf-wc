@@ -122,7 +122,7 @@ def recent(messages, current_id=None, limit=5, quote=None):
         elif k in ("ask", "library", "refs", "review_plan", "review"):
             out.append(f"assistant: {k.replace('_', ' ')}")
         elif k in ("text", "error", "note"):
-            out.append("assistant: " + " ".join(str(m["text"]).split())[:140])
+            out.append("assistant: " + " ".join(str(m["text"]).split())[:340 if d.get("agent") else 140])
     return out[-limit:]
 
 

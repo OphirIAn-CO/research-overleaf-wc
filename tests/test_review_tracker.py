@@ -24,6 +24,7 @@ class Tracker(UiBase, ReviewEnv):
         self.env_up()
         self.name, self.proj = paper(self, main=MAIN)
         self.main = Path(self.proj["path"]) / "main.tex"
+        config.set_paper_setting(self.proj, "agent", "classic")
         config.set_paper_setting(self.proj, "understand", "never")
         self.c.login()
 

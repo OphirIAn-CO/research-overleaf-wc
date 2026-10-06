@@ -762,6 +762,7 @@
     async function useRefs(ctx, dois) {                                   // the same request as before, now with the abstracts of these references to cite
       const extra = { online: dois, facts: ctx.facts || undefined, issue: ctx.issue || undefined };
       Object.assign(extra, ctx.draft && ctx.revises ? { redraft: ctx.revises } : ctx.draft ? {} : { chunk_ids: ctx.chunk_ids, revises: ctx.revises || undefined });
+      if (ctx.understood) extra.understood = ctx.understood;
       await send(ctx.request || 'Support the claims of this text with citations from the sources provided.', extra);
     }
     const ORIGINS = { record: 'from the bibliography record in your library', doi: 'from its DOI', title: 'found at Crossref by its title', file: 'made from the title, authors and year the file gives: check it' };
@@ -947,9 +948,10 @@
             Object.assign({ find_refs: true, chunk_ids: m.data.chunk_ids || [], facts, issue: m.data.issue, ask: qs.length ? qs : undefined }, p.kind === 'draft' ? { redraft: p.id } : { revises: p.id }));
           return;
         }
-        const req = (request || p.instruction || '').trim();
+        const asked = (p.author_request || p.instruction || '').trim();           // what the author asked, in their own words, not the text the app added to it
+        const req = (request || asked).trim();
         if (!req) throw new Error('Say what the suggestion should do.');
-        if (!facts && req === (p.instruction || '').trim()) throw new Error('Answer a question, or write what to add or change, first.');
+        if (!facts && req === asked) throw new Error('Answer a question, or write what to add or change, first.');
         await send(req, p.kind === 'draft' ? { redraft: p.id, facts } : { chunk_ids: m.data.chunk_ids, facts, revises: p.id, issue: m.data.issue });
       };
       const sendAllButton = (cls) => guarded(h('button', { type: 'button', class: cls || 'primary', text: isDraft ? 'Send my responses and draft again' : 'Send my responses and re-edit',
@@ -1056,7 +1058,7 @@
         discuss.hidden = !discuss.hidden;
         if (discuss.hidden || discuss.childNodes.length) return;
         const req = h('textarea', { rows: '3', 'aria-label': isComment ? 'The reviewer\'s comment' : 'What I was asked to do' });
-        req.value = p.instruction || '';
+        req.value = p.author_request || p.instruction || '';
         drafts.bind(req, `req:${paper}:${p.id}`);
         const more = h('textarea', { rows: '3', 'aria-label': 'Anything to add or change', placeholder: 'For example: the criteria were wells with at least six months of production; keep it to two sentences; do not mention the vendor.' });
         drafts.bind(more, `more:${paper}:${p.id}`);
@@ -1310,6 +1312,7 @@
       if (m.kind === 'review') return reviewBubble(m);
       if (m.kind === 'review_done') return reviewDoneBubble(m);
       if (m.kind === 'error') return assistant(notice('bad', m.text));
+      if (m.data && m.data.agent && (m.data.steps || []).length) return assistant(textBlock(m.text), h('details', null, h('summary', { class: 'small', text: 'What I did' }), stepList(m.data.steps)));
       return assistant(textBlock(m.text));
     }
     async function answerUnderstanding(m, body) {

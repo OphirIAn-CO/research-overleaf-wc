@@ -199,6 +199,12 @@ its `\cite`s say nothing about what is asked; the request is in the user's own s
 library, or a reference already cited; "improve the table" can be wording or layout), say in one or two sentences what you understood (the action, the exact text or place, the sources) and let the user confirm, correct or
 refuse before you change anything. Prefer a short question to a wrong edit. Remember how this user phrases things within the conversation, and do what they corrected you on the next time.
 
+## How the web app takes a request (for context)
+
+The web app's default is an agent: the model reads the message in the context of the conversation, looks at the paper, the library and the internet as it needs, and calls the writing steps (write new text, edit, change
+the LaTeX), which keep every safeguard inside them (tags for citations, formulas and numbers; checks on each answer; nothing saved until the author accepts). Classic mode, one fixed step per kind of request, is
+a per-paper setting. In Claude Code you do the same in your own way: understand the request from the conversation, read before you edit, and keep the guarantees listed in the sections below.
+
 ## Changing the form of the paper (tables, figures, graphs, the appendix, layout, the bibliography command and the document's setup)
 
 When the user asks for a change of form ("move this table to the appendix and add the reference in tex", "improve the visualization of the table", "improve the graph in the following way ...", "adjust the position of

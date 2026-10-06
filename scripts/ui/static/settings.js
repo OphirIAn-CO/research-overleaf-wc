@@ -234,6 +234,9 @@
     const understandSel = h('select', { 'aria-label': 'When to check what I understood' },
       [['unsure', 'Only when I am not sure (recommended)'], ['always', 'Every time, before I act'], ['never', 'Never: just do it from the words']].map(([v, l]) => h('option', { value: v, text: l, selected: v === ((p && p.settings.understand) || 'unsure') })));
     understandSel.addEventListener('change', async () => { try { await api.post('/api/settings', { paper, understand: understandSel.value }); await window.OLS.loadState(); toast('Saved'); } catch (e) { toast(e.message); } });
+    const agentSel = h('select', { 'aria-label': 'How I take your requests' },
+      [['agent', 'As an assistant that plans the work itself (recommended)'], ['classic', 'Classic: one fixed step per kind of request']].map(([v, l]) => h('option', { value: v, text: l, selected: v === ((p && p.settings.agent) || 'agent') })));
+    agentSel.addEventListener('change', async () => { try { await api.post('/api/settings', { paper, agent: agentSel.value }); await window.OLS.loadState(); toast('Saved'); } catch (e) { toast(e.message); } });
     const guard = h('input', { type: 'number', min: '1', max: '100', value: String(c.limits.guard_passages), 'aria-label': 'Ask first above this many passages' });
     const maxp = h('input', { type: 'number', min: '1', max: '100', value: String(c.limits.max_passages), 'aria-label': 'Most passages in one request' });
     const idle = h('input', { type: 'number', min: '5', max: '1440', value: String(c.limits.idle_minutes), 'aria-label': 'Minutes until the app closes' });
@@ -241,7 +244,9 @@
     texture.addEventListener('change', () => { document.documentElement.dataset.texture = texture.checked ? 'on' : 'off'; window.OLS.store.set('ols-texture', texture.checked ? 'on' : 'off'); });
     box.append(h('h2', { class: 'section-h', text: 'Preferences' }), h('section', { class: 'card', 'aria-label': 'Preferences' }, h('div', { class: 'stack' },
       paper ? h('label', { class: 'check' }, confirmBox, `Ask me before anything is sent to OpenAI (${paper})`) : null,
-      paper ? h('div', { class: 'stack tight' }, h('label', { class: 'row tight' }, `Check that I understood your request (${paper}):`, understandSel),
+      paper ? h('div', { class: 'stack tight' }, h('label', { class: 'row tight' }, `How I take your requests (${paper}):`, agentSel),
+        h('p', { class: 'small secondary', text: 'As an assistant, I read your message in the context of the whole conversation, look at your paper, your library and the internet as I need to, and do the work in several steps (write, edit, change the LaTeX), then tell you what I did. Nothing is saved until you accept it, and every suggestion is checked as before. Classic uses one fixed step per kind of request, as before; with "Ask me before anything is sent" on, classic is used.' })) : null,
+      paper ? h('div', { class: 'stack tight' }, h('label', { class: 'row tight' }, `Check that I understood your request in classic mode (${paper}):`, understandSel),
         h('p', { class: 'small secondary', text: 'I read each request as a whole, say what I understood (which text, what to do, which sources) and, when I am not sure, wait for your yes, a correction or a no. A small model call reads it (about a thousand tokens). What you confirm or correct is kept in this paper\'s folder and helps me read your next requests. You can also choose the kind of request yourself under the message box.' }),
         guarded(h('button', { type: 'button', class: 'small', text: 'Forget what I learned from my corrections' }), async () => { await api.post('/api/settings', { paper, forget_understanding: true }); toast('Forgotten'); })) : null,
       h('div', { class: 'row' }, h('label', { class: 'row tight' }, 'Ask me first when a request has more than', guard, 'passages'), h('label', { class: 'row tight' }, 'and never more than', maxp, 'in one request')),

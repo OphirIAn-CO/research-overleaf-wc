@@ -133,3 +133,22 @@ class Excluding(ChatBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Carrying(unittest.TestCase):
+    def test_a_request_about_citations_or_anything_but_wording_gets_no_stock_polish(self):
+        from writing_core import chat
+        for t in ["Support the claims of this text with citations from the sources provided: cite a source only where its abstract says what the text says, and leave everything else as it is.",
+                  "Find references for these questions: Which studies support the claim?", "add an example of covariates used for failure modes", "remove the second sentence",
+                  "explain this in two sentences"]:
+            self.assertEqual(chat.instruction_for(t), t, t)
+        for t in ["methods", "the text before Figure 1", "the first paragraph of the introduction"]:
+            self.assertIn("Improve the clarity, flow, grammar and concision", chat.instruction_for(t), "a message that only names a place still gets the general polish")
+
+    def test_with_the_reading_the_instruction_is_the_authors_words_and_what_was_understood_and_nothing_else(self):
+        from writing_core import chat
+        got = chat.instruction_for("methods", summary="You want me to add a supporting passage with the references just found.")
+        self.assertTrue(got.startswith("methods"))
+        self.assertIn("add a supporting passage with the references just found", got)
+        self.assertNotIn("Improve the clarity", got)
+        self.assertEqual(chat.instruction_for(got, summary="You want me to add a supporting passage with the references just found."), got, "it is not added twice")

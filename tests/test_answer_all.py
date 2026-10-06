@@ -61,6 +61,9 @@ class Together(ChatBase):
         new = self.c.get(f"/api/proposal?paper=alpha&id={self.last('result')['data']['proposal']}")[1]
         self.assertEqual(new["units"][0]["added_cites"], ["\\cite{Rojas2019Armed}"])
         self.assertEqual(revise.get_proposal(self.proj, self.pid)["status"], "superseded", "the first suggestion is replaced only when the new one is ready")
+        self.assertNotIn("Find references for these questions", sent, "the button's own words are not the instruction")
+        self.assertNotIn("Improve the clarity, flow, grammar and concision", sent, "no stock polish is added to a request that was about something else")
+        self.assertIn(ASK, sent, "what the author asked in the first place is what the model is asked, with the answers")
 
     def test_a_search_the_author_asked_for_with_the_kind_flag_still_shows_the_candidates_to_choose_from(self):
         self.oa.script = [{"queries": ["armed groups and the security of pipelines in Colombia", "violence and energy infrastructure"]}]

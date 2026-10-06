@@ -86,7 +86,29 @@ If you haven't touched that paper for a while, the bot asks which paper first.
 
 ## Everyday use
 
+### The assistant plans the work (the default)
+
+Each message is read by the model **in the context of the whole conversation**, and the model decides what to do, in as many steps as the job needs. It has the app's abilities as tools: it reads your paper,
+searches your library, searches the internet (several searches, with different words), writes new text, edits existing text, changes the LaTeX, adds references, counts what your files hold, and asks you one
+specific question only when it truly cannot tell. It then tells you, in plain words, what it understood, what it did and found, and what to check.
+
+*Example:* "now add it to the text with a passage supporting my idea, and don't use references from Amaya Gomez or Cabrales". It looks at the conversation to see what "it" and "my idea" are (a reference you picked,
+a suggestion that is not saved yet), reads the part of the paper the idea belongs to, searches the library and the internet for the claim and leaves out those authors, writes the passage with the sources that fit,
+and reports what it cited and what it could not support. There is no card to answer first and no stock instruction in the middle: the model writes the brief for the writing step itself, from the conversation.
+
+- **The safeguards are where the work is saved, not in front of the work.** Every writing step is the same careful pipeline as before: citations, formulas and numbers are hidden behind tags, every answer is checked
+  (numbers, names, dashes, LaTeX), a citation can only be one of the sources that were offered, and what a check refuses comes back to the model, which fixes the cause and tries once more, or tells you. **Nothing is
+  saved**: you read each suggestion, change it, and accept it. A few limits apply: at most twelve steps, a ceiling on how much it reads from ChatGPT for one request, and it never repeats a step.
+- **What you see.** The steps appear while it works (and under *What I did* afterwards); each suggestion is the usual card; the last message says what was done. If you say "this part", it knows which suggestion you mean.
+- **What still has its own card** (because you choose or confirm there): a pasted DOI, help, "what do my articles say about ...", a search for references that you want to choose from, a peer review, bringing your library into the
+  bibliography, counting, the buttons under a suggestion (answer its questions, change the request, polish in QuillBot), and "Fix this" on a review comment. Choosing a kind under the message box, or switching on
+  *Ask me before anything is sent*, also uses the classic way.
+- **It costs more than one call.** Each step re-reads the conversation and what was found, so a request of five steps costs a few times a single edit (Activity shows it). If you prefer one fixed step per kind of
+  request, set **Settings > Preferences > How I take your requests** to *Classic*.
+
 ### Checking that I understood you
+
+*(This is how classic mode works; the assistant of the previous section needs no such card because it tells you what it understood when it is done, and asks only when it cannot tell.)*
 
 Words alone do not say what you want ("create" inside a paragraph you pasted is the paper's verb, not a request to write; "add the citation" can mean searching the internet, using your reading, or pointing to an
 article already cited). So every request is **read as a whole, in its context** by a small model call (about a thousand tokens), which sees your message with any pasted paragraph marked as material, the

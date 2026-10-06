@@ -521,9 +521,9 @@ def prepare(name, proj, instruction, anchor, part="", facts="", use_files=None, 
             "cites": sorted(lib_tags), "require_citations": require_citations, "floats": len(float_tags), "surround": before + "\n" + after}
 
 
-def plan(name, proj, instruction, anchor, part="", facts="", book_id=None, online=None, web=None, avoid=None):
+def plan(name, proj, instruction, anchor, part="", facts="", book_id=None, online=None, web=None, avoid=None, use_library=None):
     """What would be sent, without sending it. -> the numbers the chat shows and the hash that confirms exactly this request"""
-    p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id, online=online, web=web, avoid=avoid)
+    p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id, online=online, web=web, avoid=avoid, use_library=use_library)
     return {"avoid": list(avoid or []), "instruction": instruction, "facts": p["facts"], "online": p["online"], "anchor": anchor, "part": part, "label": p["label"], "where": p["where"], "est_tokens_in": p["est_tokens_in"], "est_cost": p["est_cost"],
             "model": p["model"], "tips": len(p["rule_ids"]), "book": p["book"], "payload_hash": p["payload_hash"], "warnings": p["warnings"], "require_citations": p["require_citations"], "outline": p["outline"], "sources": p["sources"], "library": p["library"], "uncitable": p["uncitable"],
             "pictures": p["pictures"], "target_words": p["target_words"], "payload": openai_client.redact(p["body"])}
@@ -565,13 +565,13 @@ def _paragraph_hunks(unit_id, draft, mapping, basis, rule_ids, default_reason):
     return segs, hunks
 
 
-def run(name, proj, instruction, anchor, part="", facts="", confirm=None, source="web", progress=None, book_id=None, dry_run=False, online=None, web=None, steps=None, avoid=None):
+def run(name, proj, instruction, anchor, part="", facts="", confirm=None, source="web", progress=None, book_id=None, dry_run=False, online=None, web=None, steps=None, avoid=None, use_library=None):
     """Draft the text and store it as a proposal. `confirm` must be the payload_hash of plan() for the same request (the author has seen what goes out).
     -> {"status": "proposed" | "failed" | "no_changes" | "preview", "proposal": {...}}"""
     steps = steps or revise.Steps(progress)
     t0 = time.time()
     steps.start("read", "Reading what comes before the new text")
-    p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id, online=online, web=web, avoid=avoid)
+    p = prepare(name, proj, instruction, anchor, part, facts, book_id=book_id, online=online, web=web, avoid=avoid, use_library=use_library)
     steps.finish("read", f"for {p['label'].lower()}, {p['where']}", label=f"Read the place for the {p['label'].lower()}")
     n_src = len([s for s in p["sources"] if not s["picture"]])
     steps.add("sources", "Looking at your analysis, notes and reading", detail=f"{n_src} part{'s' if n_src != 1 else ''} of your files, {len(p['pictures'])} picture{'s' if len(p['pictures']) != 1 else ''}, "

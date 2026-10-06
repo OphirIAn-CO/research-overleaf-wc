@@ -874,6 +874,17 @@ def record(name, proj, pid, accepted=None, rejected=None, applied=False, synced=
     return {"proposal": pid, "status": proposal["status"], "accepted": len(acc), "rejected": len(rej), "pending": len(pending), "bibliography": bibliography}
 
 
+def annotate(proj, pid, **fields):
+    """Keep with a suggestion what the author asked in their own words and how it was understood, so that a re-edit starts from that and not from a button's text."""
+    try:
+        prop = get_proposal(proj, pid)
+    except ReviseError:
+        return False
+    prop.update({k: v for k, v in fields.items() if v})
+    _atomic_json(proposals_dir(proj) / f"{pid}.json", prop)
+    return True
+
+
 def supersede(proj, pid, by):
     """A revised suggestion (made after the author answered the model's questions) replaces the one it came from, which can then no longer be saved by mistake.
     -> True when the old one was still waiting for a decision."""

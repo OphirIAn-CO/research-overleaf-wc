@@ -85,6 +85,8 @@ class Reading(ChatBase):
         self.wait_job(res["job"])
         d = self.last("refsearch")["data"]
         self.assertEqual(len(d["ctx"]["chunk_ids"]), 1, "references for that paragraph, found on the internet")
+        self.assertIn("Specifically for this paragraph", d["ctx"]["request"], "the card keeps what the author asked, to carry it out after the references are chosen, not a canned sentence")
+        self.assertEqual(d["ctx"]["understood"], "You want references from the internet for that paragraph.")
         msgs = self.chat_thread()["thread"]["messages"]
         self.assertEqual([m["data"].get("state") for m in msgs if m["kind"] == "understanding"], ["confirmed"])
 
@@ -164,6 +166,7 @@ class Reading(ChatBase):
         config.set_paper_setting(self.proj, "understand", "always")
         self.say(reading("edit", 0.99))
         self.understood_card(self.send(ASK))
+        config.set_paper_setting(self.proj, "agent", "classic")
         config.set_paper_setting(self.proj, "understand", "never")
         before = len(self.oa.requests)
         r = self.send(ASK)

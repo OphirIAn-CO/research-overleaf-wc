@@ -1133,7 +1133,7 @@ def plan_entry(proj, chunk, text, taken=()):
 
 _SOURCE_Q = re.compile(r"\b(?:sources?|references?|citations?|bibliograph\w*|literature|publications?|studies|articles?|papers?)\b", re.I)
 _DATA_SOURCE = re.compile(r"\bdata[\s-]?sources?\b|\bsources?\s+(?:of|for)\s+(?:the\s+|this\s+|these\s+)?(?:data|dataset|sample|numbers?|figures?|tables?|values?|images?|photos?|maps?)\b", re.I)
-_SOURCE_ASK = re.compile(r"\b(?:which|what|provide|supply|give|specify|share|confirm|choose|select|identify|name|point|tell|can you|could you|please|should|replace|need|needed|missing|available|appropriate|use)\b", re.I)
+_SOURCE_ASK = re.compile(r"\b(?:which|what|provide|supply|give|specify|share|confirm|choose|select|identify|name|point|tell|can you|could you|please|should|replace|need|needed|missing|available|appropriate|use|do you have|have you|is there|are there|any)\b", re.I)
 
 
 def is_source_question(q):

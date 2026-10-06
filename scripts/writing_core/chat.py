@@ -822,13 +822,33 @@ def count(name, proj, chunk_ids):
     return {"pieces": len(chunk_ids), "units": len(groups), "tokens": tokens, "limit": limit, "ok": 0 < len(groups) <= limit}
 
 
-def instruction_for(text):
-    """What to tell the model. If the message only names a place ("methods", "the text before Figure 1"), ask for a general polish."""
-    cleaned = _PARA.sub(" ", _FLOAT.sub(" ", text))
+UNDERSTOOD = "\n\n(How the author's request was understood, from the whole conversation: "
+_ACTION = re.compile(r"\b(?:add|insert|include|mention|explain|expand|translate|combine|merge|remove|delete|replace|support|supports|supporting|cite|citation|citations|reference|references|source|sources|"
+                     r"evidence|example|examples|convert|summari[sz]e|extend|elaborate|justify|compare|contrast|rank|list|define|describe|link|connect)\b", re.I)
+
+
+def with_understood(text, summary=""):
+    """The author's own words, followed by how the whole request was understood (the reading takes the conversation into account, the words alone cannot)."""
+    t = (text or "").strip()
+    summary = " ".join((summary or "").split())[:400]
+    return t if not summary or UNDERSTOOD in t else t + UNDERSTOOD + summary + ")"
+
+
+def instruction_for(text, summary="", kind=""):
+    """What to tell the model. With the reading of the request, that is the author's words and what was understood: nothing else is added. Without it, a message that only names a place
+    ("methods", "the text before Figure 1") gets a general polish, and a message that asks for anything else (sources, citations, an example, a removal) gets nothing added: a polish would
+    contradict it."""
+    t = (text or "").strip()
+    if summary or UNDERSTOOD in t:
+        return with_understood(t, summary)
+    cleaned = _PARA.sub(" ", _FLOAT.sub(" ", t))
     words = set(taxonomy.words(cleaned.lower()))
-    if words & _INTENT_WORDS:
-        return text.strip()
-    return text.strip() + "\n\nImprove the clarity, flow, grammar and concision of this passage, following the writing advice."
+    if kind == "cite" or words & _INTENT_WORDS or _ACTION.search(cleaned):
+        return t
+    from . import library
+    if library.wants(t) or is_refs_request(t):
+        return t
+    return t + "\n\nImprove the clarity, flow, grammar and concision of this passage, following the writing advice."
 
 
 CHIPS = [("Make it clearer", "Make this clearer and easier to follow."), ("More concise", "Make this more concise without losing any content."),
@@ -838,10 +858,10 @@ CHIPS = [("Make it clearer", "Make this clearer and easier to follow."), ("More 
 
 # ------------------------------------------------------------------------------------------- the request, ready to send
 
-def plan(name, proj, instruction, chunk_ids, book_id=None, facts="", online=None, web=None, avoid=None):
+def plan(name, proj, instruction, chunk_ids, book_id=None, facts="", online=None, web=None, avoid=None, use_library=None):
     """Prepare the request without sending anything. -> what the chat shows ("2 passages, about 900 tokens") plus the hash that proves
     exactly this payload is what gets sent. online: DOIs of references found online that the author picked for this request."""
-    res = revise.run(name, proj, instruction, chunk_ids=chunk_ids, book_id=book_id, dry_run=True, source="web", facts=facts, online=online, web=web, avoid=avoid)
+    res = revise.run(name, proj, instruction, chunk_ids=chunk_ids, book_id=book_id, dry_run=True, source="web", facts=facts, online=online, web=web, avoid=avoid, use_library=use_library)
     return {"avoid": list(avoid or []), "instruction": instruction, "facts": (facts or "").strip()[:3000], "chunk_ids": chunk_ids, "online": list(online or []), "units": res["units"], "passages": res["passages"], "est_tokens_in": res["est_tokens_in"],
             "est_cost": res["est_cost"], "manuscript_tokens": res["manuscript_tokens"], "model": res["model"], "tips": len(res["rules"]),
             "payload_hash": res["payload_hash"], "warnings": res["warnings"], "book": res["book"], "parts": res["parts"], "sources": res.get("sources", []),

@@ -83,6 +83,8 @@ def main():
         git(root, "commit", "-q", "-m", "init")
         common.register(str(root), name, group="Demo group" if name == "soil-yield" else None)
         names[name] = common.resolve(name)
+        from writing_core import config as _config  # noqa: E402
+        _config.set_paper_setting(names[name][1], "agent", "classic")          # the demo's model is a fixed script of edits: the flows of the classic way are what it can show
 
     # the author's reading and material live outside the data folder (the app refuses to read its own settings)
     from tests.pdfmaker import make_pdf  # noqa: E402
@@ -117,6 +119,17 @@ def main():
             return REPORT          # a review asks for free text, not the JSON of an edit
         from writing_core import openai_client
         user = openai_client.user_text(body)
+        if (((body.get("text") or {}).get("format")) or {}).get("name") == "agent":          # the agent: read the study area, improve it, say so (three turns of one request)
+            def act(action, note="", **kw):
+                return {**{"note": note, "action": action, "what": "", "query": "", "queries": [], "chunks": [], "place": "", "position": "after", "instruction": "", "notes": "", "sources": [], "dois": [],
+                           "avoid": [], "question": "", "message": ""}, **kw}
+            done = len(re.findall(r"^STEP \d+:", user, re.M))
+            piece = next(iter(re.findall(r"^(C\d+) \| [^|]*Study area", user, re.M)), "C1")
+            if done == 0:
+                return act("read_paper", "Reading the study area", query="Study area")
+            if done == 1:
+                return act("edit_text", "Improving how the study area reads", chunks=[piece], instruction="Make the sentences of the study area flow as one line of thought; keep every fact.")
+            return act("finish", message="I read the study area and tightened how its sentences flow, without changing any fact. It is a suggestion: nothing is saved until you accept it.")
         if (((body.get("text") or {}).get("format")) or {}).get("name") == "understanding":      # the reader of a request: agrees with the word-based guess, except for one phrase that it is unsure about
             guess = (re.search(r"<word_based_guess>(\w+)", user) or [None, "edit"])[1]
             this = (re.search(r"<message>(.*?)</message>", user, re.S) or [None, ""])[1]          # only the message itself, not the conversation around it
