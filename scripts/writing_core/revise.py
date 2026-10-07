@@ -126,6 +126,16 @@ class ReviseError(Exception):
     pass
 
 
+class NeedsPermission(ReviseError):
+    """Saving would add numbers or acronyms the paper does not have yet: the author decides, nothing is refused."""
+    def __init__(self, message, items):
+        super().__init__(message)
+        self.items = items
+
+
+_ASK = {"no_new_numbers", "no_new_acronyms"}
+
+
 def proposals_dir(proj):
     return config.paper_dir(proj) / "proposals"
 
@@ -1008,7 +1018,7 @@ def _add_bib_entries(proj, proposal, files_written):
     return out
 
 
-def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source="cli", note=""):
+def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source="cli", note="", allow_new=False):
     """Write the accepted hunks into the manuscript. `cleaner(text) -> text` is the step-6b watermark clean."""
     proposal = get_proposal(proj, pid)
     if proposal.get("kind") == "layout":                                  # LaTeX edits to figures, tables and layout: applied whole, with their own checks (layout.py)
@@ -1020,7 +1030,7 @@ def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source=
         raise ReviseError("step 6b (the watermark clean) is not available here, and an unclean pass is never applied. "
                           "Hand this proposal to Claude, or configure the cleaner in Settings.")
     chosen = _selected(proposal, accept)
-    plan, stale, refused = {}, [], []
+    plan, stale, refused, ask = {}, [], [], []
     for u in proposal["units"]:
         ids = {h["id"] for h in u["hunks"] if h["uid"] in chosen}
         if not ids:
@@ -1032,6 +1042,8 @@ def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source=
             continue
         final_masked = latex_mask.assemble(u["segments"], ids)
         bad = latex_mask.errors(latex_mask.validate(u["masked_original"], final_masked, context=u.get("context", ""), extra_tags=u.get("new_tags") or ()))
+        ask += [r["detail"] for r in bad if r["name"] in _ASK]
+        bad = [r for r in bad if r["name"] not in _ASK]
         if bad:
             refused.append(f"{u['unit_id']}: {latex_mask.summarize(bad)} (hunks that move a citation or formula must be accepted together)")
             continue
@@ -1056,6 +1068,8 @@ def apply(name, proj, pid, accept="all", cleaner=None, unclean_ok=False, source=
                 raise ReviseError("the step-6b cleaner's output failed validation (" + latex_mask.summarize(post) + "); nothing was written")
             new_text = cleaned
         plan.setdefault(u["file"], []).append((u, new_text, ids))
+    if ask and not allow_new and not (stale or refused):
+        raise NeedsPermission("this suggestion adds " + "; ".join(ask), ask)
     if stale or refused:
         proposal["status"] = "stale" if stale and not plan else proposal["status"]
         _atomic_json(proposals_dir(proj) / f"{pid}.json", proposal)

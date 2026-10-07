@@ -1210,6 +1210,9 @@
         await reload();
         return r;
       } catch (e) {
+        if (e.data && e.data.needs_permission && !body.allow_new && window.confirm('Add to your paper?\n\nThis suggestion ' + e.message.replace(/^this suggestion /, '') + '\n\nThey are not in your text now. Check they are right, then press OK to save, or Cancel to leave it unsaved.'))
+          return doApprove(into, p, Object.assign({}, body, { allow_new: true }), redraw);
+        if (e.data && e.data.needs_permission) { into.append(notice('warn', 'Not saved: you did not allow the new ' + e.data.needs_permission.join('; ') + '.')); throw e; }
         into.append(notice('bad', h('strong', { text: 'Not saved: ' }), e.message, e.data && e.data.handoff_available ? ' Nothing was written. You can hand it to Claude instead.' : ''));
         throw e;
       }

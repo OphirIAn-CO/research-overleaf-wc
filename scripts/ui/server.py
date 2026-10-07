@@ -2050,7 +2050,10 @@ def api_proposal_approve(r):
             out = layout.apply(n, p, pid, source="web")
         else:
             out = revise.apply(n, p, pid, accept=accept, cleaner=cleaner, unclean_ok=unclean, source="web",
+                               allow_new=bool(r.body.get("allow_new")),
                                note=("edited by you" if texts is not None else "") + (" (saved without the text-cleaning step)" if unclean else ""))
+    except revise.NeedsPermission as e:
+        raise ApiError(409, str(e), needs_permission=e.items) from None
     except revise.ReviseError as e:
         raise ApiError(409, str(e), handoff_available=not is_layout) from None
     files = sorted({w["file"] for w in out["written"]})
