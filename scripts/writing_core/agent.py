@@ -616,7 +616,10 @@ def _sources(ctx, a):
 
 def _facts(ctx, a):
     notes = " ".join((a.get("notes") or "").split())[:1400]
-    return ("The author's decisions and what they said that matters here: " + notes) if notes else ""
+    out = ("The author's decisions and what they said that matters here: " + notes) if notes else ""
+    names = _file_names(ctx, a)[0]                                      # the parts of the named files the agent already read: the writing tool's own pick (a small budget) can miss the one that holds the value
+    seen = "\n\n".join(v for k, v in ctx.read.items() if k.startswith("F:") and k[2:].rsplit("#", 1)[0].rsplit("/", 1)[-1] in names)[:2400]
+    return (out + ("\n\n" if out else "") + "Parts of the author's files read for this:\n" + seen) if seen else out
 
 
 def _avoid(ctx, a):
@@ -705,7 +708,7 @@ def t_write_new_text(ctx, a):
         anchor, part = draft._seal(ctx.proj, {"file": c["file"], "after_line": after, "mode": f"{position} “{label}”"}), c.get("part") or ""
     web, picked = _sources(ctx, a)
     online = [x["doi"] for x in scholar.recall(ctx.proj, "", force=picked)] if picked else []
-    facts = (_facts(ctx, a) + earlier).strip()[:3000]
+    facts = (_facts(ctx, a) + earlier).strip()[:4500]
     avoid = _avoid(ctx, a)
     focus = _library_focus(a)
     full = instruction + (f"\n\nLook up in the author's library: {focus}" if focus else "") + _file_names(ctx, a)[1]
