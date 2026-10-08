@@ -130,7 +130,7 @@ class Ctx:
         self._files = None
         self.read = {}                     # what has been read of the paper (and of a page the author linked) in this request: id -> text, oldest first
         self.sub = None
-        self.usage = {"input_tokens": 0, "output_tokens": 0}
+        self.usage = {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0}
         self.made = []                     # what the writing tools produced: [{"kind", "proposal", ...}]
         self.refresh()
 
@@ -185,15 +185,10 @@ class Ctx:
         return ident in self.read or ident.split("@")[0] in self.read
 
     def read_block(self):
-        """Everything read so far, in the order of the paper: the model's working memory, shown again at every step."""
+        """Everything read so far: the model's working memory, shown again at every step. New parts go at the end so the start of the prompt stays identical between steps (cheaper)."""
         if not self.read:
             return ""
-        order = {k: i for i, k in enumerate(self.pieces)}
-
-        def where(k):                      # the paper in its order, then pages, then the files part by part
-            m = re.fullmatch(r"F:(.*)#(\d+)", k)
-            return (10 ** 6 + 1, m.group(1), int(m.group(2))) if m else (order.get(k.split("@")[0], 10 ** 6), k, 0)
-        keys = sorted(self.read, key=where)
+        keys = list(self.read)             # in the order it was read, so what came before never moves and OpenAI can reuse (at a discount) the start of the last request
         return "\n\n<paper_read_so_far>\n" + "\n\n".join(self.read[k] for k in keys) + "\n</paper_read_so_far>"
 
     def refresh(self):
@@ -821,6 +816,7 @@ def _ask_model(cfg, user, ctx):
         r = openai_client.call(cfg, SYSTEM, user + (f"\n\n<note>{last}</note>" if last else ""), schema=SCHEMA, name="agent", max_output=cfg["agent_max_output_tokens"], timeout=max(cfg["timeout"], 180))
         ctx.usage["input_tokens"] += r["usage"].get("input_tokens", 0)
         ctx.usage["output_tokens"] += r["usage"].get("output_tokens", 0)
+        ctx.usage["cached_tokens"] += r["usage"].get("cached_tokens", 0)
         try:
             act = openai_client.parse_json(r["text"])
             if act.get("action") in ACTIONS:

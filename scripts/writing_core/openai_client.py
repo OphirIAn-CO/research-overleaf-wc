@@ -114,7 +114,7 @@ def _extract(cfg, data):
         if ch.get("finish_reason") == "length":
             raise OpenAIError("the answer was cut off (raise max_output_tokens in openai.json or shorten the passage)", "truncated")
         u = data.get("usage") or {}
-        return msg.get("content") or "", {"input_tokens": u.get("prompt_tokens", 0), "output_tokens": u.get("completion_tokens", 0)}
+        return msg.get("content") or "", {"input_tokens": u.get("prompt_tokens", 0), "output_tokens": u.get("completion_tokens", 0), "cached_tokens": (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0)}
     if data.get("status") == "incomplete":
         raise OpenAIError("the answer was cut off (raise max_output_tokens in openai.json or shorten the passage)", "truncated")
     text = ""
@@ -128,7 +128,7 @@ def _extract(cfg, data):
     if not text and data.get("output_text"):
         text = data["output_text"]
     u = data.get("usage") or {}
-    return text, {"input_tokens": u.get("input_tokens", 0), "output_tokens": u.get("output_tokens", 0)}
+    return text, {"input_tokens": u.get("input_tokens", 0), "output_tokens": u.get("output_tokens", 0), "cached_tokens": (u.get("input_tokens_details") or {}).get("cached_tokens", 0)}
 
 
 def parse_json(text):
