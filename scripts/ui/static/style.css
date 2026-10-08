@@ -364,6 +364,12 @@ input[type="number"] { width: 90px; }
 .lx-over .l { position: relative; counter-increment: ln; }
 .lx-over .l::before { content: counter(ln); position: absolute; left: calc(-1 * (var(--gut) + 18px) + 4px); width: var(--gut); text-align: right; color: var(--ink-3); font-size: 11.5px; user-select: none; }
 .lx-over .l.cur { background: var(--hover); }
+.lx-over .l.hit { background: var(--ins-bg); }
+.lx-over .l.hit.cur { background: color-mix(in srgb, var(--warning) 35%, transparent); }
+.lx-findwrap { position: sticky; top: 0; height: 0; z-index: 5; }
+.lx-find { position: absolute; right: 12px; top: 6px; display: flex; gap: 6px; align-items: center; padding: 6px 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 2px 8px var(--hover); }
+.lx-find[hidden] { display: none; }
+.lx-fq { width: 220px; font: inherit; padding: 4px 8px; }
 .lx-over .l.chg::after { content: ""; position: absolute; left: calc(-1 * (var(--gut) + 18px)); top: 0; bottom: 0; width: 3px; background: var(--good); border-radius: 2px; }
 .lx-over .l.err { background: color-mix(in srgb, var(--critical) 14%, transparent); text-decoration: underline wavy var(--critical); text-decoration-skip-ink: none; }
 .lx-over .l.err::before { color: var(--critical-text); font-weight: 700; }

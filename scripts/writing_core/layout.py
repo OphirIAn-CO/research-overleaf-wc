@@ -659,7 +659,7 @@ def run(name, proj, text, res, confirm=None, source="web", progress=None, compil
     after = before
     for attempt in range(2):
         try:
-            r = openai_client.call(cfg, SYSTEM, user, schema=SCHEMA, name="layout")
+            r = openai_client.call(cfg, SYSTEM, user, schema=SCHEMA, name="layout", max_output=max(cfg["max_output_tokens"], 8000))  # a reasoning model thinks inside this budget: 2500 cut 8 layout answers off
             obj = openai_client.parse_json(r["text"])
             edits = [{"file": str(e["file"]), "find": str(e["find"]), "replace": str(e["replace"]), "reason": str(e.get("reason", ""))[:300]} for e in obj["edits"] if isinstance(e, dict)][:40]
         except openai_client.OpenAIError as e:

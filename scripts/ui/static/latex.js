@@ -65,8 +65,8 @@
     const ta = h('textarea', { class: 'lx-ta', spellcheck: 'false', autocapitalize: 'off', autocomplete: 'off', autocorrect: 'off', wrap: 'soft', rows: '1', 'aria-label': 'LaTeX source' });
     const box = h('div', { class: 'lx-ed' }, h('div', { class: 'lx-stack' }, over, ta));
     let lines = [''], plain = false, cur = 0;
-    const marks = { chg: new Set(), err: new Map(), flash: new Set() };
-    const cls = (n) => 'l' + (marks.chg.has(n) ? ' chg' : '') + (marks.err.has(n) ? ' err' : '') + (marks.flash.has(n) ? ' flash' : '') + (n === cur ? ' cur' : '');
+    const marks = { chg: new Set(), err: new Map(), flash: new Set(), hit: new Set() };
+    const cls = (n) => 'l' + (marks.chg.has(n) ? ' chg' : '') + (marks.err.has(n) ? ' err' : '') + (marks.flash.has(n) ? ' flash' : '') + (marks.hit.has(n) ? ' hit' : '') + (n === cur ? ' cur' : '');
     const makeLine = (text, n) => h('div', { class: cls(n), title: marks.err.get(n) || null }, plain ? [text || '​'] : colour(text));
     function paint() {
       const kids = over.children;
@@ -114,6 +114,42 @@
       if (!opts || opts.caret !== false) { try { ta.focus({ preventScroll: true }); ta.setSelectionRange(offsetOf(n), offsetOf(n)); } catch (e) { /* not focusable yet */ } }
       cur = n; paint();
     }
+    // Cmd/Ctrl+F: search this document. Every line with a match is tinted, the current one is selected; Enter next, Shift+Enter previous, Esc closes.
+    const fq = h('input', { class: 'lx-fq', type: 'search', placeholder: 'Find in document', spellcheck: 'false', 'aria-label': 'Find in document' });
+    const fn = h('span', { class: 'muted small lx-fn' });
+    const fbar = h('div', { class: 'lx-find', hidden: '' }, fq, fn, h('button', { class: 'btn small', type: 'button', title: 'Previous (Shift+Enter)', onclick: () => step(-1) }, '↑'),
+      h('button', { class: 'btn small', type: 'button', title: 'Next (Enter)', onclick: () => step(1) }, '↓'), h('button', { class: 'btn small', type: 'button', title: 'Close (Esc)', onclick: () => closeFind() }, '✕'));
+    box.prepend(h('div', { class: 'lx-findwrap' }, fbar));
+    let found = [], at = -1;
+    function search() {
+      const q = fq.value.toLowerCase(), text = ta.value.toLowerCase();
+      found = [];
+      if (q) for (let i = text.indexOf(q); i >= 0 && found.length < 5000; i = text.indexOf(q, i + q.length)) found.push(i);
+      marks.hit = new Set(found.map((o) => ta.value.slice(0, o).split('\n').length));
+      fn.textContent = q ? (found.length ? `${at >= 0 ? at + 1 : 0}/${found.length}` : 'none') : '';
+      paint();
+    }
+    function step(d) {
+      if (!found.length) { search(); if (!found.length) return; }
+      at = (at + d + found.length) % found.length;
+      const o = found[at], n = ta.value.slice(0, o).split('\n').length;
+      try { ta.setSelectionRange(o, o + fq.value.length); } catch (e) { /* not focusable yet */ }
+      reveal(n, { caret: false });
+      fn.textContent = `${at + 1}/${found.length}`;
+    }
+    function openFind() {
+      const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+      if (sel && !sel.includes('\n')) fq.value = sel;
+      fbar.hidden = false; fq.focus(); fq.select(); at = -1; search();
+    }
+    function closeFind() { fbar.hidden = true; marks.hit = new Set(); paint(); ta.focus({ preventScroll: true }); }
+    fq.addEventListener('input', () => { at = -1; search(); if (found.length) step(1); });
+    fq.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeFind(); }
+    });
+    box.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); openFind(); } });
+    ta.addEventListener('input', () => { if (!fbar.hidden) search(); });
     ta.addEventListener('input', () => { sync(); on.change(ta.value); });
     ta.addEventListener('keyup', () => { const n = lineAt(); if (n !== cur) { cur = n; paint(); } });
     ta.addEventListener('click', (e) => { const n = lineAt(); if (n !== cur) { cur = n; paint(); } if (e.metaKey || e.ctrlKey) on.cmdClick(n); });
@@ -124,7 +160,7 @@
     });
     return {
       box, ta, value: () => ta.value, setText, reveal, lineAt, lines: () => lines.slice(), focus: () => ta.focus({ preventScroll: true }),
-      setMarks(m) { if (m.chg) marks.chg = m.chg; if (m.err) marks.err = m.err; if (m.flash) marks.flash = m.flash; paint(); },
+      openFind, setMarks(m) { if (m.chg) marks.chg = m.chg; if (m.err) marks.err = m.err; if (m.flash) marks.flash = m.flash; paint(); },
       clearFlash() { if (marks.flash.size) { marks.flash = new Set(); paint(); } },
     };
   }

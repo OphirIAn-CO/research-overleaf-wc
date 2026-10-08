@@ -127,6 +127,37 @@ def _push(repo):
     return "ok" if code == 0 else (err or out)
 
 
+TEXT_EXT = (".tex", ".bib", ".sty", ".cls", ".bst", ".txt", ".md")
+MAX_TEXT = 2_000_000        # Overleaf stops treating a file bigger than this as editable text
+SHRINK = 0.6                # a text file that keeps less than this much of its last saved size is probably missing content
+
+
+def unsafe_staged(repo):
+    """Staged text files Overleaf could store as a read-only 'Download' file, or that lost much of their content. -> list of reasons (empty = fine)."""
+    import re
+    _, names, _ = run_git(repo, "diff", "--cached", "--name-only", "--diff-filter=AM")
+    bad = []
+    for f in names.splitlines():
+        if not f.lower().endswith(TEXT_EXT):
+            continue
+        r = subprocess.run(["git", "-C", repo, "show", ":" + f], capture_output=True)
+        b = r.stdout
+        old = subprocess.run(["git", "-C", repo, "cat-file", "-s", "HEAD:" + f], capture_output=True, text=True)
+        if len(b) > MAX_TEXT:
+            bad.append(f"{f}: {len(b) // 1000} KB is over Overleaf's 2 MB editable limit")
+        elif b[:3] == b"\xef\xbb\xbf" or re.search(rb"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", b):
+            bad.append(f"{f}: has a byte-order mark or control/null bytes, so Overleaf would show it as a file to download")
+        else:
+            try:
+                b.decode("utf-8")
+            except UnicodeDecodeError:
+                bad.append(f"{f}: is not valid UTF-8, so Overleaf would show it as a file to download")
+                continue
+            if old.returncode == 0 and old.stdout.strip().isdigit() and int(old.stdout) > 2000 and len(b) < SHRINK * int(old.stdout):
+                bad.append(f"{f}: shrank from {int(old.stdout) // 1000} KB to {len(b) // 1000} KB, content may be missing")
+    return bad
+
+
 def tool_sync(args):
     repo, err = resolve_repo(args)
     if err:
@@ -151,6 +182,10 @@ def tool_sync(args):
     skipped = f"\n(skipped {len(junk)} untracked build files)" if junk else ""
     if run_git(repo, "diff", "--cached", "--quiet")[0] == 0:
         return only_push(skipped) if push and waiting else "nothing to sync" + skipped
+    bad = unsafe_staged(repo)
+    if bad and not args.get("force"):
+        run_git(repo, "reset", "-q")                        # nothing saved, nothing sent, the files stay as they are on disk
+        return "not sent, to protect your paper:\n- " + "\n- ".join(bad) + "\nFix that (or call again with force=true if it is intended)."
     code, out, err = run_git(repo, "commit", "-m", message)
     if code != 0:
         return f"commit failed: {out or err}"
