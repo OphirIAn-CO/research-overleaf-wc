@@ -27,7 +27,7 @@ KEEP_READ = 48000                 # all the text read so far that stays in front
 TOKEN_BUDGET = 450_000            # input tokens over one request (every step re-reads the conversation and what was found)
 WRITING = ("write_new_text", "edit_text", "change_latex")
 READING = ("read_paper", "read_webpage", "search_files", "read_file")
-ACTIONS = ("read_paper", "read_webpage", "search_files", "read_file", "search_library", "search_internet", "write_new_text", "edit_text", "change_latex", "add_references", "inspect_files", "ask_user", "finish")
+ACTIONS = ("read_paper", "read_webpage", "search_files", "read_file", "search_library", "search_internet", "write_new_text", "edit_text", "change_latex", "add_references", "prune_bibliography", "inspect_files", "ask_user", "finish")
 
 SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -51,7 +51,8 @@ Actions:
 - search_internet: "queries" = 1 to 3 short searches about the SUBJECT of the claim (never about writing). "avoid" = authors or sources the author does not want. Returns records (R1, R2, ...) with their abstract. Run more than one search with different words when the first is thin.
 - write_new_text: write a new passage. "place" = a piece id (C12, C12@41-43) or a pending suggestion (S1, to write it again together with the new passage), "position" = after or before it; "instruction" = what to write, composed by you from the whole conversation (what, which claim, how long, which tone, which sources support what); "notes" = what the author said or decided that the writing needs (never facts from sources); "sources" = the R ids of internet records to cite, and "picked" for references the author chose earlier in this chat; "files" = the author's files (at most three, as named in <files>) the passage must rest on: the writing tool reads them and every number, setting and name in the passage comes from them; "query" = words for the writing tool to look up in the author's library; "avoid" = authors not to cite.
 - edit_text: change existing text (improve, shorten, add citations, rewrite, remove). "chunks" = piece ids or ranges (or "selected" for what the author ticked), as many as one section or several short ones (at most about twenty passages in one call); "instruction", "notes", "sources", "files", "query", "avoid" as above. The editing tool reads the passages itself: you need not read them first unless you must understand them to decide what to do.
-- change_latex: anything about the LaTeX itself (formatting, tables, figures, packages, the bibliography command, compile errors); "instruction" = what is wrong or wanted.
+- change_latex: anything about the LaTeX itself (formatting, text colors and \\color or \\textcolor or red definitions, tables, figures and plots, packages, the bibliography command, LaTeX or compile errors); "instruction" = what is wrong or wanted. It works on the whole file with its own checks and is much faster than editing passage by passage. Any request about LaTeX, colors or the look of figures and tables goes HERE, never to edit_text (which edits prose only and rejects any LaTeX change).
+- prune_bibliography: deletes from the .bib file every reference that no .tex file cites (a copy of the old file is kept). Use it when the author asks to remove uncited or unused references. The order of the list is the bibliography style: \\bibliographystyle{unsrt} or unsrtnat numbers by order of appearance (use change_latex to set it if it is not).
 - add_references: "dois" = DOIs to add to the bibliography now (only when the author asks to add them).
 - inspect_files: counts what the paper's files hold (references, figures, tables, sections, library documents). Use it for questions about the files.
 - ask_user: "question" = one specific question, only when you truly cannot tell after looking. The author's answer arrives as their next message.
@@ -604,6 +605,18 @@ def t_add_references(ctx, a):
     return ctx.add_references(dois), ""
 
 
+def t_prune_bib(ctx, a):
+    from . import bibtidy
+    try:
+        r = bibtidy.prune(ctx.proj)
+    except OSError as e:
+        return f"Could not read or write the .bib file: {e}", ""
+    if r["skipped"]:
+        return "Nothing removed: " + r["skipped"] + ".", ""
+    return (f"Removed {len(r['removed'])} uncited reference(s) from the .bib file, {r['kept']} kept: " + ", ".join(r["removed"])
+            + ". The previous file is in .overleaf-skill/.") if r["removed"] else "Every entry in the .bib file is cited; nothing removed.", ""
+
+
 # ------------------------------------------------------------------------------------------------ the tools that write
 
 def _sources(ctx, a):
@@ -790,10 +803,10 @@ def t_change_latex(ctx, a):
 
 
 TOOLS = {"read_paper": t_read_paper, "read_webpage": t_read_webpage, "search_files": t_search_files, "read_file": t_read_file, "search_library": t_search_library, "search_internet": t_search_internet, "write_new_text": t_write_new_text, "edit_text": t_edit_text,
-         "change_latex": t_change_latex, "add_references": t_add_references, "inspect_files": t_inspect}
+         "change_latex": t_change_latex, "add_references": t_add_references, "prune_bibliography": t_prune_bib, "inspect_files": t_inspect}
 
 LABELS = {"read_paper": "Reading your paper", "read_webpage": "Reading the page you linked", "search_files": "Searching your files", "read_file": "Reading your file", "search_library": "Looking in your library", "search_internet": "Searching the internet", "write_new_text": "Writing the new text",
-          "edit_text": "Editing the text", "change_latex": "Changing the LaTeX", "add_references": "Adding references", "inspect_files": "Counting what your files hold"}
+          "edit_text": "Editing the text", "change_latex": "Changing the LaTeX", "add_references": "Adding references", "prune_bibliography": "Removing uncited references", "inspect_files": "Counting what your files hold"}
 
 
 # ------------------------------------------------------------------------------------------------ the loop
@@ -805,7 +818,7 @@ def _key(act):
 def _ask_model(cfg, user, ctx):
     last = ""
     for attempt in range(2):
-        r = openai_client.call(cfg, SYSTEM, user + (f"\n\n<note>{last}</note>" if last else ""), schema=SCHEMA, name="agent", max_output=1800, timeout=90)
+        r = openai_client.call(cfg, SYSTEM, user + (f"\n\n<note>{last}</note>" if last else ""), schema=SCHEMA, name="agent", max_output=cfg["agent_max_output_tokens"], timeout=max(cfg["timeout"], 180))
         ctx.usage["input_tokens"] += r["usage"].get("input_tokens", 0)
         ctx.usage["output_tokens"] += r["usage"].get("output_tokens", 0)
         try:

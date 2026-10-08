@@ -13,6 +13,7 @@ OPENAI_DEFAULTS = {
     "max_output_tokens": 2500,
     "timeout": 120,
     "rule_budget_tokens": 2000,
+    "agent_max_output_tokens": 6000,  # each agent step; a reasoning model spends part of this thinking, so 1800 got cut off
     "review_max_output_tokens": 6000,  # a peer review is long: more room than an edit
     "review_max_input_tokens": 90000,  # the whole manuscript plus the rubric must fit; bigger papers are reviewed a section at a time
     "prices": None,  # {"input_per_1m": x, "output_per_1m": y} in your currency; cost is shown only if set
