@@ -19,7 +19,7 @@
         ChatGPT correction pass for ONE passage -> a validated proposal (never edits files). While the paper's dry-run setting is on
         (default) this only prints the exact payload and a hash; send it with --send <hash> after you have read it.
   writing.py proposals [--paper P] | proposal <id> [--paper P]
-  writing.py library [--add PATH] [--remove PATH] [--index] [--rebuild] [--search TEXT [--paper P]]
+  writing.py library [--add PATH] [--remove PATH] [--index] [--rebuild] [--embed] [--search TEXT [--paper P]]
         the literature library: folders (with subfolders) of books and articles, read once into labelled parts and searched on this computer.
   writing.py settings [--paper P] [--dry-run on|off] [--use-files auto|always|never] [--link-folder PATH] [--unlink-folder PATH]
                       [--use-analysis auto|always|never] [--link-analysis PATH] [--unlink-analysis PATH]
@@ -38,7 +38,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import common  # noqa: E402
-from writing_core import book_eval, book_index, chunk_book, config, files, library, openai_client, paper_index, retrieve, revise, rule_cards, stats  # noqa: E402
+from writing_core import book_eval, book_index, chunk_book, config, files, library, nvidia, openai_client, paper_index, retrieve, revise, rule_cards, stats  # noqa: E402
 
 COMMANDS = {}
 
@@ -261,6 +261,10 @@ def cmd_library(args):
             res = library.update(progress=lambda d, t: print(f"\r{d}/{t}", end="", file=sys.stderr, flush=True))
             print(file=sys.stderr)
             print(f"read {res['new']} new, {res['changed']} changed, forgot {res['removed']}; {res['failed']} could not be read. The library has {res['docs']} documents and {res['parts']} parts.")
+        if args.embed or ((args.index or args.rebuild) and nvidia.available()):
+            res = library.embed_missing(progress=lambda d, t: print(f"\rembedding {d}/{t}", end="", file=sys.stderr, flush=True))
+            print(file=sys.stderr)
+            print(f"embedded {res['embedded']} parts ({res['total']} with vectors, {res['model']}); searches are now hybrid.")
         if args.search:
             res = library.query(args.search, k=args.max, budget=args.budget)
             proj = None
@@ -369,6 +373,7 @@ def build_parser():
     p.add_argument("--remove", metavar="PATH")
     p.add_argument("--index", action="store_true", help="read what is new or changed")
     p.add_argument("--rebuild", action="store_true", help="forget what was read and read everything again")
+    p.add_argument("--embed", action="store_true", help="NVIDIA vectors for parts that have none (hybrid search); --index does it too when a key is set")
     p.add_argument("--search", metavar="TEXT")
     p.add_argument("--paper", help="with --search: say which results are in this paper's bibliography")
     p.add_argument("--max", type=int, default=6)

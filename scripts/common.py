@@ -81,8 +81,10 @@ def verify(name, proj):
     """None if the registered folder still is the Overleaf clone it was registered as, else a message.
     Backfills the remote for older registry entries."""
     p = Path(proj["path"])
-    if not (p / ".git").exists():
-        return f"{name}: folder missing or not a git repo ({p}). Moved? Fix: common.py add <new path> --name {name}"
+    if not p.is_dir():
+        return f"{name}: folder missing ({p}). Moved? Fix: common.py add <new path> --name {name}"
+    if not (p / ".git").exists():  # a plain local paper folder (no Overleaf, no git): nothing to cross-check but the bib
+        return None if (p / proj["bib"]).exists() else f"{name}: bib file {proj['bib']} not found in {p}"
     now = remote_url(p)
     if not proj.get("remote"):
         reg = registry()
@@ -128,13 +130,15 @@ def resolve(ref=None, check=True):
     else the paper last worked on (set_active), else the registry default. A path not yet
     registered is registered on the spot. Raises KeyError (unknown) / RuntimeError (verify failed)."""
     reg = registry()
-    found = None
-    if ref and ref in reg["projects"]:
-        found = ref
-    else:
-        path = ref if ref and ("/" in ref or ref.startswith("~")) else None
+    path = ref if ref and ("/" in ref or ref.startswith("~") or ref == ".") else None
+    exact = str(Path(path or os.getcwd()).expanduser().resolve())  # a registered folder (local paper, maybe inside a bigger repo) wins
+    found = ref if ref and ref in reg["projects"] else (
+        next((n for n, p in reg["projects"].items() if p["path"] == exact), None) if (path or not ref) else None)
+    if not found:
         cwd = git_root(os.getcwd()) if not ref else None  # implicit cwd: only trust Overleaf clones
         root = git_root(Path(path).expanduser()) if path else (cwd if cwd and is_overleaf(cwd) else None)
+        if path and not root and Path(path).expanduser().is_dir():  # a local paper folder that is not a git repo
+            root = exact
         if root:
             found = next((n for n, p in reg["projects"].items() if p["path"] == root), None) or register(root)
             reg = registry()

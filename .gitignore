@@ -10,6 +10,7 @@ projects.json
 .overleaf-skill/
 # writing coach: secrets, the book, derived indexes, proposals, events (all live outside git; belt and braces)
 *openai*.json
+nvidia.json
 *git*token*.json
 overleaf_git.json
 ui.json

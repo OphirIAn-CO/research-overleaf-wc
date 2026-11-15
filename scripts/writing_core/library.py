@@ -22,7 +22,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from . import chunk_book, config, files as pfiles, retrieve, store, subject as subj_mod, taxonomy
+from . import chunk_book, config, files as pfiles, nvidia, retrieve, store, subject as subj_mod, taxonomy
 
 DIRNAME = "library"
 LOGIC_VERSION = 2                  # bump when the reading or splitting changes, so everything is read again
@@ -514,6 +514,7 @@ def _init(con):
         CREATE TABLE IF NOT EXISTS chunks(id TEXT PRIMARY KEY, doc_id TEXT, ord INTEGER, lo INTEGER, hi INTEGER, head TEXT, text TEXT, tokens INTEGER, tags TEXT);
         CREATE INDEX IF NOT EXISTS idx_chunks_doc ON chunks(doc_id, ord);
         CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(chunk_id UNINDEXED, who, head, text, tokenize='porter unicode61');
+        CREATE TABLE IF NOT EXISTS vecs(chunk_id TEXT PRIMARY KEY, v BLOB);
     """)
 
 
@@ -556,6 +557,7 @@ def _delete_path(con, path):
     ids = [r[0] for r in con.execute("SELECT id FROM docs WHERE path=?", (path,))]
     for i in ids:
         con.execute("DELETE FROM chunks_fts WHERE chunk_id IN (SELECT id FROM chunks WHERE doc_id=?)", (i,))
+        con.execute("DELETE FROM vecs WHERE chunk_id IN (SELECT id FROM chunks WHERE doc_id=?)", (i,))
         con.execute("DELETE FROM chunks WHERE doc_id=?", (i,))
     con.execute("DELETE FROM docs WHERE path=?", (path,))
 
@@ -710,6 +712,77 @@ def update(progress=None):
         _LOCK.release()
 
 
+def embed_missing(progress=None):
+    """Give every part without a vector one (NVIDIA, see nvidia.py). Resumable: a stopped run continues where it stopped.
+    A change of model or size drops the old vectors first. -> {embedded, total, model}"""
+    s = nvidia.settings()
+    if not nvidia.available(s):
+        raise LibraryError("No NVIDIA key: set NVIDIA_API_KEY or write nvidia.json in the data folder (see examples/nvidia.example.json).")
+    with store.write_lease(_db_path(), timeout=10, stale=3600):
+        con = _open()
+        try:
+            if store.meta_get(con, "embed_model") != nvidia.tag(s):
+                con.execute("DELETE FROM vecs")
+                store.meta_set(con, "embed_model", nvidia.tag(s))
+                con.commit()
+            todo = con.execute("SELECT c.id, c.head, c.text FROM chunks c JOIN docs d ON d.id=c.doc_id LEFT JOIN vecs v ON v.chunk_id=c.id "
+                               "WHERE v.chunk_id IS NULL AND d.linked='' ORDER BY c.doc_id, c.ord").fetchall()
+            n = int(s["batch"])
+            for i in range(0, len(todo), n):
+                batch = todo[i:i + n]
+                vs = nvidia.embed([((r["head"] or "") + "\n" + r["text"])[:6000] for r in batch], "passage", s)
+                con.executemany("INSERT OR REPLACE INTO vecs VALUES(?,?)", [(r["id"], nvidia.pack(v)) for r, v in zip(batch, vs)])
+                con.commit()
+                if progress:
+                    progress(min(i + n, len(todo)), len(todo))
+            return {"embedded": len(todo), "total": con.execute("SELECT COUNT(*) FROM vecs").fetchone()[0], "model": nvidia.tag(s)}
+        finally:
+            con.close()
+
+
+def _vector_ids(con, text, n):
+    """Chunk ids nearest to the text, best first; [] when there is no key, no numpy or no vectors made with the current model."""
+    s = nvidia.settings()
+    if not nvidia.available(s) or store.meta_get(con, "embed_model") != nvidia.tag(s):
+        return []
+    try:
+        import numpy as np
+    except ImportError:
+        return []
+    # ponytail: reads every vector per query (fine to ~100k parts at 512 dims); cache the matrix in-process if libraries grow past that
+    rows = con.execute("SELECT chunk_id, v FROM vecs").fetchall()
+    if not rows:
+        return []
+    try:
+        q = np.array(nvidia.embed([text], "query", s)[0], dtype=np.float32)
+    except (OSError, ValueError, KeyError):  # network or API trouble: fall back to BM25 alone rather than fail the search
+        return []
+    m = np.frombuffer(b"".join(r[1] for r in rows), dtype=np.float32).reshape(len(rows), -1)
+    sims = (m @ q) / (np.linalg.norm(m, axis=1) * np.linalg.norm(q) + 1e-9)
+    return [rows[i][0] for i in np.argsort(-sims)[:n]]
+
+
+def _fuse(con, rows, vec_ids, doc_ids=None, k=60):
+    """Reciprocal-rank fusion of BM25 rows and vector hits -> rows best first, `score` = -fused (lower is better, like bm25)."""
+    by = {r["id"]: dict(r) for r in rows}
+    missing = [i for i in vec_ids if i not in by]
+    if missing:
+        sql = ("SELECT c.*, d.label, d.title, d.authors, d.year, d.doi, d.noun, d.rel, d.bib_key, 0.0 AS score FROM chunks c JOIN docs d ON d.id=c.doc_id "
+               "WHERE d.linked='' AND c.id IN (%s)" % ",".join("?" * len(missing)))
+        for r in con.execute(sql, missing):
+            if not doc_ids or r["doc_id"] in doc_ids:
+                by[r["id"]] = dict(r)
+    fused = {}
+    for ids in ([r["id"] for r in rows], vec_ids):
+        for rank, i in enumerate(ids):
+            if i in by:
+                fused[i] = fused.get(i, 0.0) + 1.0 / (k + rank)
+    out = sorted(by.values(), key=lambda r: -fused[r["id"]])
+    for r in out:
+        r["score"] = -fused[r["id"]]
+    return out
+
+
 def clear():
     """Forget the index (the folders and the files in them are not touched)."""
     for suffix in ("", "-journal", ".lease"):
@@ -835,6 +908,10 @@ def query(text, k=6, budget=2400, per_doc=2, doc_ids=None, guides=True):
             sql += " AND d.id IN (%s)" % ",".join("?" * len(doc_ids))
             args += list(doc_ids)
         rows = con.execute(sql + " ORDER BY score LIMIT ?", args + [k * 8 * (3 if not guides else 1)]).fetchall()
+        vec = _vector_ids(con, text, k * 8)
+        if vec:
+            rows = _fuse(con, rows, vec, set(doc_ids) if doc_ids else None)
+            out["hybrid"] = True
     finally:
         con.close()
     used, per = 0, {}

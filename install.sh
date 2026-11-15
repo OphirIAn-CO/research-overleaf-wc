@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# ./install.sh              create the data dir + register the MCP server with Claude Code
+# ./install.sh              create the data dir, register the MCP server, put `research` on PATH (~/.local/bin)
 # ./install.sh bot-service  also run the Telegram DOI bot at login (macOS launchd)
-# ./install.sh ui           also build the web app's Docker image (then: ./ui.sh up)
+# ./install.sh ui           optional: build the web app's Docker image (then: ./ui.sh up)
 set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 export OVERLEAF_SKILL_HOME="${OVERLEAF_SKILL_HOME:-$HOME/.config/overleaf-skill}"
@@ -14,6 +14,9 @@ if command -v claude >/dev/null; then
 else
   echo "claude CLI not found; register manually: claude mcp add overleaf -s user -- python3 $DIR/scripts/overleaf_mcp.py"
 fi
+
+mkdir -p "$HOME/.local/bin" && ln -sf "$DIR/research" "$HOME/.local/bin/research"
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "add ~/.local/bin to PATH to use: research <paper-folder>";; esac
 
 if [ "${1:-}" = "bot-service" ]; then
   [ -f "$OVERLEAF_SKILL_HOME/telegram.json" ] || { echo "create $OVERLEAF_SKILL_HOME/telegram.json first (see examples/)"; exit 1; }
@@ -37,4 +40,4 @@ fi
 if [ "${1:-}" = "ui" ]; then
   "$DIR/ui.sh" build
 fi
-echo "done. Next: python3 $DIR/scripts/common.py add /path/to/overleaf/clone --group \"Mendeley group\""
+echo "done. Next: research /path/to/paper-folder   (optional: NVIDIA_API_KEY for hybrid library search)"

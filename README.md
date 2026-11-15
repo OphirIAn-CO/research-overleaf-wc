@@ -49,7 +49,28 @@ and never saves or sends anything you have not approved.
 - A **writing handbook as a PDF with selectable text** that you are allowed to use (it stays on your computer and is never part of this repository). Optional but it is what makes the advice yours.
 - Optional: a Mendeley account (reference manager), a Telegram bot (references from your phone), the `academic-paper` Claude skill (installed under `~/.claude/skills/`) for the peer-review rubric.
 
-## Quick start
+## Quick start: local, in Claude Code (recommended)
+
+No Docker, no Overleaf, no Mendeley needed. The paper is a folder with its `.tex` and `.bib`.
+
+```bash
+git clone https://github.com/OphirIAn-CO/research-overleaf-wc ~/.claude/skills/research-overleaf-wc
+~/.claude/skills/research-overleaf-wc/install.sh     # registers the tools, puts `research` on your PATH
+research ~/path/to/my-paper                           # opens Claude Code there with the skill active
+```
+
+Inside the session: *"write the results from my analysis in ../analysis"* (the code is read through
+the `graphify` skill), *"what do my books say about X"* (local search of your library),
+*"find references about X"*, *"add 10.1038/nature14539"*, *"check my citations"*, *"improve the flow of my methods"*
+(Claude, plus the optional ChatGPT editing pass).
+
+- **Books and long documents:** `python3 scripts/writing.py library --add ~/Literature --index`. They are read once and
+  searched in ~350-token parts, so a question costs a few parts, not the whole book.
+- **Optional NVIDIA embeddings:** `export NVIDIA_API_KEY=nvapi-...` (or `~/.config/overleaf-skill/nvidia.json`, see
+  `examples/`). Then `library --index` (or `--embed`) adds vectors and searches become hybrid (keywords + meaning).
+- **References:** `scripts/refs.py search|add|check` work on the paper's own `.bib` only.
+
+## Quick start: the web app (Docker, optional)
 
 ```bash
 git clone https://github.com/OphirIAn-CO/research-overleaf-wc
